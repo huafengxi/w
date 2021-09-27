@@ -4,6 +4,7 @@ This is a document edit server. see [[design.org]].
 once deployed, you can creat file with special extensions for different purpose.
 
 * start service
+: cd $webroot # change to your webroot
 : git clone git@github.com:huafengxi/w.git w
 : log=debug w/web.py 8080 
 
@@ -11,10 +12,15 @@ once deployed, you can creat file with special extensions for different purpose.
 : echo 'user:passwd' > ~/.auth/passwd
 : cp cert.pem privkey.pem  ~/.auth/
 
+* download optional deps for extend features
+: cd $webroot
+: git clone git@github.com:huafengxi/tsql.git tsql # query text using sql
+: git clone git@github.com:huafengxi/bin-mirror.git deps # revealjs
+
 * .org file
 + [[/w/demo/a.org]], ctrl-alt-e to edit, ctrl-alt-s to save and refresh.
 + [[?v=org2md]] convert org to markdown
-+ [[?v=org2reveal]] for presentation
++ [[?v=org2reveal]] for presentation, need place revealjs in =/deps= dir.
 
 * shell
 + [[/w/demo/host.stat]] call remote shell script,  [[/w/demo/host.stat?v=read]] for raw file.
