@@ -6,6 +6,7 @@ log=info ./myapp.py 8080 [log_file]
 '''
 
 import sys, os, os.path
+sys.path.append('%s/pylib'%(os.path.dirname(sys.argv[0])))
 def locate_web_path(path):
     p = os.path.realpath(path)
     while p != '/' and not os.path.exists(os.path.join(p, 'index.org')):
