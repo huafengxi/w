@@ -15,7 +15,7 @@ def interp(store, i='', src=None, input=None, cmd='', dir='', **kw):
         return dict(type= 'text/html' if is_html(output) else 'text/plain'), output
     term = kw.get('is_crawled_by_curl', False) and 'term' or 'html'
     input = input or (src and store.read(src))
-    env = dict_updated(os.environ, term=term, HAP_CONFIG=os.path.realpath('hap/config2.py'), http_root='/')
+    env = dict_updated(os.environ, term=term, http_root='/')
     if not i:
        if src.endswith('.db'): i = 'db'
        elif src.endswith('.sh'): i = 'bash'
@@ -37,7 +37,7 @@ def interp(store, i='', src=None, input=None, cmd='', dir='', **kw):
     elif i == 'ish':
         if not cmd: cmd = 'ish'
         cmd_args = ['%s=%s'%(k,v) for k,v in kw.items()]
-        cmd_list = [sys.executable, os.path.realpath('hap/hap.py')] + cmd.split() + cmd_args
+        cmd_list = [sys.executable, os.path.realpath('hit/hit.py')] + cmd.split() + cmd_args
     else:
         return 'popen not support: i=%s src=%s cmd=%s kw=%s'%(i, src, cmd, kw)
     logging.debug('i=%s cmd=%s input=%.100s src=%s', i, cmd_list, input, src)

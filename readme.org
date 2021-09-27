@@ -12,7 +12,7 @@ once deployed, you can creat file with special extensions for different purpose.
 : cp cert.pem privkey.pem  ~/.auth/
 
 * .org file
-+ [[/t/a.org]], ctrl-alt-e to edit, ctrl-alt-s to save and refresh.
++ [[/w/demo/a.org]], ctrl-alt-e to edit, ctrl-alt-s to save and refresh.
 + [[?v=org2md]] convert org to markdown
 + [[?v=org2reveal]] for presentation
 
@@ -22,9 +22,9 @@ once deployed, you can creat file with special extensions for different purpose.
 + [[/w/demo/interp.py?v=q]] interactive =interp()= defined in python file.
 + [[/w/demo/demo.ish]] ctrl+click to execute cmd.
 
-* hap.py console
-+ [[/ctrl.cmds]] for a more complex example.
-+ [[/ctrl.cmds?_log_=3]] for verbose log.
+* hit.py console
++ [[/w/demo/ctrl.cmds]] for a more complex example.
++ [[/w/demo/ctrl.cmds?_log_=3]] for verbose log.
 
 * table
 + [[/w/demo/a.tab]] query sql, return html snippet.
@@ -36,10 +36,10 @@ once deployed, you can creat file with special extensions for different purpose.
 + [[/w/demo/profile.data?v=flame]] flame graph.
  
 * upload/edit file
-+ [[/t/a.jpg?v=fops]] interactive upload local file.
-+ [[/t/a.org?v=upload&file=abc]] upload simple file.
-+ [[/t/a.txt?v=append&text=hello]] append text
-+ [[/t/a.org?v=code]], ctrl-alt-s to save file
++ [[/w/demo/a.jpg?v=fops]] interactive upload local file.
++ [[/w/demo/a.org?v=upload&file=abc]] upload simple file.
++ [[/w/demo/a.txt?v=append&text=hello]] append text
++ [[/w/demo/a.org?v=code]], ctrl-alt-s to save file
 
 * utility
 + [[?v=qrcode]]
@@ -52,20 +52,20 @@ once deployed, you can creat file with special extensions for different purpose.
 + [[/w/?v=sitemap]] download file list as xml
 
 * encrypt in js
-+ [[/t/a.enc?v=enc]] view encrypt file
-+ [[/t/a.tips?v=code]] store decrypt tips
++ [[/w/demo/a.enc?v=enc]] view encrypt file
++ [[/w/demo/a.tips?v=code]] store decrypt tips
 
 * audio/img view
-+ [[/t/?v=expo]] list as audio/img/text etc.
-+ [[/t/?v=album]] find =.meta= dir, list =.meta/cover.jpg=
-+ [[/t/a.plist?v=plist]] play list edit.
++ [[/w/demo/?v=expo]] list as audio/img/text etc.
++ [[/w/demo/?v=album]] find =.meta= dir, list =.meta/cover.jpg=
++ [[/w/demo/a.plist?v=plist]] play list edit.
 
 * javascript API
-+ [[/t/a.org?v=head]]
-+ [[/t/a.org?v=read]]
-+ [[/t/?v=find]]
-+ [[/t/a.org?v=del]]
-+ [[/t/a.org?v=write]]
++ [[/w/demo/a.org?v=head]]
++ [[/w/demo/a.org?v=read]]
++ [[/w/demo/?v=find]]
++ [[/w/demo/a.org?v=del]]
++ [[/w/demo/a.org?v=write]]
 
 * introspect
 + [[/g/]] global vars
