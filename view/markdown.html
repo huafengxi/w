@@ -1,0 +1,40 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>console</title>
+    <base target="target">
+    <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript" src="/w/deps/showdown.js"></script>
+    <script type="application/javascript">
+      function split() { window.location.assign(getUrl() + "?type=split"); }
+      function toggle_editor() { toggleVisible($('editor')); }
+      function dirname(path) { return path.match(/.*\//);  }
+      function getTitle(content) {
+         var m = content.match(/^# (.*)/m);
+         if (m) return m[1];
+         return "untitle";
+      }
+
+      function initApp(){
+        var url = window.location.pathname;
+        var gitlab_url = "http://gitlab.alibaba-inc.com/yuanqi.xhf/mysite-mirror/blob/master/";
+        $("gitlab_link").href = gitlab_url + url;
+        if (inIframe())hide($('head-bar'));
+        makeEditor($('editor'), function (content){ showdown.setFlavor('vanilla'); var converter = new showdown.Converter(); setWindowTitle(getTitle(content)); $("doc").innerHTML = converter.makeHtml(content); });
+      }
+    </script>
+</script>
+  </head>
+  <body onload="initApp()">
+    <nav id="head-bar"><a href="javascript:toggle_editor()">edit</a><a  href="javascript:split()">split</a>
+      <!-- <a href="https://www.google.com/cse/publicurl?cx=005037642699962415424:bbpmoxhiswm">search</a> -->
+      <span style="float:right">
+        <a id="gitlab_link" href="#">gitlab</a>
+    </span>
+    <hr style="margin:0;"/>
+    </nav>
+    <div id="editor"></div>
+    <div id="doc" class="doc"></div>
+  </body>
+</html>

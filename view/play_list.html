@@ -1,0 +1,57 @@
+<html>
+    <head>
+        <title>play-list</title>
+        <style>
+         label {font-size: 20; font-weight: bold;};
+         audio {
+             width: 600px;
+             height: 20px;
+             transition:all 0.5s linear;
+             box-shadow: 2px 2px 4px 0px #006773;
+             border-radius:0px 0px 0px 0px ;
+         }
+        </style>
+        <script type="application/javascript" src="/w/view/my.js"></script>
+        <script type="application/javascript" src="/w/view/list_edit.js"></script>
+        <script type="application/javascript" src="/w/view/expo.js"></script>
+        <script type="application/javascript">
+         const url = window.location.href.replace("v=plist", "");
+         var getListEditLines;
+         function refreshPlayList(playlist, lines) {
+             while (playlist.firstChild) {
+                 playlist.firstChild.remove();
+             }
+             for(var i = 0; i < lines.length; i++) {
+                 if (is_empty_line(lines[i]) || is_comment(lines[i])) continue;
+                 playlist.appendChild(create_audio(lines[i]));
+             }
+         }
+         function save_and_refresh() {
+             var lines = getListEditLines();
+             write(url, lines.join('\n'));
+             refreshPlayList(playlist, lines);
+         }
+         function edit_save() {
+             var edit = $('edit');
+             var playlist = $('playlist');
+             if (isVisible(edit)) {
+                 hide(edit);
+                 save_and_refresh();
+                 show(playlist);
+             } else {
+                 show(edit);
+                 hide(playlist);
+             }
+         }
+         function initApp() {
+             var list = read(url).split('\n');
+             getListEditLines = createListEdit($('edit'), list);
+         }
+        </script>
+    </head>
+    <body onload="initApp()">
+        <a href="javascript:;" onclick="return edit_save()">edit/save</a>
+        <ul id="edit"></ul>
+        <ul id="playlist"></ul>
+    </body>
+</html>

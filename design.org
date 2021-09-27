@@ -1,0 +1,40 @@
+#+Title: design
+
+每个URL都定位了一个resource，resource可以看作是抽象的file。根据file的mime type，
+不同的类型的文件会映射到另一个path，原始文件的path我们叫 =src_path=, 映射后的path我们叫 =view_path= 。
+=view_path= 可以看作是打开 =src_path= 的方式。
+
+** file and store
+store用来持久化file，接口如下：
+#+begin_example
+class AbstractStore:
+   def head(self, path): pass # head返回文件的meta info
+   def read(self, path): pass
+   def write(self, path, content): pass
+#+end_example
+
+** mime type
+store.head(path)返回一个dict，字典的'type'域就是mime type. head通过文件后缀来猜测mime type，也可以在文本文件的前面显式指定mime type.
+:  -*- type=script -*- # 显式指定mime type
+
+也可以通过URL的query string指定type, 例如 [[?v=read]], 这种方式的优先级更高。除了query string，还可以通过post的内容指定，实际上post的内容和被当作是query string处理。
+
+** view_map
+=mime type= 到 =view_path= 的映射叫view_map， 保存在 [[/vmap/]] 文件里。
+
+view文件被放置在 [[/w/view/]] 目录
+
+** script
+只有python文件type才能定义为script，script类型的python文件中应该定义 =interp(store, **args)= 函数，
+如果 =view_path= 是script，那么处理url请求时，会调用 =interp(...)= 产生结果。
+
+script文件被放置在 [[/w/rpc/]] 目录
+
+interp的结果应该是一个tuple，形式是 =(meta, content_iterator)= , 也可以是个字符串，如果是字符串，那么 =mime_typ= 当作 =text/plain= 来处理。
+
+** RootStore和fstab
+通过 [[/w/fstab]] 可以把各种不同类型的store挂载到root store, 目前支持的store:
+1. DictStore
+2. DirStore
+3. PyEnvStore
+

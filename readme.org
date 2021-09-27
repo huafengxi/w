@@ -1,0 +1,68 @@
+#+Title: document edit server
+
+This is a document edit server. see [[design.org]].
+once deployed, you can creat file with special extensions for different purpose.
+
+* start service
+: git clone git@github.com:huafengxi/mirror.git m
+: cd m
+: log=debug w/web.py 8080 
+ 
+* .org file
++ [[/t/a.org]], ctrl-alt-e to edit, ctrl-alt-s to save and refresh.
++ [[?v=org2md]] convert org to markdown
++ [[?v=org2reveal]] for presentation
+
+* shell
++ [[/w/demo/host.stat]] call remote shell script,  [[/w/demo/host.stat?v=read]] for raw file.
++ [[/w/demo/interp.py?cmd=hello]] call remote function =interp()= defined in python file.
++ [[/w/demo/interp.py?v=q]] interactive =interp()= defined in python file.
++ [[/w/demo/demo.ish]] ctrl+click to execute cmd.
+
+* hap.py console
++ [[/ctrl.cmds]] for a more complex example.
++ [[/ctrl.cmds?_log_=3]] for verbose log.
+
+* table
++ [[/w/demo/a.tab]] query sql, return html snippet.
++ [[/w/demo/a.db]] query sqlite3 db file, return html snippet.
++ [[/w/demo/a.tab?v=tab/curl]] query sql, return multi-column text.
+
+* chart
++ [[/w/demo/rand-ts.sh?v=ts]] time series graph, [[/w/demo/rand-ts.sh?v=read]] for raw file.
++ [[/w/demo/profile.data?v=flame]] flame graph.
+ 
+* upload/edit file
++ [[/t/a.jpg?v=fops]] interactive upload local file.
++ [[/t/a.org?v=upload&file=abc]] upload simple file.
++ [[/t/a.txt?v=append&text=hello]] append text
++ [[/t/a.org?v=code]], ctrl-alt-s to save file
+
+* utility
++ [[?v=qrcode]]
++ [[?v=split]] or [[?v=hsplit]] to split the screen, obsolet feature.
+
+* directory view
++ [[/w/?v=dir]] expand sub directory.
++ [[/w/?v=dir2]] expand sub directory.
++ [[/w/?v=tar]]  download directory as tar
++ [[/w/?v=sitemap]] download file list as xml
+
+* encrypt in js
++ [[/t/a.enc?v=enc]] view encrypt file
++ [[/t/a.tips?v=code]] store decrypt tips
+
+* audio/img view
++ [[/t/?v=expo]] list as audio/img/text etc.
++ [[/t/?v=album]] find =.meta= dir, list =.meta/cover.jpg=
++ [[/t/a.plist?v=plist]] play list edit.
+
+* javascript API
++ [[/t/a.org?v=head]]
++ [[/t/a.org?v=read]]
++ [[/t/?v=find]]
++ [[/t/a.org?v=del]]
++ [[/t/a.org?v=write]]
+
+* introspect
++ [[/g/]] global vars

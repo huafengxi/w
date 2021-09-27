@@ -1,0 +1,25 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>auth</title>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript">
+      function submit_token() {
+      setCookie("token", $("token").value);
+      $("msg").innerHTML = "token updated at " + new Date();
+      return false;
+      }
+      function initApp(){
+      $("token").focus();
+      }
+    </script>
+  </head>
+  <body onload="initApp()">
+    <div>
+      <form onsubmit="return submit_token();">
+        token: <input type="password" id="token" name="token">
+      </form>
+      <pre id="msg">please set token.</pre>
+    </div>
+  </body>
+</html>

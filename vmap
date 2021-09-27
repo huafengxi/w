@@ -1,0 +1,60 @@
+# file rpc
+head: /w/rpc/builtin.py
+find: /w/rpc/builtin.py
+read: /w/rpc/builtin.py
+write: /w/rpc/builtin.py
+del: /w/rpc/builtin.py
+upload: /w/rpc/builtin.py
+append: /w/rpc/builtin.py
+
+# directory view
+dir: /w/rpc/builtin.py?v=dir
+dir2: /w/rpc/builtin.py?v=dir2
+tar: /w/rpc/builtin.py
+sitemap: /w/rpc/builtin.py
+
+# utility
+fops: /w/view/fops.html
+code: /w/view/code.html
+qrcode: /w/view/qrcode.html
+enc: /w/view/encrypt.html
+
+# org/md
+text/org: /w/view/org.html
+text/md: /w/view/markdown.html
+org2md: /w/rpc/popen.py?cmd=org2markdown.es
+org2reveal: /w/rpc/popen.py?cmd=org2reveal.es
+text/org/bot: /w/rpc/popen.py?cmd=org2html.py
+
+# shell
+sh: /w/rpc/popen.py
+q: /w/view/lish.html
+ish: /w/view/fish.html
+
+# table query
+db: /w/view/lish.html
+tab: /w/view/lish.html?i=tsql&q=select+*+from+t1+limit+1
+tab/curl: /w/rpc/popen.py?i=tsql
+
+# chart
+flame: /w/view/flame.html
+ts: /w/view/dygraph.html
+ts-sql: /w/rpc/ts-sql.py
+
+# view frame
+iframe: /w/view/iframe.html
+split: /w/view/split.html
+hsplit: /w/view/hsplit.html
+tsplit: /w/view/tsplit.html
+
+# media view
+expo: /w/view/expo.html
+album: /w/view/album.html
+plist: /w/view/play_list.html
+video: /w/view/video.html
+
+# dsync
+dsync: /w/rpc/dsync.py
+
+# python script, for rpc impl
+script: 

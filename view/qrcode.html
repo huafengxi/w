@@ -1,0 +1,30 @@
+<html>
+  <head>
+    <title>qrcode</title>
+    <script type="application/javascript" src="/w/deps/qrcode.min.js"></script>
+    <script type="application/javascript">
+      var qrcode;
+      function initApp() { qrcode = render(window.location.href.replace('v=qrcode', '')); }
+      function render(text){
+        var qrcode = new QRCode("qrcode", {
+          text: text,
+          width: 512,
+          height: 512,
+          colorDark : "#000000",
+          colorLight : "#ffffff",
+          correctLevel : QRCode.CorrectLevel.H});
+         return qrcode;
+      }
+     function try_render(ele) {
+         if (event.key == 'Enter') {
+             qrcode.clear();
+             qrcode.makeCode(ele.value);
+         }
+     }
+    </script>
+  </head>
+  <body onload="initApp()">
+    <input type="text" style="width: 100%" onkeydown="try_render(this)"/> 
+    <div id="qrcode" align="center"></div>
+  </body>
+</html>

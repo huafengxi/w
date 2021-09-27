@@ -1,0 +1,51 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>encrypt</title>
+    <base target="target">
+    <script type="application/javascript" src="/w/deps/sha.js"></script>
+    <script type="application/javascript" src="/w/deps/aes.js"></script>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript">
+function passwd2key(passwd) {
+  var shaObj = new jsSHA("SHA-512", "TEXT");
+  shaObj.update(passwd);
+  var key = Array.from(shaObj.getHash("BYTES").substr(0, 32));
+  return key.map(function (c) { return c.charCodeAt(0); })
+}
+
+function do_encrypt(utf8Content, passwd) {
+  if (!passwd) { return utf8Content; }
+  var key = passwd2key(passwd);
+  var textBytes = aesjs.utils.utf8.toBytes(utf8Content);
+  var aesCtr = new aesjs.ModeOfOperation.ctr(key);
+  var encryptedBytes = aesCtr.encrypt(textBytes);
+  var encryptedHex = aesjs.utils.hex.fromBytes(encryptedBytes);
+  return encryptedHex;
+}
+
+function do_decrypt(encryptedHex, passwd) {
+  if (!passwd) { return encryptedHex; }
+  var key = passwd2key(passwd);
+  var encryptedBytes = aesjs.utils.hex.toBytes(encryptedHex);
+  var aesCtr = new aesjs.ModeOfOperation.ctr(key);
+  var decryptedBytes = aesCtr.decrypt(encryptedBytes);
+  var decryptedText = aesjs.utils.utf8.fromBytes(decryptedBytes);
+  return decryptedText;
+}
+      
+    function do_load() { $("content").value = do_decrypt(read(getUrl()), $("passwd").value); }
+    function do_save() { write(getUrl(), do_encrypt($("content").value, $("passwd").value)); }
+    setWindowTitle(getUrl());
+    function init() { $("tips").href = getUrl().replace('.enc', '.tips');  do_load(); }
+   </script>
+  </head>
+  <body onload="init()" >
+    <div>
+      <input type="password" id="passwd"> <button type="button" onclick="do_load()">load</button> <button type="button" onclick="do_save()">save</button> <a id="tips" href="">tips</a>
+    </div>
+    <div>
+      <textarea name="content" id="content" class="input" style="width:100%" rows="50"># enter passwd and load content.</textarea>
+    </div>
+  </body>
+</html>

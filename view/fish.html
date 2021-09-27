@@ -1,0 +1,60 @@
+
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>Fish</title>
+    <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript" src="/w/view/fsh.js"></script>
+    <script type="application/javascript">
+    var args = getQueryArgs();
+    var qarg = dict_merge({i: 'bash', dir: ''}, args);
+    var content = '';
+    //var dir = dirname(getUrl());
+    function safe_set(_content){
+       if(content != _content){content=_content; write(getUrl(), content);}
+    }
+
+    function text_filter(line, content, caret){
+        safe_set(content);
+        if (getQueryArgs()['filter'] == 'none')return [line];
+        var global = getBlock(content, 0, '####', '####');
+        var local = getBlock(content, caret, '####', '####');
+        //eval(filterLines(global, '#js:').join(';'));
+        eval(filterLines(local, '#js:').join(';'));
+        return line;
+    }
+
+    function text_filter2(line, content, caret){
+        safe_set(content);
+        var rx = new RegExp("(.*) #link: (.*)", "g")
+        var link_html = ""
+        while((m = rx.exec(content)) !== null){
+          link_html += '<a href="javascript:go_qlink(\'{0}\')" class="large_button">{1}</a> '.format([escape(m[1]), m[2]]);
+        }
+        $("qlink").innerHTML = link_html;
+        return line;
+    }
+
+    function hide_input() { hide($s($('fish'), 'input'));  }
+    function myinterp(cmd) { return rpc('/w/rpc/popen.py', dict_merge(qarg, {cmd:cmd})); }
+    var fsh;
+    function go_qlink(link) {
+      fsh(unescape(link));
+    }
+    function initApp(){
+        var panel = $('fish');
+        fsh = fish(myinterp, panel, text_filter2, 'Fsh');
+        var content = read(getUrl());
+        eval(filterLines(content, '#init:').join(';'));
+        var code_on_load = filterLines(content, '#onload:').join(';');
+        fsh(code_on_load, content);
+        if (code_on_load) { hide_input(); }
+    }
+    </script>
+  </head>
+  <body onload="initApp()">
+    <div id="qlink"></div>
+    <div id="fish" class="dev">${fish}</div>
+  </body>
+</html>

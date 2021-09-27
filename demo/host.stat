@@ -1,0 +1,5 @@
+# -*- type=sh -*-
+hostname -i
+uname -r
+uptime
+date

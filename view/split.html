@@ -1,0 +1,33 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+      <title>split frame</title>
+      <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+      <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript">
+      function getUrl() { return removeQueryArg(window.location.href, 'v=split'); }
+      function initApp(){
+         if (getUrl().search('spl=h') >= 0) {
+             console.log("hsplit");
+            $("nav").style = "float: top";
+            $("target").style = "float: bottom";
+         } else {
+            $("nav").style = "float: left";
+            $("target").style = "float: right";
+         }
+          $("nav").src = getUrl()
+          $("target").src = getUrl()
+      }
+      function onIframeLoad() {
+        document.title = $("nav").contentDocument.title;
+        var max_height = (window.innerWidth >= 800? 10240: window.innerHeight/3);
+        tune_iframe_height($("nav"), max_height);
+      }
+    </script>
+  </head>
+  <body onload="initApp()" style="margin:0">
+    <iframe class="split_main" id="nav" src="#" target="target" onload="onIframeLoad()"></iframe>
+    <iframe class="split_view" src="" id="target" name="target"></iframe>
+  </body>
+</html>
+

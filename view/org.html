@@ -1,0 +1,59 @@
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>console</title>
+    <!-- <base target="target"> -->
+    <link rel="stylesheet" type="text/css" href="/w/view/bootstrap.css"/>
+    <!-- <link rel="stylesheet" type="text/css" href="/w/view/tweak.css"/> -->
+    <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+    <script type="application/javascript" src="/w/deps/org.js"></script>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+<!--     <script type="text/x-mathjax-config"> -->
+<!--       MathJax.Hub.Config({ -->
+<!--         tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]} -->
+<!--       }); -->
+<!--       </script> -->
+<!-- <script type="text/javascript" -->
+<!--           src="httpxb://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"> -->
+<!--   </script> -->
+    <script type="application/javascript">
+     function split() { window.location.assign(getUrl() + "?v=split"); }
+     function toggle_editor() { toggleVisible($('editor')); }
+     function toggle_nav() { toggleVisible($('head-bar')); }
+     function dirname(path) { return path.match(/.*\//);  }
+     function changeExt(path, ext) { return path.substr(0, path.lastIndexOf(".")) + ext; }
+     function initApp(){
+         var url = window.location.pathname;
+         var github_url = "https://huafengxi.github.io/";
+         $("github_link").href = github_url + changeExt(url, '.html');
+         if (inIframe()){
+             hide($('head-bar'));
+         }
+         makeEditor($('editor'), function (content){ var doc = parse_org(content); setWindowTitle(doc.title); $("doc").innerHTML = render_org(doc); /*supressSectionNumber($("doc"));*/ /*MathJax.Hub.Queue(["Typeset",MathJax.Hub]);*/ });
+     }
+    </script>
+    <script type="application/javascript">
+     document.head.innerHTML = document.head.innerHTML + '<base target="target"/>';
+    </script>
+  </head>
+  <body onload="initApp()">
+    <nav id="head-bar" class="topnav">
+        <a href="javascript:toggle_editor()">edit</a>
+        <a href="javascript:split()">split</a>
+        <a href="?v=qrcode">qrcode</a>
+        <a href="?v=org2md">markdown</a>
+        <a href="?v=org2reveal">reveal</a>
+        <a href="?v=fops">fops</a>
+        <a id="github_link" href="#">github</a>
+        <a href="/index.org">home</a>
+        <a href="/ctrl.cmds">wshell</a>
+        <a href="/t/scratch.org">scratch</a>
+        <hr style="margin:0;"/>
+    </nav>
+    <div class="toggle_nav">
+      <a href="javascript:toggle_nav()">Nav+Ops</a>
+    </div>
+    <div id="editor"></div>
+    <div id="doc" class="doc"></div>
+  </body>
+</html>

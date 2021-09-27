@@ -1,0 +1,32 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>split frame</title>
+    <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript">
+      function getUrl() { return removeQueryArg(window.location.href, 'v=tsplit'); }
+      function initApp(){
+         $("nav_top").src = getUrl()
+      }
+      function tune_iframe_height2(iframe, max_height) { iframe.style.height= min(iframe.contentWindow.document.body.clientHeight, max_height); }
+      function onNavTopLoad() {
+        document.title = $("nav_top").contentDocument.title;
+      }
+      function onNavLoad() {
+        var max_height = (window.innerWidth >= 800? 10240: window.innerHeight/3);
+        tune_iframe_height($("nav"), max_height);
+      }
+      function onViewLoad() {
+        var max_height = (window.innerWidth >= 800? 10240: window.innerHeight/3);
+        tune_iframe_height($("target"), max_height);
+      }
+    </script>
+  </head>
+  <body onload="initApp()" style="margin:0">
+    <iframe class="split_top" id="nav_top" src="#" onload="onNavTopLoad()"></iframe>
+    <iframe class="split_main" id="nav" src="" name="nav" onload="onNavLoad()"></iframe>
+    <iframe class="split_view" id="target" src="" name="target" onload="onViewLoad()"></iframe>
+  </body>
+</html>
+

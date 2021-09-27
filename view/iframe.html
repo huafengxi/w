@@ -1,0 +1,67 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+      <title>split frame</title>
+    <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+    <style type="text/css">
+    .checkbox { float: left; }
+    </style>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript">
+      function getUrl() { return window.location.href.replace('v=iframe', ''); }
+      function setIframeSrc(iframe, src) {
+         if (!iframe.src.endsWith(src)) { iframe.src = src; }
+         iframe.style.display = 'block';
+         iframe.onload = function () { iframe.style.height = iframe.contentWindow.document.body.scrollHeight; }
+      }
+      function appendIndex(checklist, iframe, name, link) {
+             var div = document.createElement('div');
+             checklist.appendChild(div)
+             var checkbox = document.createElement('input');
+             div.appendChild(checkbox);
+             div.className = 'checkbox';
+             checkbox.type = 'checkbox';
+             checkbox.name = name;
+             checkbox.checked = false;;
+             checkbox.onclick = function () { if (checkbox.checked) { setIframeSrc(iframe, link); } else { iframe.style.display = 'none'; } }
+             div.appendChild(document.createTextNode(name));
+      }
+      function appendIframe(body) {
+             var iframe = document.createElement('iframe');
+             iframe.src = '';
+             body.appendChild(iframe);
+             iframe.class = 'ifr';
+             iframe.style.height = 16;
+             iframe.style.display = 'none';
+             return iframe;
+      }
+      function initApp(){
+         var links = http(getUrl()).split('\n');
+         var body = $("iframe-list");
+         var checklist = $("check-list");
+         for(var i in links) {
+             var s = links[i];
+             if (!s || s.startsWith('#')) continue;
+             var name_and_link = s.split(' ');
+             var name = name_and_link[0];
+             var link = name_and_link[1];
+             var iframe = appendIframe(body);
+             appendIndex(checklist, iframe, name, link);
+         }
+      }
+      function resize_all() {
+        for(var iframe of $('iframe-list').childNodes) {
+             if (iframe.class == 'ifr') {
+             iframe.style.height = iframe.contentWindow.document.body.scrollHeight;
+             }
+        }
+      }
+    </script>
+  </head>
+  <body onload="initApp()" style="margin:0">
+   <div style="float: left"><input type="button" value="resize" style="float: left" onclick="resize_all()"></div>
+   <div id="check-list"></div>
+   <div id="iframe-list">
+  </body>
+</html>
+

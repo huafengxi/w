@@ -1,0 +1,30 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>lish</title>
+    <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript" src="/w/view/fsh.js"></script>
+    <script type="application/javascript">
+    var __query_args = $QUERY_ARGS;
+    var __qargs = dict_merge(__query_args, getQueryArgs());
+    function myinterp(cmd) {
+        $('help').innerHTML = 'curl -d "cmd=' + cmd + '" -X POST -s ' + document.location.href + ' # query from shell';
+        if (getUrl().endsWith('.py')) {
+            return rpc(getUrl(), dict_merge(__qargs, {v:'script', cmd:cmd}));
+        } else {
+            return rpc('/w/rpc/popen.py', dict_merge(__qargs, {v:'script', cmd:cmd, src:getUrl()}));
+        }
+    }
+    function initApp(){
+        var panel = $('lish');
+        var sh = lish(myinterp, $('lish'));
+        sh(__qargs['q'])
+    }
+    </script>
+  </head>
+  <body onload="initApp()">
+    <div id="lish" class="dev">${lish}</div>
+    <div><code id='help'></code></div>
+  </body>
+</html>

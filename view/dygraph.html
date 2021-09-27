@@ -1,0 +1,26 @@
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>dygraph</title>
+<script type="application/javascript" src="/w/view/my.js"></script>
+<script type="text/javascript" src="/w/deps/dygraph.min.js"></script>
+<link rel="stylesheet" src="/w/deps/dygraph.css" />
+</head>
+<body>
+<div id="graphdiv" style="width:100%"></div>
+<script type="text/javascript">
+	//var data = getUrl() + '?' + encodeQueryString(bind(getQueryArgs(), {v:'popen', cmd: 'bash'}));
+ //var data = window.location.href.replace('v=ts', 'v=ets');
+ var data = window.location.href.replace('v=ts', '');
+ g = new Dygraph($("graphdiv"), data,
+                 { height: 160, legend: 'always', labelsUTC: true, labelsKMG2: true,
+                   axes : {
+                       x : { valueFormatter: Dygraph.dateString_, axisLabelFormatter: Dygraph.dateAxisLabelFormatter, ticker: Dygraph.dateTicker                }
+                   },
+                   xValueParser: function(x) {
+                       return x;
+	                 },
+ });
+</script>
+</body>
+</html>

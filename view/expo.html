@@ -1,0 +1,78 @@
+<html>
+    <head>
+        <title>expo</title>
+        <style>
+         nav {
+             padding: 1px;
+             margin-bottom: 1px;
+             /* background: DarkSlateGray; */
+         }
+         a {
+             text-decoration: none;
+         }
+         nav a {
+             //font-size: 32;
+             color: Gray;
+             padding: 3px;
+         }
+
+         nav a:hover {
+             color: black;
+         }
+         audio {
+             width: 600px;
+             height: 20px;
+             transition:all 0.5s linear;
+             box-shadow: 2px 2px 4px 0px #006773;
+             border-radius:0px 0px 0px 0px ;
+         }
+        </style>
+        <script type="application/javascript" src="/w/view/my.js"></script>
+        <script type="application/javascript" src="/w/view/expo.js"></script>
+        <script type="application/javascript">
+         const url_base = window.location.pathname;
+         function getUrl() { return removeQueryArg(window.location.href, 'v=expo'); }
+         function findMedia(t) {
+             return rpc(url_base, {v:'find', t: t}).split('\n');
+         }
+	       function toggleMedia(k) {
+	           var ctrl = $(k);
+	           if (ctrl.children.length == 0) {
+                 findMedia(k).forEach(appendExpo(ctrl));
+	           }
+             var children = $('expo').children;
+             for(var i = 0; i < children.length; i++) {
+                 hide(children[i]);
+             }
+             show(ctrl);
+	       }
+         function togglePlist() { return toggleMedia('plist'); }
+         function toggleText() { return toggleMedia('text'); }
+         function toggleAudio() { return toggleMedia('audio'); }
+         function toggleImg() { return toggleMedia('img'); }
+         function initExpo() {
+             findMedia('plist').forEach(appendExpo($('plist')));
+             findMedia('text').forEach(appendExpo($('text')));
+             findMedia('audio').forEach(appendExpo($('audio')));
+             findMedia('img').forEach(appendExpo($('img')));
+         }
+         function initApp() {}
+        </script>
+    </head>
+    <body onload="initApp()">
+        <nav id="head-bar">
+        <a href="?v=album">view as album</a>
+		    <a href='javascript:togglePlist()'>plist</a>
+		    <a href="javascript:toggleText()">text</a>
+		    <a href="javascript:toggleAudio()">audio</a>
+		    <a href="javascript:toggleImg()">img</a>
+        </nav>
+        <hr>
+        <div id="expo">
+        <li id="plist" style="display: none"></li>
+        <div id="text" style="display: none"></div>
+        <div id="audio" style="display: none"></div>
+        <div id="img" style="display: none"></div>
+        </div>
+    </body>
+</html>

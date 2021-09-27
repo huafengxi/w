@@ -1,0 +1,21 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>console</title>
+    <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript">
+      function initApp(){
+        makeEditor($('editor'), function (content){ $("doc").src = getUrl(); });
+        toggleVisible($('editor'));
+      }
+    </script>
+</script>
+  </head>
+  <body onload="initApp()">
+    <div id="editor"></div>
+    <iframe id="doc" src=""></iframe>
+  </body>
+</html>
+
+<html>

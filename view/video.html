@@ -1,0 +1,14 @@
+<html>
+    <head>
+        <title>video</title>
+        <script type="application/javascript">
+         function $(id) {return document.getElementById(id); }
+         function initApp() { $("v").getElementsByTagName("source")[0].src = window.location.href.replace('v=video', ''); }
+        </script>
+    </head>
+    <body onload="initApp()">
+        <video controls width="100%" id="v">
+            <source src="#">
+</video>
+    </body>
+</html>

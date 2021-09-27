@@ -1,0 +1,110 @@
+<html>
+    <head>
+        <title>album</title>
+        <base target="target">
+        <style>
+         nav {
+             padding: 1px;
+             margin-bottom: 1px;
+             /* background: DarkSlateGray; */
+         }
+         a {
+             text-decoration: none;
+         }
+         nav a {
+             //font-size: 32;
+             color: Gray;
+             padding: 3px;
+         }
+
+         nav a:hover {
+             color: black;
+         }
+         .columed { 
+             column-count: 4;
+             column-gap: 1px;
+         }
+         .album {
+             display: inline-block;
+             margin: 0 0 1px;
+             width: 100%;
+         }
+	 img {
+            max-width: 100%;
+            height: auto;
+        }
+	 .tag {
+            display: none;
+	 };
+        </style>
+
+        <script type="application/javascript" src="/w/view/my.js"></script>
+        <script type="application/javascript">
+         const url_base = window.location.pathname;
+         const urlSearchParams = new URLSearchParams(window.location.search);
+         const params = Object.fromEntries(urlSearchParams.entries());
+         function getUrl() { return removeQueryArg(window.location.pathname, 'v=album'); }
+         function getMeta(k) {
+             return rpc("/w/rpc/album_rpc.py", {'src':url_base, 'q':k}).split('\n')
+         }
+         function appendTag(k) {
+             function do_append(v) {
+                 if (!v) return;
+                 var a = document.createElement('a');
+                 a.innerHTML = v;
+                 a.href = '?v=album&q=' + k + '&e=' + encodeURIComponent(v);
+                 $(k).appendChild(a);
+             }
+             return do_append;
+         }
+         function appendAlbum(obj) {
+             var obj = eval(obj);
+             var a = document.createElement('a');
+             a.target = '_blank';
+             //a.innerHTML = '<div class="album"><img src="{base_dir}/.meta/cover.jpg" alt="{name}"><div class="tag">{tags}</div></div>'.format(obj);
+             a.innerHTML = '<div class="album"><img src="{base_dir}/.meta/cover.jpg" alt="{base_dir}:{name}"></div>'.format(obj);
+             a.href = '{base_dir}/?v=expo'.format(obj);
+             $('expo').appendChild(a);
+         }
+         function initExpo() {
+             var args = dict_merge(params, {'src':url_base});
+             delete args['v'];
+             if (args['e'] == null) delete args['q'];
+             var li = rpc("/w/rpc/album_rpc.py", args);
+             eval(li).forEach(appendAlbum);
+         }
+
+         function showNav(k) {
+             var ctrl = $(k);
+             if (ctrl.children.length == 0) {
+                 getMeta(k).forEach(appendTag(k));
+             }
+             var is_visible = isVisible(ctrl);
+             hideAll($('nav').children);
+             if (!is_visible) {
+                 show(ctrl);
+             }
+             return false;
+         }
+         function initApp() {
+             initExpo();
+         }
+        </script>
+    </head>
+    <body onload="initApp()">
+        <nav id="head-bar">
+		<a href="?v=album">all</a> 
+		<a href="javascript:;" onclick="return showNav('circle')">circle</a>
+		<a href="javascript:;" onclick="return showNav('va')">va</a>
+		<a href="javascript:;" onclick="return showNav('tags')">tags</a>
+	</nav>
+	<div id="nav">
+		<nav id="circle" class="topnav" style="display:none">Circle</nav>
+		<nav id="va" class="topnav" style="display:none">Va</nav>
+		<nav id="tags" class="topnav" style="display:none">Tags </nav>
+	</div>
+        <hr>
+        <div id="expo" class="columed">
+        </div>
+    </body>
+</html>
