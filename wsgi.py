@@ -70,7 +70,7 @@ def run_use_wsgiref(app, host, port, daemon):
 def run_use_wsgiserver(app, host, port, daemon):
     if not host: host ='0.0.0.0'
     from wsgiserver import WSGIServer
-    cert, keyfile = os.path.expanduser('~/auth/fullchain.pem'), os.path.expanduser('~/auth/privkey.pem')
+    cert, keyfile = os.path.expanduser('~/.auth/fullchain.pem'), os.path.expanduser('~/.auth/privkey.pem')
     if not os.path.exists(cert) or not os.path.exists(keyfile):
         logging.warn("ssl key %s/%s not exists: run with danger", cert, keyfile)
         cert, keyfile = None, None
@@ -93,7 +93,7 @@ def run_use_bjoern(app, host, port, daemon):
         return True
 
 def read_crendential():
-    path = os.path.expanduser('~/auth/passwd')
+    path = os.path.expanduser('~/.auth/passwd')
     try:
         with open(path) as f:
             return f.read()

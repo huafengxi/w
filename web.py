@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 '''
-# echo 'user:passwd' > ~/auth/passwd
-# ssl: ~/auth/cert.pem ~/auth/privkey.pem
+# echo 'user:passwd' > ~/.auth/passwd
+# ssl: ~/.auth/cert.pem ~/.auth/privkey.pem
 log=info ./myapp.py 8080 [log_file]
 '''
 

@@ -6,7 +6,11 @@ once deployed, you can creat file with special extensions for different purpose.
 * start service
 : git clone git@github.com:huafengxi/w.git w
 : log=debug w/web.py 8080 
- 
+
+* config ssl/basic auth
+: echo 'user:passwd' > ~/.auth/passwd
+: cp cert.pem privkey.pem  ~/.auth/
+
 * .org file
 + [[/t/a.org]], ctrl-alt-e to edit, ctrl-alt-s to save and refresh.
 + [[?v=org2md]] convert org to markdown
