@@ -1,0 +1,5 @@
+# -*- type=ish -*-
+#init: qarg.i='ish' // this line is javascript code, execute on document load
+#onload: __wdoc__ # this line is ish code, execute by hap.py
+__wdoc__           #link: help
+tail -800 /tmp/web.log #link: web.log

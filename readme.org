@@ -23,8 +23,8 @@ once deployed, you can creat file with special extensions for different purpose.
 + [[/w/demo/demo.ish]] ctrl+click to execute cmd.
 
 * hit.py console
-+ [[/w/demo/ctrl.cmds]] for a more complex example.
-+ [[/w/demo/ctrl.cmds?_log_=3]] for verbose log.
++ [[/w/demo/a.ish]] for a more complex example.
++ [[/w/demo/a.ish?_log_=3]] for verbose log.
 
 * table
 + [[/w/demo/a.tab]] query sql, return html snippet.
