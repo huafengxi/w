@@ -4,8 +4,7 @@ This is a document edit server. see [[design.org]].
 once deployed, you can creat file with special extensions for different purpose.
 
 * start service
-: git clone git@github.com:huafengxi/mirror.git m
-: cd m
+: git clone git@github.com:huafengxi/w.git w
 : log=debug w/web.py 8080 
  
 * .org file
