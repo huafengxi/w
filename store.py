@@ -63,11 +63,12 @@ class RootStore:
         store, new_path = self.get_store(path)
         return store.write(new_path, content)
 
+read_chunk_sz = 1<<21
 def lazy_read_part_file(path, fsize, start, end):
     with open(path, 'rb') as f:
         f.seek(start)
-        for i in range(start, end, 1<<21):
-            buf = f.read(min(end - i, 1<<21))
+        for i in range(start, end, read_chunk_sz):
+            buf = f.read(min(end - i, read_chunk_sz))
             if buf:
                 yield buf
 
@@ -84,14 +85,16 @@ class Pack:
             items.extend([p[len(path):] for p in self.pack.list(path)])
         return items
     def lazy_read(self, path, range_req=''):
+        def limit_read_size(start, end):
+            return start, min(start + read_chunk_sz, end)
         def parse_range(range_seq, fsize):
             _ = re.findall('\d+', range_req)
             if len(_) == 2:
                 return int(_[0]), int(_[1]) + 1
             elif len(_) == 1:
-                return int(_[0]), fsize
+                return limit_read_size(int(_[0]), fsize)
             else:
-                return 0, fsize
+                return limit_read_size(0, fsize)
         if os.path.isfile(path):
             fsize = os.stat(path).st_size
             start, end = parse_range(range_req, fsize)
