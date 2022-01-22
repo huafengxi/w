@@ -1,4 +1,5 @@
-function toggleComment(t) {
+function toggleComment(btn) {
+    var t = btn.parentElement.getElementsByTagName('pre')[0];
     var html = t.innerHTML;
     if (html.startsWith('#')) {
         html = html.slice(1);
@@ -8,6 +9,18 @@ function toggleComment(t) {
     t.innerHTML = html;
 }
 
+function liMoveUp(btn) {
+    var li = btn.parentNode;
+    if (li.previousSibling) {
+        li.parentNode.insertBefore(li, li.previousSibling);
+    }
+}
+function liMoveDown(btn) {
+    var li = btn.parentNode;
+    if (li.nextSibling) {
+        li.parentNode.insertBefore(li.nextSibling, li);
+    }
+}
 function createListEdit(ctrl, list) {
     var drag_ctrl;
     function drag(ev) {
@@ -32,7 +45,7 @@ function createListEdit(ctrl, list) {
         li.ondragstart = drag;
         li.ondragover = allowDrop;
         li.ondrop = drop;
-        li.innerHTML = '<pre onclick="toggleComment(this)">{label}</pre>'.format({label:label});
+        li.innerHTML = '<button onclick="toggleComment(this)">H</button><button onclick="liMoveUp(this)">&uarr;</button><button onclick="liMoveDown(this)">&darr;</button><pre style="display: inline">{label}</pre>'.format({label:label});
         return li;
     }
     function is_empty_line(line) { return !/\S/.test(line); }
@@ -44,7 +57,7 @@ function createListEdit(ctrl, list) {
         var lines = [];
         var children = ctrl.getElementsByTagName('li');
         for(var i = 0; i < children.length; i++){
-            lines.push(children[i].childNodes[0].innerText);
+            lines.push(children[i].childNodes[3].innerText);
         }
         return lines;
     }
