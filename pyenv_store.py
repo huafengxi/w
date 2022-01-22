@@ -2,7 +2,7 @@ class PyEnvStore(dict):
     def __init__(self):
         self.env = globals()
     def head(self, path):
-        if path == '/' or path == '' or self.env.has_key(path):
+        if path == '/' or path == '' or path in self.env:
             return dict(type='text/plain')
         else:
             return None

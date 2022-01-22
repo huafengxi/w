@@ -22,7 +22,7 @@ def get_encoding(content):
 def safe_read(path, n=-1):
     try:
         pack.read(path, n)
-    except Exception,e:
+    except Exception as e:
         #print e
         return ''
 
@@ -48,7 +48,9 @@ class DirStore:
             # if content == None: raise StoreException("'%s' not found, real_path=%s!"%(path, real_path))
             if content != None:
                 mime_type = get_mime_type(real_path)
-                header_vars = dict(re.findall(r'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', content.split('\n', 1)[0]), rpath=real_path)
+                first_line = content.split('\n'.encode(), 1)[0]
+                header_vars = dict([(k.decode(), v.decode()) for k,v in re.findall(rb'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', first_line)])
+                header_vars.update(rpath=real_path)
                 if mime_type.startswith('text'):
                     sample = pack.read(real_path, 1<<14)
                     header_vars.update(encoding=get_encoding(sample))

@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 '''
 # echo 'user:passwd' > ~/.auth/passwd
 # ssl: ~/.auth/cert.pem ~/.auth/privkey.pem
@@ -20,12 +20,12 @@ sys.path.extend(['pylib'])
 import logging
 
 def help():
-    print __doc__
+    print(__doc__)
 
 import signal
 import subprocess
 def list_process(pat):
-    for pid in subprocess.Popen(['pgrep', '-f', 'web.py'], stdout=subprocess.PIPE).communicate()[0].split('\n'):
+    for pid in subprocess.Popen(['pgrep', '-f', 'web.py'], stdout=subprocess.PIPE).communicate()[0].split(b'\n'):
         if not pid: continue
         yield int(pid)
 def kill_process(pat):

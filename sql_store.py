@@ -43,7 +43,7 @@ class SqlStore:
             else:
                 return None
         cursor = conn.cursor()
-        cursor.executemany(sql, [(k, get_value(v), get_ref(v)) for k, v in attr.items()])
+        cursor.executemany(sql, [(k, get_value(v), get_ref(v)) for k, v in list(attr.items())])
         conn.commit()
         
     def list(self, id):

@@ -28,7 +28,7 @@ class AlbumDB:
     def read(self, path): return self.store.read(path)
     def build(self, d, attrs):
         def read_meta(d, m): return self.read(os.path.join(d,m))
-        one = dict([(a, read_meta(d, a)) for a in attrs])
+        one = dict([(a, read_meta(d, a).decode()) for a in attrs])
         one.update(base_dir=os.path.split(d[:-1])[0])
         return one
     def collect(self, li, *attrs):
@@ -50,18 +50,18 @@ def find_local(k, v, *attrs):
     a = AlbumDB('.')
     li = a.filt(k, v)
     for i in a.collect(li, *attrs):
-        print i
+        print(i)
 
 def distinct_local(k):
     return AlbumDB('.').distinct(k)
 import sys
 if __name__ == '__main__':
-    def help(): print __doc__
+    def help(): print(__doc__)
     len(sys.argv) >= 2  or help() or sys.exit(1)
     func = globals().get(sys.argv[1])
     callable(func) or help() or sys.exit(2)
     ret = func(*sys.argv[2:])
     if ret != None:
-        print ret
+        print(ret)
 
 

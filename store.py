@@ -63,7 +63,7 @@ class RootStore:
         store, new_path = self.get_store(path)
         return store.write(new_path, content)
 
-read_chunk_sz = 1<<21
+read_chunk_sz = 1<<19
 def lazy_read_part_file(path, fsize, start, end):
     with open(path, 'rb') as f:
         f.seek(start)
@@ -94,11 +94,11 @@ class Pack:
             elif len(_) == 1:
                 return limit_read_size(int(_[0]), fsize)
             else:
-                return limit_read_size(0, fsize)
+                return 0, fsize
         if os.path.isfile(path):
             fsize = os.stat(path).st_size
             start, end = parse_range(range_req, fsize)
-            logging.info("RangeRead: '%s' start=%d end=%d path=%s", range_req, start, end, path)
+            logging.debug("RangeRead: '%s' start=%d end=%d path=%s", range_req, start, end, path)
             return fsize, start, end, lazy_read_part_file(path, fsize, start, end)
         elif range_req:
             raise Exception('not support range request: %s'%(path))
@@ -110,14 +110,14 @@ class Pack:
                 return len(data), 0, len(data), data
     def read(self, path, limit=-1):
         if os.path.isfile(path):
-            with open(path, 'r') as f:
+            with open(path, 'rb') as f:
                 return f.read(limit)
         if self.pack:
             return self.pack.read(path)
 
 pack = Pack()
 def file_find_all(pat, path):
-    return re.findall(pat, pack.read(path))
+    return re.findall(pat, pack.read(path).decode())
 
 def build_root_store(fstab, pack=None):
     logging.info('build_root_store %s', fstab)
@@ -134,7 +134,7 @@ def build_root_store(fstab, pack=None):
 def get_store_cls(type):
     def load(x):
         logging.info('load: %s', x)
-        exec compile(pack.read(x), filename='<pack>/%s'%(x,), mode='exec') in globals()
+        exec(compile(pack.read(x), filename='%s'%(x,), mode='exec'), globals())
     cls_name = '%sStore'%(type)
     if not globals().get(cls_name, None):
         load('w/%s_store.py'%(type.lower()))

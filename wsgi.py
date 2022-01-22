@@ -12,7 +12,7 @@ def fork_as_daemon(daemon):
         sys.exit(0)
 
 def parse_qs_to_dict(qs):
-    return dict((k, v[-1]) for k, v in cgi.parse_qs(qs).items())
+    return dict((k, v[-1]) for k, v in list(cgi.parse_qs(qs).items()))
 
 def make_wsgi_app(handlers, pack):
     '''def handler(env, path, query, post): return mime_type, content'''
@@ -35,7 +35,7 @@ def make_wsgi_app(handlers, pack):
             return []
 
     def handle_request(env, path, query, post):
-        # logging.info("REQ: %s %s query=%s", path, env, repr(query))
+        logging.debug("REQ: %s %s query=%s", path, env, repr(query))
         #path = os.path.normpath(path)
         query_args = parse_qs_to_dict(query)
         meta, content = try_these([echo_handler] + handlers + [err_handler], env, path, query_args, post)
@@ -56,7 +56,8 @@ def make_wsgi_app(handlers, pack):
         header, content = handle_request(env, env.get('PATH_INFO'), env['QUERY_STRING'], env['wsgi.input'])
         response(*header)
         if not content: content = []
-        if type(content) == str or type(content) == unicode: content = [content]
+        elif type(content) == bytes: content = [content]
+        elif type(content) == str: content = [content.encode()]
         return content
     return wsgi_app
 

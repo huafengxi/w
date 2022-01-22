@@ -4,7 +4,7 @@ def interp(store, src=None, db='stat', tab='', m='', s='', e='', i=1, filt='', *
     def time2ts(t): return int(time.mktime(time.strptime(t, '%Y%m%d%H%M%S')))
     def metric_groupby(m): return re.sub('(\w+)', r'sum(\1)', m)
     def render_index(index):
-        index = ['%s /w/rpc/ts-sql.py?v=ts&db=%s&tab=%s&m=%s&s=%s&e=%s&i=%s&filt=%s\n'%(name, db, tab, urllib.quote(expr), s, e, i, urllib.quote(filt)) for name, tab, expr, filt in index]
+        index = ['%s /w/rpc/ts-sql.py?v=ts&db=%s&tab=%s&m=%s&s=%s&e=%s&i=%s&filt=%s\n'%(name, db, tab, urllib.parse.quote(expr), s, e, i, urllib.parse.quote(filt)) for name, tab, expr, filt in index]
         return ['IQuery /stat/stat.sh?db=%s\n'%(db), 'Index ts.index?v=code\n'] + [str(idx) for idx in index]
     def query_db(db, sql):
         conn = tsql.TConn(db, globals())

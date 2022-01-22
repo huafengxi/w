@@ -8,9 +8,9 @@ Usages:
 import sys
 import os
 import re
-import StringIO
+import io
 import tarfile
-import urllib2
+import urllib.request, urllib.error, urllib.parse
 import time
 import logging
 
@@ -21,10 +21,10 @@ def fetch(host, path, query_string):
     sleep_time = 1
     while True:
         try:
-            print 'fetch url: %s'%(url)
-            return urllib2.urlopen(url).read()
+            print('fetch url: %s'%(url))
+            return urllib.request.urlopen(url).read()
         except:
-            print "urlopen(%s) fail, need retry"%(url)
+            print("urlopen(%s) fail, need retry"%(url))
             time.sleep(sleep_time)
             sleep_time *= 2
 
@@ -33,7 +33,7 @@ def join_path(p1, p2):
 
 class TarHandler:
     def __init__(self):
-        self.fileobj = StringIO.StringIO()
+        self.fileobj = io.StringIO()
         self.fileobj.name = 'm'
         self.tar = tarfile.TarFile(mode='w', fileobj=self.fileobj)
         self.time = time.time()
@@ -49,7 +49,7 @@ class TarHandler:
     def add_dir(self, path):
         pass
     def add_file(self, path, content):
-        fileobj = StringIO.StringIO(content)
+        fileobj = io.StringIO(content)
         tarinfo = tarfile.TarInfo(name=path)
         tarinfo.size = len(content)
         tarinfo.mtime = self.time
@@ -66,7 +66,7 @@ def gen_sitemap(host, base='/'):
         if path.endswith('/'):
             content = fetch(host, path, 'v=read')
             if type(content) != 'str':
-                print 'path=%s content=%s'%(path, content)
+                print('path=%s content=%s'%(path, content))
             unfetched.extend(join_path(path, line) for line in content.split('\n') if not line.startswith('..') and not line.startswith('.git'))
         fetched.update(**{path:True})
         yield path
@@ -87,13 +87,13 @@ def archive_to_tar(host, base='/'):
     return handler.get_content()
     
 def help():
-    print __doc__
+    print(__doc__)
     
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     type = os.getenv('type', 'list')
     if type == 'list':
-        print '\n'.join(gen_sitemap(sys.argv[1]))
+        print('\n'.join(gen_sitemap(sys.argv[1])))
     elif type == 'tar':
         sys.stdout.write(archive_to_tar(sys.argv[1]))
     else:

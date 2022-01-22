@@ -1,11 +1,11 @@
 import traceback
 import logging
-import urlparse
+import urllib.parse
 import cgi
 import re
 
 def parse_qs_to_dict(qs):
-    return dict((k, v[-1]) for k, v in cgi.parse_qs(qs).items())
+    return dict((k, v[-1]) for k, v in list(cgi.parse_qs(qs).items()))
 
 def parse_post(ctype, post, post_size):
     if ctype.startswith('multipart/form-data'):
@@ -15,7 +15,7 @@ def parse_post(ctype, post, post_size):
         return cgi.parse_qs(post.read(post_size))
 
 def parse_post_to_dict(ctype, post, post_size):
-    return dict((k, v[-1]) for k, v in parse_post(ctype, post, post_size).items())
+    return dict((k.decode(), v[-1].decode()) for k, v in list(parse_post(ctype, post, post_size).items()))
 
 def prepare_args(env, query, post):
     if re.search('Googlebot|Baiduspider', env.get('HTTP_USER_AGENT', ""), re.I):
@@ -27,7 +27,7 @@ def prepare_args(env, query, post):
         args = {post_key: post}
     else:
         args = parse_post_to_dict(env.get('CONTENT_TYPE', 'application/x-www-form-urlencoded'), post, int(env.get('CONTENT_LENGTH', '') or 0))
-    args.update(**query)
+    args.update(query)
     args.update(_range_req=env.get('HTTP_RANGE', ''))
     return args
 
@@ -36,12 +36,12 @@ def rpc_encode(result, tb):
     else: return str(result)
 
 def safe_sub(text, **__kw):
-    return string.Template(text).safe_substitute(__kw)
+    return string.Template(text.decode()).safe_substitute(__kw).encode()
 
 def get_meta(store, path):
     meta = store.head(path) or dict()
     if 'path' in meta:
-        url_info = urlparse.urlparse(meta.get('path'))
+        url_info = urllib.parse.urlparse(meta.get('path'))
         meta.update(parse_qs_to_dict(url_info.query), path=url_info.path)
     else:
         meta.update(path=path)
@@ -59,13 +59,13 @@ class VMap(dict):
         if meta.get('is_crawled_by_curl', False):
             vpath = self.get(mime + '/curl', vpath)
         if vpath:
-            url_info =  urlparse.urlparse(vpath)
+            url_info =  urllib.parse.urlparse(vpath)
             vpath, view_query_args = url_info.path, parse_qs_to_dict(url_info.query)
             args.update(view_query_args, src=path)
         return vpath or path
 
 def run_script(store, path, args):
-    exec compile(store.read(path), path, mode='exec') in globals(), locals()
+    exec(compile(store.read(path), path[1:], mode='exec'), globals())
     output = interp(store, **args)
     if type(output) != tuple:
         return dict(type='text/plain'), output
@@ -92,7 +92,7 @@ def do_view(store, path, meta, args):
         return run_script(store, path, args)
     elif mime == 'text/html':
         if range_req: raise Exception('not support range request: %s'%(path))
-        return meta, safe_sub(store.read(path), QUERY_ARGS=repr(args))
+        return meta, [safe_sub(store.read(path), QUERY_ARGS=repr(args))]
     else:
         return response_part_file(store, path, meta, range_req)
 
@@ -133,10 +133,10 @@ import os
 import string
 import json
 import copy
-import StringIO
+import io
 from subprocess import Popen, PIPE, STDOUT
 import itertools
-import urllib
+import urllib.request, urllib.parse, urllib.error
 import time
 #import tsql
 import archive
@@ -150,7 +150,7 @@ def dict_updated(d, **kw):
 def make_wsgi_fetcher(wsgi_handler):
     def dummy_response(*args):pass
     def fetch(host, path, query_string):
-        env = {'PATH_INFO': path, 'CONTENT_LENGTH': '0', 'wsgi.input': StringIO.StringIO(), 'QUERY_STRING': query_string}
+        env = {'PATH_INFO': path, 'CONTENT_LENGTH': '0', 'wsgi.input': io.StringIO(), 'QUERY_STRING': query_string}
         return ''.join(wsgi_handler(env, dummy_response))
     return fetch
 
@@ -161,7 +161,7 @@ def cmd_wrapper(head):
     if os.name != 'nt':
         return head
     if head.endswith('.es'):
-        print 'cmd_wrapper=%s'%(head)
+        print('cmd_wrapper=%s'%(head))
         return 'emacs --script %s'%(popen('where %s'%(head)))
     return head
 
