@@ -115,14 +115,14 @@ if PY3:
     string_types = str,
     text_type = str
     binary_type = bytes
-    def ntob(n, encoding='ISO-8859-1'):
+    def ntob(n, encoding='utf-8'):
         """Return the given native string as a byte string in the given
         encoding.
         """
         # In Python 3, the native string type is unicode
         return n.encode(encoding)
 
-    def bton(b, encoding='ISO-8859-1'):
+    def bton(b, encoding='utf-8'):
         return b.decode(encoding)
 else:
     string_types = basestring,
