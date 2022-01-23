@@ -1,6 +1,7 @@
 import traceback
 import platform
 import logging
+import urllib
 import cgi
 import os
 import sys
@@ -12,7 +13,7 @@ def fork_as_daemon(daemon):
         sys.exit(0)
 
 def parse_qs_to_dict(qs):
-    return dict((k, v[-1]) for k, v in list(cgi.parse_qs(qs).items()))
+    return dict((k, v[-1]) for k, v in list(urllib.parse.parse_qs(qs).items()))
 
 def make_wsgi_app(handlers, pack):
     '''def handler(env, path, query, post): return mime_type, content'''

@@ -5,17 +5,17 @@ import cgi
 import re
 
 def parse_qs_to_dict(qs):
-    return dict((k, v[-1]) for k, v in list(cgi.parse_qs(qs).items()))
+    return dict((k, v[-1]) for k, v in list(urllib.parse.parse_qs(qs).items()))
 
 def parse_post(ctype, post, post_size):
     if ctype.startswith('multipart/form-data'):
         ctype, pdict = cgi.parse_header(ctype)
         return cgi.parse_multipart(post, pdict)
     else:
-        return cgi.parse_qs(post.read(post_size))
+        return urllib.parse.parse_qs(post.read(post_size).decode('utf-8'))
 
 def parse_post_to_dict(ctype, post, post_size):
-    return dict((k.decode(), v[-1].decode()) for k, v in list(parse_post(ctype, post, post_size).items()))
+    return dict((k, v[-1]) for k, v in list(parse_post(ctype, post, post_size).items()))
 
 def prepare_args(env, query, post):
     if re.search('Googlebot|Baiduspider', env.get('HTTP_USER_AGENT', ""), re.I):

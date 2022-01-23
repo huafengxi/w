@@ -2,7 +2,7 @@
 
 def interp(store, v='echo', src=None, **kw):
     def make_html(html='/w/view/template.html', meta='<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">', **kw):
-        return string.Template(store.read(html)).safe_substitute(meta=meta, **kw)
+        return string.Template(store.read(html).decode()).safe_substitute(meta=meta, **kw)
     if v == 'echo':
         return dict(type='text/plain'), 'src=%s kw=%s'%(src, kw)
     elif v == 'pack':
