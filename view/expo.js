@@ -2,9 +2,9 @@ function is_empty_line(line) { return !/\S/.test(line); }
 function is_comment(line) { return line.startsWith('#'); }
 function is_audio(line) { return !is_comment(line) && line.match(/.(mp3|wav)$/i); }
 function create_audio(path) {
-    var ctrl = document.createElement('tr');
-    ctrl.innerHTML = '<td><audio preload="metadata" controls src="{path}"></audio></td><td><label>{basename}</label></td>'.format({path: path, basename:basename(path)})
-    function getAudio(ctrl) { return ctrl.children[0].children[0]; }
+    var ctrl = document.createElement('div');
+    ctrl.innerHTML = '<audio preload="metadata" controls src="{path}"></audio><pre>{basename}</pre>'.format({path: path, basename:basename(path)})
+    function getAudio(ctrl) { return ctrl.children[0]; }
     function playNext() {
         var next = ctrl.nextSibling;
         if (next) {
