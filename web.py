@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8-unix -*-
 '''
 # echo 'user:passwd' > ~/.auth/passwd
 # ssl: ~/.auth/cert.pem ~/.auth/privkey.pem
@@ -6,6 +7,7 @@ log=info ./myapp.py 8080 [log_file]
 '''
 
 import sys, os, os.path
+#sys.setdefaultencoding('UTF8')
 sys.path.append('%s/pylib'%(os.path.dirname(sys.argv[0])))
 def locate_web_path(path):
     p = os.path.realpath(path)
