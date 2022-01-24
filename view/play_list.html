@@ -54,6 +54,14 @@
                  audios[i].muted = !audios[i].muted;
              }
          }
+         function tunePlaybackRate(t) {
+             var audios = document.getElementsByTagName('audio')
+             var rate = t.value/2.0;
+             for(var i = 0; i < audios.length; i++){
+                 audios[i].playbackRate = rate;
+             }
+             mylog("tune playbackRate", rate);
+         }
          function initApp() {
              var list = read(url).split('\n');
              getListEditLines = createListEdit($('edit'), list);
@@ -63,6 +71,7 @@
     <body onload="initApp()">
         <button onclick="edit_save()">edit/save</button>
         <button onclick="toggleMute()">toggle mute</button>
+        <input type="range" min="1" max="8" value="2" oninput="tunePlaybackRate(this)">
         <ul id="edit"></ul>
         <ul id="playlist"></ul>
     </body>
