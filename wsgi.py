@@ -69,14 +69,24 @@ def run_use_wsgiref(app, host, port, daemon):
     fork_as_daemon(daemon)
     server.serve_forever();
 
+def get_socket_timeout():
+    t = os.getenv("timeout")
+    t = int(t if t else '10')
+    return None if t < 0 else t
+
 def run_use_wsgiserver(app, host, port, daemon):
     if not host: host ='0.0.0.0'
     from wsgiserver import WSGIServer
     cert, keyfile = os.path.expanduser('~/.auth/fullchain.pem'), os.path.expanduser('~/.auth/privkey.pem')
-    if not os.path.exists(cert) or not os.path.exists(keyfile):
+    if os.getenv('nossl') == '1':
+        cert, keyfile = None, None
+        logging.warn('nossl mode: run with danger')
+    elif not os.path.exists(cert) or not os.path.exists(keyfile):
         logging.warn("ssl key %s/%s not exists: run with danger", cert, keyfile)
         cert, keyfile = None, None
-    server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile)
+    timeout = get_socket_timeout()
+    logging.info("socket timeout: %s", timeout)
+    server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout)
     fork_as_daemon(daemon)
     server.start()
     return True
