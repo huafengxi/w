@@ -48,6 +48,12 @@
                  hide(playlist);
              }
          }
+         function toggleMute() {
+             var audios = document.getElementsByTagName('audio')
+             for(var i = 0; i < audios.length; i++){
+                 audios[i].muted = !audios[i].muted;
+             }
+         }
          function initApp() {
              var list = read(url).split('\n');
              getListEditLines = createListEdit($('edit'), list);
@@ -55,7 +61,8 @@
         </script>
     </head>
     <body onload="initApp()">
-        <a href="javascript:;" onclick="return edit_save()">edit/save</a>
+        <button onclick="edit_save()">edit/save</button>
+        <button onclick="toggleMute()">toggle mute</button>
         <ul id="edit"></ul>
         <ul id="playlist"></ul>
     </body>

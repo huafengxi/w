@@ -18,7 +18,7 @@ function retryAudio(e) {
 }
 function create_audio(path) {
     var ctrl = document.createElement('div');
-    ctrl.innerHTML = '<audio preload="metadata" controls src="{path}"></audio><pre>{basename}</pre>'.format({path: path, basename:basename(path)})
+    ctrl.innerHTML = '<audio preload="metadata" controls muted src="{path}"></audio><pre>{basename}</pre>'.format({path: path, basename:basename(path)})
     function getAudio(ctrl) { return ctrl.children[0]; }
     function playNext() {
         var next = ctrl.nextSibling;
