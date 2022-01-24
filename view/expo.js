@@ -1,6 +1,21 @@
 function is_empty_line(line) { return !/\S/.test(line); }
 function is_comment(line) { return line.startsWith('#'); }
 function is_audio(line) { return !is_comment(line) && line.match(/.(mp3|wav)$/i); }
+function retryAudio(e) {
+    var audio = e.target;
+    mylog("handle play error", e, audio, audio.currentTime);
+    if (audio.error.code == audio.error.MEDIA_ERR_NETWORK) {
+        var startTime = audio.currentTime;
+        mylog("retry play", startTime, audio.src);
+        audio.src = audio.src;
+        audio.load();
+        audio.currentTime = startTime;
+        var playPromise = audio.play();
+        playPromise.catch(error => {
+            mylog("audio play error occur", error);
+        });
+    }
+}
 function create_audio(path) {
     var ctrl = document.createElement('div');
     ctrl.innerHTML = '<audio preload="metadata" controls src="{path}"></audio><pre>{basename}</pre>'.format({path: path, basename:basename(path)})
@@ -12,6 +27,7 @@ function create_audio(path) {
         }
     }
     getAudio(ctrl).onended = playNext;
+    getAudio(ctrl).addEventListener('error', retryAudio);
     return ctrl;
 }
 
