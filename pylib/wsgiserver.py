@@ -1406,6 +1406,9 @@ class HTTPConnection(object):
                 # if 1) no request has been started at all, or 2) we're
                 # in the middle of a request.
                 # See https://github.com/cherrypy/cherrypy/issues/853
+                if not request_seen:
+                    logging.warn("recv request timeout after connection established: %s", req)
+                    return # close the socket directly, to avoid chrome audio play stop.
                 if (not request_seen) or (req and req.started_request):
                     # Don't bother writing the 408 if the response
                     # has already started being written.
