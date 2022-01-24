@@ -125,7 +125,7 @@ class Handler:
             return do_view(self.store, vpath, vmeta, build_dict(meta, vmeta, args))
         except Exception as e:
             logging.error(traceback.format_exc())
-            return dict(type='text/plain', http_status='500 Internal Server Erro'), rpc_encode(None, traceback.format_exc())
+            return dict(type='text/plain', http_status='500 Internal Server Error'), rpc_encode(None, traceback.format_exc())
 
 # setup script deps
 import sys
