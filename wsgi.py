@@ -86,7 +86,7 @@ def run_use_wsgiserver(app, host, port, daemon):
         cert, keyfile = None, None
     timeout = get_socket_timeout()
     logging.info("socket timeout: %s", timeout)
-    server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout)
+    server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout, numthreads=30)
     fork_as_daemon(daemon)
     server.start()
     return True
