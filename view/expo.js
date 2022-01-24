@@ -26,6 +26,7 @@ function create_audio(path) {
             getAudio(next).play();
         }
     }
+    getAudio(ctrl).playbackRate = 1;
     getAudio(ctrl).onended = playNext;
     getAudio(ctrl).addEventListener('error', retryAudio);
     return ctrl;
