@@ -27,7 +27,7 @@ def help():
 import signal
 import subprocess
 def list_process(pat):
-    for pid in subprocess.Popen(['pgrep', '-f', 'web.py'], stdout=subprocess.PIPE).communicate()[0].split(b'\n'):
+    for pid in subprocess.Popen(['pgrep', '-f', pat], stdout=subprocess.PIPE).communicate()[0].split(b'\n'):
         if not pid: continue
         yield int(pid)
 def kill_process(pat):
@@ -66,7 +66,7 @@ def main():
     log_file = len(sys.argv) > 2 and sys.argv[2] or ''
     set_path()
     logging.info('web_start: listen=%s dir=%s log=%s(%s) pack=%s PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, get_pack(), os.getenv('PATH'), os.getenv('PYTHONPATH'))
-    kill_process('web.py {}'.format(listen_addr))
+    kill_process('web.py +{}'.format(listen_addr))
     set_logging(log_file)
     root = build_root_store('w/fstab')
     if 'genpack' in globals():
