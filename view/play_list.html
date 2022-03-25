@@ -77,6 +77,8 @@
         </script>
     </head>
     <body onload="initApp()">
+        <button onclick="edit_save()">edit/save</button>
+        <button onclick="toggleMute()">toggle mute</button>
         <select id="listop" onchange="onListOpChange()">
             <option value="sort">sort</option>
             <option value="last">last</option>
@@ -86,9 +88,7 @@
             <option value="hide">hide</option>
         </select>
 
-        <button onclick="edit_save()">edit/save</button>
-        <button onclick="toggleMute()">toggle mute</button>
-        <input type="range" min="1" max="8" value="2" oninput="tunePlaybackRate(this)">
+        <!-- <input type="range" min="1" max="8" value="2" oninput="tunePlaybackRate(this)"> -->
         <ul id="edit"></ul>
         <ul id="playlist"></ul>
     </body>

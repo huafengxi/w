@@ -52,12 +52,15 @@
          function toggleAudio() { return toggleMedia('audio'); }
          function toggleImg() { return toggleMedia('img'); }
          function initExpo() {
+             appendExpo($('plist'))('all.plist');
              findMedia('plist').forEach(appendExpo($('plist')));
              findMedia('text').forEach(appendExpo($('text')));
              findMedia('audio').forEach(appendExpo($('audio')));
              findMedia('img').forEach(appendExpo($('img')));
          }
-         function initApp() {}
+         function initApp() {
+             initExpo();
+         }
         </script>
     </head>
     <body onload="initApp()">
