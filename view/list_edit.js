@@ -27,6 +27,17 @@ function liCopy(btn) {
     li.parentNode.insertBefore(li.cloneNode(li), li);
 }
 
+function liMoveLast(btn) {
+    var li = btn.parentNode;
+    li.parentNode.appendChild(li);
+}
+
+function liSort(btn) {
+    var li = btn.parentNode;
+    li.parentNode.insertBefore(li, li.parentNode.childNodes[cursor]);
+    cursor += 1;
+}
+
 function createListEdit(ctrl, list) {
     var drag_ctrl;
     function drag(ev) {
@@ -82,5 +93,9 @@ function listOp(li) {
         liMoveDown(li);
     } else if (sel == 'copy') {
         liCopy(li);
+    } else if (sel == 'last') {
+        liMoveLast(li);
+    } else if (sel == 'sort') {
+        liSort(li);
     }
 }

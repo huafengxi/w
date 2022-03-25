@@ -63,21 +63,31 @@
              mylog("tune playbackRate", rate);
          }
          function initApp() {
-             var list = read(url).split('\n');
+             var content = read(url);
+             if (!content) {
+                 content = rpc(dirname(url) + '/', {v:'find', t: 'audio'});
+             }
+             var list = content.split('\n');
              getListEditLines = createListEdit($('edit'), list);
+         }
+         var cursor = 0;
+         function onListOpChange() {
+             cursor = 0;
          }
         </script>
     </head>
     <body onload="initApp()">
-        <button onclick="edit_save()">edit/save</button>
-        <button onclick="toggleMute()">toggle mute</button>
-        <select id="listop">
-            <option value="hide">hide</option>
+        <select id="listop" onchange="onListOpChange()">
+            <option value="sort">sort</option>
+            <option value="last">last</option>
             <option value="up">up</option>
             <option value="down">down</option>
             <option value="copy">copy</option>
+            <option value="hide">hide</option>
         </select>
 
+        <button onclick="edit_save()">edit/save</button>
+        <button onclick="toggleMute()">toggle mute</button>
         <input type="range" min="1" max="8" value="2" oninput="tunePlaybackRate(this)">
         <ul id="edit"></ul>
         <ul id="playlist"></ul>
