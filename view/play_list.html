@@ -71,6 +71,13 @@
     <body onload="initApp()">
         <button onclick="edit_save()">edit/save</button>
         <button onclick="toggleMute()">toggle mute</button>
+        <select id="listop">
+            <option value="hide">hide</option>
+            <option value="up">up</option>
+            <option value="down">down</option>
+            <option value="copy">copy</option>
+        </select>
+
         <input type="range" min="1" max="8" value="2" oninput="tunePlaybackRate(this)">
         <ul id="edit"></ul>
         <ul id="playlist"></ul>

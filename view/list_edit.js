@@ -1,5 +1,5 @@
 function toggleComment(btn) {
-    var t = btn.parentElement.getElementsByTagName('pre')[0];
+    var t = btn;
     var html = t.innerHTML;
     if (html.startsWith('#')) {
         html = html.slice(1);
@@ -21,6 +21,12 @@ function liMoveDown(btn) {
         li.parentNode.insertBefore(li.nextSibling, li);
     }
 }
+
+function liCopy(btn) {
+    var li = btn.parentNode;
+    li.parentNode.insertBefore(li.cloneNode(li), li);
+}
+
 function createListEdit(ctrl, list) {
     var drag_ctrl;
     function drag(ev) {
@@ -45,7 +51,7 @@ function createListEdit(ctrl, list) {
         li.ondragstart = drag;
         li.ondragover = allowDrop;
         li.ondrop = drop;
-        li.innerHTML = '<button onclick="toggleComment(this)">H</button><button onclick="liMoveUp(this)">&uarr;</button><button onclick="liMoveDown(this)">&darr;</button><pre style="display: inline">{label}</pre>'.format({label:label});
+        li.innerHTML = '<pre style="display: inline" onclick="listOp(this)">{label}</pre>'.format({label:label});
         return li;
     }
     function is_empty_line(line) { return !/\S/.test(line); }
@@ -57,10 +63,24 @@ function createListEdit(ctrl, list) {
         var lines = [];
         var children = ctrl.getElementsByTagName('li');
         for(var i = 0; i < children.length; i++){
-            lines.push(children[i].childNodes[3].innerText);
+            lines.push(children[i].innerText);
         }
         return lines;
     }
     list.forEach(do_append_list_item);
     return getLines;
+}
+
+function listOp(li) {
+    console.log(li);
+    var sel = $('listop').value;
+    if (sel == 'hide') {
+        toggleComment(li);
+    } else if (sel == 'up') {
+        liMoveUp(li);
+    } else if (sel == 'down') {
+        liMoveDown(li);
+    } else if (sel == 'copy') {
+        liCopy(li);
+    }
 }
