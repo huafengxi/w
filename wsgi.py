@@ -41,6 +41,8 @@ def make_wsgi_app(handlers, pack):
         query_args = parse_qs_to_dict(query)
         meta, content = try_these([echo_handler] + handlers + [err_handler], env, path, query_args, post)
         logging.info("RESP: %s meta=%s", path, meta)
+        if not meta.get('type'):
+            meta['type'] = ''
         mime = meta['type']
         if mime.startswith('text'): mime = '%s; charset=%s'%(mime, meta.get('encoding', 'utf-8'))
         headers = [('Content-Type', mime)]
