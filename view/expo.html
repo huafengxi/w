@@ -36,21 +36,25 @@
          function findMedia(t) {
              return rpc(url_base, {v:'find', t: t}).split('\n');
          }
-	       function toggleMedia(k) {
-	           var ctrl = $(k);
-	           if (ctrl.children.length == 0) {
-                 findMedia(k).forEach(appendExpo(ctrl));
-	           }
-             var children = $('expo').children;
+         function showPanel(ctrl) {
+             var children = ctrl.parentNode.children;
              for(var i = 0; i < children.length; i++) {
                  hide(children[i]);
              }
              show(ctrl);
+         }
+         function toggleMedia(k) {
+	           var ctrl = $(k);
+	           if (ctrl.children.length == 0) {
+                 findMedia(k).forEach(appendExpo(ctrl));
+	           }
+             showPanel(ctrl);
 	       }
          function togglePlist() { return toggleMedia('plist'); }
          function toggleText() { return toggleMedia('text'); }
          function toggleAudio() { return toggleMedia('audio'); }
          function toggleImg() { return toggleMedia('img'); }
+         function toggleRate() { return showPanel($('rate')); }
          function initExpo() {
              appendExpo($('plist'))('all.plist');
              findMedia('plist').forEach(appendExpo($('plist')));
@@ -70,6 +74,7 @@
 		    <a href="javascript:toggleText()">text</a>
 		    <a href="javascript:toggleAudio()">audio</a>
 		    <a href="javascript:toggleImg()">img</a>
+		    <a href="javascript:toggleRate()">rate</a>
         </nav>
         <hr>
         <div id="expo">
@@ -77,6 +82,9 @@
         <div id="text" style="display: none"></div>
         <div id="audio" style="display: none"></div>
         <div id="img" style="display: none"></div>
+        <div id="rate" style="display: none">
+          <a href="?v=mv&target=/z1x/good/">good</a>
+          <a href="?v=mv&target=/z1x/bad/">bad</a>
         </div>
     </body>
 </html>
