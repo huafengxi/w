@@ -31,6 +31,8 @@ def interp(store, v='echo', src=None, **kw):
     elif v == 'append':
         store.write(src, (store.read(src) or '') + kw.get('text', ''))
         return 'append %s, text=%s'%(src, kw.get('text', ''))
+    elif v == 'mv':
+        return store.mv(src, kw.get('target'))
     elif v == 'dir' or v == 'dir2':
         if v == 'dir2':
             content = store.find(src)

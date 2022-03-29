@@ -1,5 +1,6 @@
 import os
 import mimetypes
+import shutil
 
 def get_mime_type(path):
     text_mime_type = 'text/plain'
@@ -35,6 +36,10 @@ class DirStore:
     def get_real_path(self, path):
         return os.path.join(self.base_dir, path) or '/'
 
+    def mv(self, src, dest):
+        src, dest = self.get_real_path(src), self.get_real_path(dest)
+        shutil.move(src, dest)
+        return 'mv %s %s'%(src, dest)
     def delete(self, path):
         real_path = self.get_real_path(path)
         os.unlink(real_path)

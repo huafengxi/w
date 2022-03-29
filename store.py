@@ -37,6 +37,15 @@ class RootStore:
             logging.debug('root.head: %s %s', e, path)
             meta = None
         return meta
+    def mv(self, path, new_path):
+        try:
+            store, src = self.get_store(path)
+            store2, dest = self.get_store(new_path)
+            if store != store2:
+                raise StoreException("mv src and dest not on same store: %s %s", path, new_path)
+            return store.mv(src, dest)
+        except StoreException as e:
+            return None
     def delete(self, path):
         try:
             store, new_path = self.get_store(path)
