@@ -12,6 +12,7 @@ dir: /w/rpc/builtin.py?v=dir
 dir2: /w/rpc/builtin.py?v=dir2
 tar: /w/rpc/builtin.py
 sitemap: /w/rpc/builtin.py
+mv: /w/rpc/builtin.py
 
 # utility
 fops: /w/view/fops.html
