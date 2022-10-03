@@ -28,7 +28,8 @@ class AlbumDB:
     def read(self, path): return self.store.read(path)
     def build(self, d, attrs):
         def read_meta(d, m): return self.read(os.path.join(d,m))
-        one = dict([(a, read_meta(d, a).decode()) for a in attrs])
+        def safe_decode(x): return x and x.decode() or None
+        one = dict([(a, safe_decode(read_meta(d, a))) for a in attrs])
         one.update(base_dir=os.path.split(d[:-1])[0])
         return one
     def collect(self, li, *attrs):
