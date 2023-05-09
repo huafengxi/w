@@ -89,7 +89,7 @@ class Pack:
     def list(self, path):
         items = []
         if os.path.isdir(path):
-            items.extend(os.listdir(path))
+            items.extend(sorted(os.listdir(path)))
         if self.pack:
             items.extend([p[len(path):] for p in self.pack.list(path)])
         return items

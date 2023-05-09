@@ -27,6 +27,10 @@
              box-shadow: 2px 2px 4px 0px #006773;
              border-radius:0px 0px 0px 0px ;
          }
+         pre {
+             white-space: pre-wrap;
+             word-wrap: break-word;
+         }
         </style>
         <script type="application/javascript" src="/w/view/my.js"></script>
         <script type="application/javascript" src="/w/view/expo.js"></script>
@@ -34,7 +38,9 @@
          const url_base = window.location.pathname;
          function getUrl() { return removeQueryArg(window.location.href, 'v=expo'); }
          function findMedia(t) {
-             return rpc(url_base, {v:'find', t: t}).split('\n');
+             var list = rpc(url_base, {v:'find', t: t}).split('\n');
+             list.sort();
+             return list;
          }
          function showPanel(ctrl) {
              var children = ctrl.parentNode.children;
@@ -75,6 +81,7 @@
 		    <a href="javascript:toggleAudio()">audio</a>
 		    <a href="javascript:toggleImg()">img</a>
 		    <a href="javascript:toggleRate()">rate</a>
+	            <a href="?v=mv&target=/rj-rate/trash">trash</a>
         </nav>
         <hr>
         <div id="expo">
@@ -83,8 +90,10 @@
         <div id="audio" style="display: none"></div>
         <div id="img" style="display: none"></div>
         <div id="rate" style="display: none">
-          <a href="?v=mv&target=/z1x/good/">good</a>
-          <a href="?v=mv&target=/z1x/bad/">bad</a>
+            <a href="?v=mv&target=/rj-rate/nts">nts</a>
+          <a href="?v=mv&target=/rj-rate/ts-3">ts-3</a>
+          <a href="?v=mv&target=/rj-rate/ts-2">ts-2</a>
+          <a href="?v=mv&target=/rj-rate/ts-1">ts-1</a>
         </div>
     </body>
 </html>

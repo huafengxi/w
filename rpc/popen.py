@@ -4,7 +4,7 @@ def interp(store, i='', src=None, input=None, cmd='', dir='', **kw):
     def is_html(content):
         if type(content) == list or type(content) == tuple:
            content = content[0]
-        return content and re.match('^<.*>$', content, re.S) and len(re.findall('<.*?>', content)) > 3
+        return content and re.match(b'^<.*>$', content, re.S) and len(re.findall(b'<.*?>', content)) > 3
     def popen(cmd_list, input, env):
         p = Popen(cmd_list, cwd=os.path.realpath('./' + dir), env=env, stdin=input and PIPE or NULLFD, stdout=PIPE, stderr=PIPE)
         output, err = p.communicate(input)
