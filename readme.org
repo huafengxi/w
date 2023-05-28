@@ -15,7 +15,7 @@ once deployed, you can creat file with special extensions for different purpose.
 * download optional deps for extend features
 : cd $webroot
 : git clone git@github.com:huafengxi/tsql.git tsql # query text using sql
-: git clone git@github.com:huafengxi/bin-mirror.git deps # revealjs
+: git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 
 * .org file
 + [[/w/demo/a.org]], ctrl-alt-e to edit, ctrl-alt-s to save and refresh.

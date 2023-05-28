@@ -6,8 +6,8 @@
 
 (require 'ox-re-reveal)
 (setq user-full-name "yuanqi.xhf")
-(setq user-mail-address "yuanqi.xhf@alipay.com")
-(setq org-re-reveal-root "/deps/reveal-js")
+(setq user-mail-address "yuanqi.xhf@oceanbase.com")
+(setq org-re-reveal-root "/w/deps2/reveal-js")
 (setq org-re-reveal-title-slide "<h1>%t</h1>
 <h2>%a</h2>
 <h2>%e</h2>")
