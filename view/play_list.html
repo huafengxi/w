@@ -67,8 +67,10 @@
              if (!content) {
                  content = rpc(dirname(url) + '/', {v:'find', t: 'audio'});
              }
+             var base_name = (new URL(dirname(url))).pathname;
              var list = content.split('\n');
-             getListEditLines = createListEdit($('edit'), list);
+             var nlist = list.map((x) => { return x.slice(base_name.length + 1);});
+             getListEditLines = createListEdit($('edit'), nlist);
          }
          var cursor = 0;
          function onListOpChange() {
@@ -87,6 +89,7 @@
             <option value="copy">copy</option>
             <option value="hide">hide</option>
         </select>
+        <a href="?v=del">del</a>
 
         <!-- <input type="range" min="1" max="8" value="2" oninput="tunePlaybackRate(this)"> -->
         <ul id="edit"></ul>

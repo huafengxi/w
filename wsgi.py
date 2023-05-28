@@ -73,7 +73,7 @@ def run_use_wsgiref(app, host, port, daemon):
 
 def get_socket_timeout():
     t = os.getenv("timeout")
-    t = int(t if t else '10')
+    t = int(t if t else '60')
     return None if t < 0 else t
 
 def run_use_wsgiserver(app, host, port, daemon):
@@ -87,7 +87,7 @@ def run_use_wsgiserver(app, host, port, daemon):
         logging.warn("ssl key %s/%s not exists: run with danger", cert, keyfile)
         cert, keyfile = None, None
     timeout = get_socket_timeout()
-    logging.info("socket timeout: %s", timeout)
+    logging.info("run use wsgiserver: socket timeout: %s", timeout)
     server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout, numthreads=30)
     fork_as_daemon(daemon)
     server.start()
