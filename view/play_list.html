@@ -66,11 +66,11 @@
              var content = read(url);
              if (!content) {
                  content = rpc(dirname(url) + '/', {v:'find', t: 'audio'});
+                 var base_name = (new URL(dirname(url))).pathname;
+                 content = content.replaceAll(base_name + '/', '');
              }
-             var base_name = (new URL(dirname(url))).pathname;
              var list = content.split('\n');
-             var nlist = list.map((x) => { return x.slice(base_name.length + 1);});
-             getListEditLines = createListEdit($('edit'), nlist);
+             getListEditLines = createListEdit($('edit'), list);
          }
          var cursor = 0;
          function onListOpChange() {
