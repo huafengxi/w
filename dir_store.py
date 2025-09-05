@@ -54,7 +54,7 @@ class DirStore:
             # if content == None: raise StoreException("'%s' not found, real_path=%s!"%(path, real_path))
             if content != None:
                 mime_type = get_mime_type(real_path)
-                first_line = content.split('\n'.encode(), 1)[0]
+                first_line = content.split(r'\n'.encode(), 1)[0]
                 header_vars = dict([(k.decode(), v.decode()) for k,v in re.findall(rb'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', first_line)])
                 header_vars.update(rpath=real_path)
                 if mime_type.startswith('text'):

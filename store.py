@@ -26,7 +26,7 @@ class RootStore:
                 return flist
             path = flist[i]
             if path.endswith('/'):
-                flist.extend([path + p for p in self.read(path).split('\n') if p != '../' and p != './'])
+                flist.extend([path + p for p in self.read(path).split(r'\n') if p != '../' and p != './'])
         return flist
     def head(self, path):
         try:
@@ -97,7 +97,7 @@ class Pack:
         def limit_read_size(start, end):
             return start, min(start + read_chunk_sz, end)
         def parse_range(range_seq, fsize):
-            _ = re.findall('\d+', range_req)
+            _ = re.findall(r'\d+', range_req)
             if len(_) == 2:
                 return int(_[0]), int(_[1]) + 1
             elif len(_) == 1:
@@ -131,12 +131,12 @@ def file_find_all(pat, path):
 def build_root_store(fstab, pack=None):
     logging.info('build_root_store %s', fstab)
     def parse_cmd_args(args):
-        return [i for i in args if not re.match('^\w+=', i)], dict(i.split('=', 1) for i in args if re.match('^\w+=', i))
+        return [i for i in args if not re.match(r'^\w+=', i)], dict(i.split('=', 1) for i in args if re.match(r'^\w+=', i))
     def do_mount(mpoint, type, arg):
         logging.info('mount %s %s %s', mpoint, type, arg)
         args, kw = parse_cmd_args(arg.split())
         return mount(type, *args, **kw)
-    mstore = [(mpoint, do_mount(mpoint, type, arg)) for mpoint, type, arg in file_find_all('(?m)^([^# \t]+)\s+(\w+)(.*)\n', fstab)]
+    mstore = [(mpoint, do_mount(mpoint, type, arg)) for mpoint, type, arg in file_find_all(r'(?m)^([^# \t]+)\s+(\w+)(.*)\n', fstab)]
     logging.info(mstore)
     return RootStore(mstore)
 

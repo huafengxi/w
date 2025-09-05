@@ -10,7 +10,7 @@ def interp(store, v='echo', src=None, **kw):
     elif v == 'head':
         return dict(type='text/plain'), repr(store.head(src))
     elif v == 'find':
-        pat_def = dict(audio='[.]mp3$|[.]wav$|[.]ogg$', text='[.]txt$', img='[.]png$|[.]jpg$|[.]gif$', plist='[.]plist$')
+        pat_def = dict(audio='[.]mp3$|[.]m4a$|[.]wav$|[.]ogg$', text='[.]txt$', img='[.]png$|[.]jpg$|[.]gif$', plist='[.]plist$')
         pat = pat_def.get(kw.get('t'), '')
         li = [i for i in store.find(src) if re.search(pat, i, re.IGNORECASE)]
         return dict(type='text/plain'), '\n'.join(li)

@@ -2,7 +2,6 @@ import traceback
 import platform
 import logging
 import urllib
-import cgi
 import os
 import sys
 import time

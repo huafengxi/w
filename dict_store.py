@@ -1,6 +1,6 @@
 class DictStore(dict):
     def __init__(self, path):
-        dict.__init__(self, file_find_all('(?m)^([^# ]+):\s+(\S*)\n', path))
+        dict.__init__(self, file_find_all(r'(?m)^([^# ]+):\s+(\S*)\n', path))
     def head(self, path):
         if path == '/' or path == '' or path in self:
             return dict(type='text/plain')
