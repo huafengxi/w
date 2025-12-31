@@ -32,7 +32,12 @@ def is_path_dir(path): return os.path.isdir(path) or path.endswith('/')
 class DirStore:
     def __init__(self, base_dir):
         self.base_dir = os.path.realpath(os.path.expanduser(base_dir))
+        need_enc = os.path.exists(self.get_real_path('.need_enc'))
+        print(f"DirStore(need_enc={need_enc})")
+        self.pack = (enc_pack if need_enc else pack)
 
+    #def set_pack(self, pack):
+    #    self.pack = pack
     def get_real_path(self, path):
         return os.path.join(self.base_dir, path) or '/'
 
@@ -50,7 +55,7 @@ class DirStore:
             mime_type = 'dir'
             header_vars = dict(rpath=real_path)
         else:
-            content = pack.read(real_path, 1024)
+            content = self.pack.read(real_path, 1024)
             # if content == None: raise StoreException("'%s' not found, real_path=%s!"%(path, real_path))
             if content != None:
                 mime_type = get_mime_type(real_path)
@@ -58,7 +63,7 @@ class DirStore:
                 header_vars = dict([(k.decode(), v.decode()) for k,v in re.findall(rb'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', first_line)])
                 header_vars.update(rpath=real_path)
                 if mime_type.startswith('text'):
-                    sample = pack.read(real_path, 1<<14)
+                    sample = self.pack.read(real_path, 1<<14)
                     header_vars.update(encoding=get_encoding(sample))
             else:
                 mime_type = None
@@ -68,7 +73,8 @@ class DirStore:
         return meta
 
     def read_dir(self, path):
-        items = pack.list(path)
+        print(f"read_dir: {path} {self.base_dir}")
+        items = self.pack.list(path)
         return '\n'.join(['../'] + [name + ['', '/'][is_path_dir('%s/%s'%(path, name))] for name in items])
 
     def lazy_read(self, path, range_req=''):
@@ -77,14 +83,14 @@ class DirStore:
             d = self.read_dir(real_path)
             return len(d), 0, len(d), d
         else:
-            return pack.lazy_read(real_path, range_req)
+            return self.pack.lazy_read(real_path, range_req)
 
     def read(self, path):
         real_path = self.get_real_path(path)
         if is_path_dir(real_path):
             return self.read_dir(real_path)
         else:
-            return pack.read(real_path)
+            return self.pack.read(real_path)
 
     def write(self, path, content):
         real_path = self.get_real_path(path)
