@@ -2,14 +2,17 @@
 #
 # timestamp-server.py
 #
-# This server monitors playing-state.json and broadcasts the playback
-# state to all connected plain TCP socket clients.
+# This is a multi-threaded TCP server. Each client connection is handled
+# in its own thread, which periodically sends the real-time calculated
+# playback state.
 #
 
-import asyncio
 import json
 import logging
 import os
+import socket
+import threading
+import time
 from urllib.parse import urlparse
 
 # --- Configuration ---
@@ -19,161 +22,97 @@ STATE_FILE_PATH = './playing-state.json'
 
 # --- Globals ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-connected_clients = set()  # Will store asyncio.StreamWriter objects
-last_known_state = {}
-last_file_mtime = 0
-# Lock to protect access to the shared state
-state_lock = asyncio.Lock()
 
-def transform_state(raw_state):
+def transform_and_calculate_state(raw_state):
     """
-    Transforms the state from playing-state.json into the desired broadcast format.
+    Transforms raw state and calculates the real-time currentTime.
+    Returns the final dictionary to be broadcast.
     """
     if not raw_state or 'file' not in raw_state:
-        return None
+        return {}
+        
     try:
-        parsed_url = urlparse(raw_state.get('file', ''))
-        path = parsed_url.path
         player_state = 0 if raw_state.get('state') == 'playing' else 1
-        return {
+        path = urlparse(raw_state.get('file', '')).path
+        
+        current_state = {
             'path': path,
-            'currentTime': raw_state.get('time', 0),
             'playerState': player_state,
         }
+
+        # Get reported_time and report_timestamp_ms from raw_state for calculation
+        reported_time = raw_state.get('time', 0)
+        report_timestamp_ms = raw_state.get('report_time', 0)
+
+        if current_state['playerState'] == 0: # playing
+            report_timestamp_sec = report_timestamp_ms / 1000.0
+            elapsed = time.time() - report_timestamp_sec
+            calculated_time = reported_time + elapsed
+            current_state['currentTime'] = calculated_time
+        else: # paused
+            current_state['currentTime'] = reported_time
+        
+        return current_state
+
     except Exception as e:
-        logging.error(f"Error transforming state: {e}")
-        return None
+        logging.error(f"Error in transform_and_calculate_state: {e}")
+        return {}
 
-async def broadcast_state():
+def handle_client(client_socket, address):
     """
-    Broadcasts the current state to all connected clients.
+    This function runs in a dedicated thread for each client. It periodically
+    reads the state file, calculates the state, and sends it to the client.
     """
-    async with state_lock:
-        if not last_known_state:
-            message_to_send = json.dumps({}) + '\n' # Send empty object for no state
-        else:
-            message_to_send = json.dumps(last_known_state) + '\n'
-
-    if not connected_clients:
-        return
-
-    encoded_message = message_to_send.encode('utf-8')
-    disconnected_clients = set()
-    for writer in connected_clients:
-        if writer.is_closing():
-            disconnected_clients.add(writer)
-            continue
-        try:
-            writer.write(encoded_message)
-            await writer.drain()
-        except (ConnectionResetError, BrokenPipeError):
-            logging.warning(f"Client disconnected: {writer.get_extra_info('peername')}")
-            disconnected_clients.add(writer)
-
-    # Clean up disconnected clients outside the iteration
-    for client in disconnected_clients:
-        connected_clients.discard(client)
-
-async def file_watcher():
-    """
-    Watches for changes in the state file, updates the global state, and broadcasts it.
-    """
-    global last_known_state, last_file_mtime
-    while True:
-        try:
-            if os.path.exists(STATE_FILE_PATH):
-                current_mtime = os.path.getmtime(STATE_FILE_PATH)
-                if current_mtime != last_file_mtime:
-                    last_file_mtime = current_mtime
-                    with open(STATE_FILE_PATH, 'r') as f:
-                        content = f.read()
-                        raw_state = {} # Default to empty if content is empty
-                        if content:
-                            try:
-                                raw_state = json.loads(content)
-                            except json.JSONDecodeError:
-                                logging.warning(f"Malformed JSON in {STATE_FILE_PATH}, treating as empty.")
-                                # If malformed, treat as empty state
-                                pass
-                    
-                    new_state = transform_state(raw_state)
-                    # Use a sentinel for truly empty state vs. transformation failure
-                    if new_state is None and raw_state: # If raw_state was not empty but transform failed
-                        logging.warning("Transformation failed for non-empty raw_state, treating as empty.")
-                        new_state = {} # Treat as empty state to trigger broadcast
-                    elif new_state is None: # If raw_state was empty or transform explicitly returned None
-                        new_state = {} # Treat as empty state
-
-                    async with state_lock:
-                        if new_state != last_known_state:
-                            logging.info(f"State updated from file: {new_state}")
-                            last_known_state = new_state
-                            await broadcast_state() # Broadcast immediately on change
-            else:
-                # If file does not exist, clear the last known state
-                async with state_lock:
-                    if last_known_state: # Only if it had a state previously
-                        logging.info("State file disappeared, clearing state.")
-                        last_known_state = {}
-                        await broadcast_state() # Broadcast empty state
-
-        except (json.JSONDecodeError, FileNotFoundError) as e:
-            logging.warning(f"Could not read or parse state file ({e}), clearing state.")
-            # If file becomes unreadable, clear state
-            async with state_lock:
-                if last_known_state:
-                    last_known_state = {}
-                    await broadcast_state()
-        except Exception as e:
-            logging.error(f"Error in file_watcher: {e}")
-        
-        await asyncio.sleep(0.5) # Check for file changes frequently
-
-async def connection_handler(reader, writer):
-    """
-    Handles a new TCP socket client connection.
-    """
-    peername = writer.get_extra_info('peername')
-    logging.info(f"Client connected: {peername}")
-    connected_clients.add(writer)
-    try:
-        # Send the latest state immediately upon connection
-        async with state_lock:
-            if last_known_state:
-                initial_message = json.dumps(last_known_state) + '\n'
-                writer.write(initial_message.encode('utf-8'))
-                await writer.drain()
-        
-        # Keep connection open and wait for client to disconnect
-        while not reader.at_eof():
-            await reader.read(1024)
-            
-    except (ConnectionResetError, BrokenPipeError):
-        logging.warning(f"Connection lost with {peername}")
-    finally:
-        logging.info(f"Closing connection with {peername}")
-        connected_clients.discard(writer)
-        if not writer.is_closing():
-            writer.close()
-            await writer.wait_closed()
-
-async def main():
-    """
-    Main function to start the server and background tasks.
-    """
-    logging.info(f"Starting plain TCP socket server on {HOST}:{PORT}")
+    logging.info(f"Client connected: {address}")
     
-    server = await asyncio.start_server(connection_handler, HOST, PORT)
-
-    # Create and run background task
-    file_watcher_task = asyncio.create_task(file_watcher())
-
-    async with server:
-        # The server runs in the background while we await the file_watcher task
-        await asyncio.gather(file_watcher_task, server.serve_forever())
-
-if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        while True:
+            # Read the state file
+            try:
+                with open(STATE_FILE_PATH, 'r') as f:
+                    content = f.read()
+                    raw_state = json.loads(content) if content else {}
+            except (FileNotFoundError, json.JSONDecodeError):
+                raw_state = {}
+
+            # Transform and calculate the state
+            message_to_send = transform_and_calculate_state(raw_state)
+            encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
+            
+            # Send the message to this specific client
+            client_socket.sendall(encoded_message)
+            
+            # Wait for the next cycle
+            time.sleep(1)
+
+    except (BrokenPipeError, ConnectionResetError):
+        logging.warning(f"Connection lost with {address}")
+    finally:
+        logging.info(f"Closing connection with {address}")
+        client_socket.close()
+
+def main():
+    """
+    Main function to set up the server and accept new connections.
+    """
+    # Set up the main server socket
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind((HOST, PORT))
+    server_socket.listen()
+    logging.info(f"Server listening on {HOST}:{PORT}")
+
+    try:
+        while True:
+            # Accept new connections
+            client_socket, address = server_socket.accept()
+            # Spawn a new thread for each client to handle communication
+            client_thread = threading.Thread(target=handle_client, args=(client_socket, address), daemon=True)
+            client_thread.start()
     except KeyboardInterrupt:
         logging.info("Server shutting down.")
+    finally:
+        server_socket.close()
+
+if __name__ == "__main__":
+    main()
