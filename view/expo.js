@@ -1,5 +1,37 @@
 function is_empty_line(line) { return !/\S/.test(line); }
 function is_comment(line) { return line.startsWith('#'); }
+function is_video(line) { return !is_comment(line) && line.match(/.(mp4|webm|ogg)$/i); }
+function retryVideo(e) {
+    var video = e.target;
+    mylog("handle play error", e, video, video.currentTime);
+    if (video.error.code == video.error.MEDIA_ERR_NETWORK) {
+        var startTime = video.currentTime;
+        mylog("retry play", startTime, video.src);
+        video.src = video.src;
+        video.load();
+        video.currentTime = startTime;
+        var playPromise = video.play();
+        playPromise.catch(error => {
+            mylog("video play error occur", error);
+        });
+    }
+}
+function create_video(path) {
+    var ctrl = document.createElement('div');
+    ctrl.innerHTML = '<video preload="metadata" controls muted src="{path}"></video><pre>{basename}</pre>'.format({path: path, basename:basename(path)})
+    function getVideo(ctrl) { return ctrl.children[0]; }
+    function playNext() {
+        var next = ctrl.nextSibling;
+        if (next) {
+            getVideo(next).play();
+        }
+    }
+    getVideo(ctrl).playbackRate = 1;
+    getVideo(ctrl).onended = playNext;
+    getVideo(ctrl).addEventListener('error', retryVideo);
+    return ctrl;
+}
+
 function is_audio(line) { return !is_comment(line) && line.match(/.(mp3|wav)$/i); }
 function retryAudio(e) {
     var audio = e.target;
@@ -74,6 +106,8 @@ function appendExpo(list_ctrl) {
             list_ctrl.appendChild(create_text(path));
         } else if (is_audio(path)) {
             list_ctrl.appendChild(create_audio(path));
+        } else if (is_video(path)) {
+            list_ctrl.appendChild(create_video(path));
         } else if (is_playlist(path)) {
             list_ctrl.appendChild(create_plist(path));
         }

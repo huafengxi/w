@@ -23,12 +23,14 @@
          const url = window.location.href.replace("v=plist", "");
          var getListEditLines;
          function refreshPlayList(playlist, lines) {
+             var appendMedia = appendExpo(playlist);
              while (playlist.firstChild) {
                  playlist.firstChild.remove();
              }
              for(var i = 0; i < lines.length; i++) {
                  if (is_empty_line(lines[i]) || is_comment(lines[i])) continue;
-                 playlist.appendChild(create_audio(lines[i]));
+                 appendMedia(lines[i]);
+                 //playlist.appendChild(create_audio(lines[i]));
              }
          }
          function save_and_refresh() {
@@ -49,16 +51,24 @@
              }
          }
          function toggleMute() {
-             var audios = document.getElementsByTagName('audio')
+             var audios = document.getElementsByTagName('audio');
+             var videos = document.getElementsByTagName('video');
              for(var i = 0; i < audios.length; i++){
                  audios[i].muted = !audios[i].muted;
              }
+             for(var i = 0; i < videos.length; i++){
+                 videos[i].muted = !videos[i].muted;
+             }
          }
          function tunePlaybackRate(t) {
-             var audios = document.getElementsByTagName('audio')
+             var audios = document.getElementsByTagName('audio');
+             var videos = document.getElementsByTagName('video');
              var rate = t.value/2.0;
              for(var i = 0; i < audios.length; i++){
                  audios[i].playbackRate = rate;
+             }
+             for(var i = 0; i < videos.length; i++){
+                 videos[i].playbackRate = rate;
              }
              mylog("tune playbackRate", rate);
          }
