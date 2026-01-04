@@ -29,6 +29,9 @@ function create_video(path) {
     getVideo(ctrl).playbackRate = 1;
     getVideo(ctrl).onended = playNext;
     getVideo(ctrl).addEventListener('error', retryVideo);
+    getVideo(ctrl).addEventListener('play', onPlay);
+    getVideo(ctrl).addEventListener('pause', onPause);
+    getVideo(ctrl).addEventListener('ended', onEnded);
     return ctrl;
 }
 
@@ -61,6 +64,9 @@ function create_audio(path) {
     getAudio(ctrl).playbackRate = 1;
     getAudio(ctrl).onended = playNext;
     getAudio(ctrl).addEventListener('error', retryAudio);
+    getAudio(ctrl).addEventListener('play', onPlay);
+    getAudio(ctrl).addEventListener('pause', onPause);
+    getAudio(ctrl).addEventListener('ended', onEnded);
     return ctrl;
 }
 

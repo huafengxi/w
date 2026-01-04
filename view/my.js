@@ -171,6 +171,24 @@ function rpcDecode(str){
 function rpc(url, content){ if (!content)content = {}; content['token'] = getCookie('token'); return rpcDecode(http(url? url:getUrl(), encodeQueryString(content))); }
 function rpc_link(url, content){ return (url? url:getUrl()) + '?' + encodeQueryString(content); }
 
+function http_async(url, content, on_load) {
+    var req = new XMLHttpRequest();
+    req.open("POST", url, true);
+    req.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
+    req.onload = function() {
+        if (on_load) {
+            on_load(req.responseText);
+        }
+    };
+    req.send(content);
+}
+
+function write_async(url, content, on_load) {
+    var args = {v:'write', 'store_content':content};
+    args['token'] = getCookie('token');
+    http_async(url, encodeQueryString(args), on_load);
+}
+
 function read(url){return rpc(url, {v:'read'} ); }
 function write(url, content){ return rpc(url, {v:'write', 'store_content':content}); }
 
