@@ -67,6 +67,16 @@ def main():
     set_path()
     logging.info('web_start: listen=%s dir=%s log=%s(%s) pack=%s PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, get_pack(), os.getenv('PATH'), os.getenv('PYTHONPATH'))
     kill_process('web.py +{}'.format(listen_addr))
+    kill_process('timestamp-server.py')
+    
+    # Launch timestamp-server.py as a subprocess
+    server_script_path = web_path('w/timestamp-server.py')
+    if os.path.exists(server_script_path):
+        logging.info('Launching timestamp-server.py as a subprocess.')
+        subprocess.Popen([sys.executable, server_script_path])
+    else:
+        logging.warning('timestamp-server.py not found, will not be launched.')
+
     set_logging(log_file)
     root = build_root_store('w/fstab')
     if 'genpack' in globals():

@@ -79,7 +79,6 @@ def handle_client(client_socket, address):
     logging.info(f"Client connected: {address}")
     
     my_last_mtime = 0
-    my_last_processed_state = {}
 
     try:
         while True:
@@ -89,19 +88,19 @@ def handle_client(client_socket, address):
             if file_changed:
                 my_last_mtime = new_mtime
                 if new_mtime == 0: # File disappeared or error
-                    my_last_processed_state = {}
+                    processed_state = {}
                 else:
                     try:
                         with open(STATE_FILE_PATH, 'r') as f:
                             content = f.read()
-                            my_last_processed_state = json.loads(content) if content else {}
+                            processed_state = json.loads(content) if content else {}
                     except (FileNotFoundError, json.JSONDecodeError) as e:
                         logging.warning(f"Error reading/parsing {STATE_FILE_PATH} for {address}: {e}")
-                        my_last_processed_state = {}
+                        processed_state = {}
 
             # If the file changed or we have a playing state, send an update
-            if file_changed or (my_last_processed_state and my_last_processed_state.get('state') == 'playing'):
-                message_to_send = transform_and_calculate_state(my_last_processed_state)
+            if file_changed:
+                message_to_send = transform_and_calculate_state(processed_state)
                 encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
                 client_socket.sendall(encoded_message)
             
@@ -113,7 +112,6 @@ def handle_client(client_socket, address):
     finally:
         logging.info(f"Closing connection with {address}")
         client_socket.close()
-
 def main():
     """
     Main function to set up the server and accept new connections.
