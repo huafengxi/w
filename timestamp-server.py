@@ -4,7 +4,7 @@
 #
 # This is a multi-threaded TCP server. Each client connection is handled
 # in its own thread, which periodically sends the real-time calculated
-# playback state.
+# playback state by watching the state file directly.
 #
 
 import json
@@ -40,7 +40,6 @@ def transform_and_calculate_state(raw_state):
             'playerState': player_state,
         }
 
-        # Get reported_time and report_timestamp_ms from raw_state for calculation
         reported_time = raw_state.get('time', 0)
         report_timestamp_ms = raw_state.get('report_time', 0)
 
@@ -58,32 +57,56 @@ def transform_and_calculate_state(raw_state):
         logging.error(f"Error in transform_and_calculate_state: {e}")
         return {}
 
+def watch_file(path, last_mtime):
+    """
+    Checks a file's modification time.
+    Returns the new modification time. Returns 0 if the file doesn't exist.
+    """
+    if not os.path.exists(path):
+        return 0  # Return 0 to indicate file doesn't exist
+
+    try:
+        return os.path.getmtime(path)
+    except FileNotFoundError:
+        # Race condition: file deleted between os.path.exists and os.path.getmtime
+        return 0
+
 def handle_client(client_socket, address):
     """
     This function runs in a dedicated thread for each client. It periodically
-    reads the state file, calculates the state, and sends it to the client.
+    watches the state file, calculates the state, and sends it to the client.
     """
     logging.info(f"Client connected: {address}")
     
+    my_last_mtime = 0
+    my_last_processed_state = {}
+
     try:
         while True:
-            # Read the state file
-            try:
-                with open(STATE_FILE_PATH, 'r') as f:
-                    content = f.read()
-                    raw_state = json.loads(content) if content else {}
-            except (FileNotFoundError, json.JSONDecodeError):
-                raw_state = {}
+            new_mtime = watch_file(STATE_FILE_PATH, my_last_mtime)
+            file_changed = new_mtime != my_last_mtime
+            
+            if file_changed:
+                my_last_mtime = new_mtime
+                if new_mtime == 0: # File disappeared or error
+                    my_last_processed_state = {}
+                else:
+                    try:
+                        with open(STATE_FILE_PATH, 'r') as f:
+                            content = f.read()
+                            my_last_processed_state = json.loads(content) if content else {}
+                    except (FileNotFoundError, json.JSONDecodeError) as e:
+                        logging.warning(f"Error reading/parsing {STATE_FILE_PATH} for {address}: {e}")
+                        my_last_processed_state = {}
 
-            # Transform and calculate the state
-            message_to_send = transform_and_calculate_state(raw_state)
-            encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
+            # If the file changed or we have a playing state, send an update
+            if file_changed or (my_last_processed_state and my_last_processed_state.get('state') == 'playing'):
+                message_to_send = transform_and_calculate_state(my_last_processed_state)
+                encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
+                client_socket.sendall(encoded_message)
             
-            # Send the message to this specific client
-            client_socket.sendall(encoded_message)
-            
-            # Wait for the next cycle
-            time.sleep(1)
+            # Short sleep for polling interval
+            time.sleep(0.1)
 
     except (BrokenPipeError, ConnectionResetError):
         logging.warning(f"Connection lost with {address}")
@@ -95,7 +118,6 @@ def main():
     """
     Main function to set up the server and accept new connections.
     """
-    # Set up the main server socket
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((HOST, PORT))
@@ -104,9 +126,7 @@ def main():
 
     try:
         while True:
-            # Accept new connections
             client_socket, address = server_socket.accept()
-            # Spawn a new thread for each client to handle communication
             client_thread = threading.Thread(target=handle_client, args=(client_socket, address), daemon=True)
             client_thread.start()
     except KeyboardInterrupt:
