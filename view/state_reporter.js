@@ -1,6 +1,7 @@
 var g_currentlyPlaying = null;
 
 function onPlay(event) {
+    postPlayingState(event.target);
     g_currentlyPlaying = event.target;
 }
 
