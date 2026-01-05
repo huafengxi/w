@@ -24,7 +24,7 @@ def prepare_args(env, query, post):
         query.update(is_crawled_by_curl=True)
     post_key = query.get('post')
     if post_key:
-        args = {post_key: post}
+        args = {post_key: post.read()}
     else:
         args = parse_post_to_dict(env.get('CONTENT_TYPE', 'application/x-www-form-urlencoded'), post, int(env.get('CONTENT_LENGTH', '') or 0))
     args.update(query)

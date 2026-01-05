@@ -9,7 +9,7 @@ def fuzz_str(f):
 
 def name_conv(name): return fuzz_str(name)
 def data_conv(buf, start):
-    def xor_char(i): return ord(char_map[i % char_map_len]) if i < (1<<21) else 255
+    def xor_char(i): return ord(char_map[i % char_map_len]) if i < (1<<21) else 0
     return bytes([c ^ xor_char(i + start) for i,c in enumerate(buf)])
 
 

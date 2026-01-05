@@ -79,10 +79,12 @@ read_chunk_sz = 1<<19
 def lazy_read_part_file(path, fsize, start, end, use_enc=False):
     with open(path, 'rb') as f:
         f.seek(start)
+        offset = start
         for i in range(start, end, read_chunk_sz):
             buf = f.read(min(end - i, read_chunk_sz))
             if buf:
-                if use_enc: buf = EH.content_conv(buf, start)
+                if use_enc: buf = EH.content_conv(buf, offset)
+                offset += len(buf)
                 yield buf
 
 class Pack:
@@ -138,7 +140,9 @@ class Pack:
         if self.use_enc: path = EH.path_conv(path)
         try:
             with open(path, 'wb') as f:
-                if self.use_enc: content = EH.content_conv(content.encode('utf-8'))
+                if type(content) == str:
+                    content = content.encode('utf-8')
+                if self.use_enc: content = EH.content_conv(content)
                 f.write(content)
         except IOError as e:
             logging.error(e)
