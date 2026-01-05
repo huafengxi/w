@@ -28,7 +28,6 @@ def safe_read(path, n=-1):
         #print e
         return ''
 
-def is_path_dir(path): return os.path.isdir(path) or path.endswith('/')
 class DirStore:
     def __init__(self, base_dir):
         self.base_dir = os.path.realpath(os.path.expanduser(base_dir))
@@ -51,7 +50,7 @@ class DirStore:
     def head(self, path):
         header_vars = dict()
         real_path = self.get_real_path(path)
-        if is_path_dir(real_path):
+        if self.pack.is_path_dir(real_path):
             mime_type = 'dir'
             header_vars = dict(rpath=real_path)
         else:
@@ -74,11 +73,11 @@ class DirStore:
 
     def read_dir(self, path):
         items = self.pack.list(path)
-        return '\n'.join(['../'] + [name + ['', '/'][is_path_dir('%s/%s'%(path, name))] for name in items])
+        return '\n'.join(['../'] + [name + ['', '/'][self.pack.is_path_dir('%s/%s'%(path, name))] for name in items])
 
     def lazy_read(self, path, range_req=''):
         real_path = self.get_real_path(path)
-        if is_path_dir(real_path):
+        if self.pack.is_path_dir(real_path):
             d = self.read_dir(real_path)
             return len(d), 0, len(d), d
         else:
@@ -86,7 +85,7 @@ class DirStore:
 
     def read(self, path):
         real_path = self.get_real_path(path)
-        if is_path_dir(real_path):
+        if self.pack.is_path_dir(real_path):
             return self.read_dir(real_path)
         else:
             return self.pack.read(real_path)

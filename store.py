@@ -93,10 +93,17 @@ class Pack:
         self.use_enc = use_enc
     def set_pack(self, pack):
         self.pack = pack
+
+    def is_path_dir(self, path):
+        if self.use_enc:
+            path = EH.path_conv(path)
+        return os.path.isdir(path) or path.endswith('/')
     def list(self, path):
         items = []
+        if self.use_enc: path = EH.path_conv(path)
         if os.path.isdir(path):
             items.extend(sorted(os.listdir(path)))
+            print(f"items: {items}")
             if self.use_enc: items = map(EH.path_conv, items)
         if self.pack:
             items.extend([p[len(path):] for p in self.pack.list(path)])
