@@ -15,10 +15,15 @@
              box-shadow: 2px 2px 4px 0px #006773;
              border-radius:0px 0px 0px 0px ;
          }
+         video {
+             width: 50%;
+             height: 10%;
+         }
         </style>
         <script type="application/javascript" src="/w/view/my.js"></script>
         <script type="application/javascript" src="/w/view/list_edit.js"></script>
         <script type="application/javascript" src="/w/view/state_reporter.js"></script>
+        <script type="application/javascript" src="/w/view/share_player.js"></script>
         <script type="application/javascript" src="/w/view/expo.js"></script>
         <script type="application/javascript">
          const url = window.location.href.replace("v=plist", "");
@@ -82,6 +87,7 @@
              }
              var list = content.split('\n');
              getListEditLines = createListEdit($('edit'), list);
+             $('share-player').appendChild(createSharePlayer());
          }
          var cursor = 0;
          function onListOpChange() {
@@ -103,6 +109,7 @@
         <a href="?v=del">del</a>
 
         <!-- <input type="range" min="1" max="8" value="2" oninput="tunePlaybackRate(this)"> -->
+        <div id='share-player'></div>
         <ul id="edit"></ul>
         <ul id="playlist"></ul>
     </body>

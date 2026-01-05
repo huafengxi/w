@@ -16,6 +16,7 @@ function retryVideo(e) {
         });
     }
 }
+
 function create_video(path) {
     var ctrl = document.createElement('div');
     ctrl.innerHTML = '<video preload="metadata" controls muted src="{path}"></video><pre>{basename}</pre>'.format({path: path, basename:basename(path)})
@@ -26,12 +27,16 @@ function create_video(path) {
             getVideo(next).play();
         }
     }
+    function playInShare(event) {
+        playInSharePlayer(event.target.parentNode);
+    }
+    ctrl.children[1].addEventListener('click', playInShare);
     getVideo(ctrl).playbackRate = 1;
-    getVideo(ctrl).onended = playNext;
+    getVideo(ctrl).addEventListener('ended', onEnded);
+    getVideo(ctrl).addEventListener('ended', playNext);
     getVideo(ctrl).addEventListener('error', retryVideo);
     getVideo(ctrl).addEventListener('play', onPlay);
     getVideo(ctrl).addEventListener('pause', onPause);
-    getVideo(ctrl).addEventListener('ended', onEnded);
     return ctrl;
 }
 
@@ -61,6 +66,10 @@ function create_audio(path) {
             getAudio(next).play();
         }
     }
+    function playInShare(event) {
+        playInSharePlayer(event.target.parentNode);
+    }
+    ctrl.children[1].addEventListener('click', playInShare);
     getAudio(ctrl).playbackRate = 1;
     getAudio(ctrl).onended = playNext;
     getAudio(ctrl).addEventListener('error', retryAudio);
