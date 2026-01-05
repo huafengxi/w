@@ -92,7 +92,6 @@ class Pack:
     def set_pack(self, pack):
         self.pack = pack
     def list(self, path):
-        print(f'list: {path} {self.use_enc}')
         items = []
         if os.path.isdir(path):
             items.extend(sorted(os.listdir(path)))
@@ -134,6 +133,16 @@ class Pack:
                 return buf
         if self.pack:
             return self.pack.read(path)
+
+    def write(self, path, content):
+        if self.use_enc: path = EH.path_conv(path)
+        try:
+            with open(path, 'wb') as f:
+                if self.use_enc: content = EH.content_conv(content.encode('utf-8'))
+                f.write(content)
+        except IOError as e:
+            logging.error(e)
+            raise e
 
 pack = Pack()
 enc_pack = Pack(None, True)

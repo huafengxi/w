@@ -73,7 +73,6 @@ class DirStore:
         return meta
 
     def read_dir(self, path):
-        print(f"read_dir: {path} {self.base_dir}")
         items = self.pack.list(path)
         return '\n'.join(['../'] + [name + ['', '/'][is_path_dir('%s/%s'%(path, name))] for name in items])
 
@@ -94,12 +93,7 @@ class DirStore:
 
     def write(self, path, content):
         real_path = self.get_real_path(path)
-        try:
-            with open(real_path, 'w') as f:
-                f.write(content)
-        except IOError as e:
-            logging.error(e)
-            raise e
+        return self.pack.write(real_path, content);
 
     def __repr__(self):
         return 'DirStore(%s)'%(repr(self.base_dir))
