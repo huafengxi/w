@@ -51,7 +51,7 @@ def set_logging(log_file=''):
 
 from wsgi import run_wsgi, make_wsgi_app
 import vfs_handler
-from store import pack, build_root_store
+from store import build_root_store
 
 def get_pack():
     return globals().get('__pack__', None)
@@ -83,7 +83,7 @@ def main():
         logging.info('set pack in /g/self')
         root.write('/g/self', genpack(__pack__))
     handler = vfs_handler.Handler(root).handle_req
-    app = make_wsgi_app([handler], pack)
+    app = make_wsgi_app([handler])
     vfs_handler.set_wsgi_fetcher(app)
     logging.info("listen at: %s", listen_addr)
     host_port = listen_addr.split(':')
@@ -94,5 +94,4 @@ def main():
     run_wsgi(app, host, int(port), log_file)
 
 if __name__ == '__main__':
-    pack.set_pack(get_pack())
     main()

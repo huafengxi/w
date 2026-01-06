@@ -75,7 +75,8 @@ class RootStore:
 
 
 def file_find_all(pat, path):
-    return re.findall(pat, pack.read(path).decode())
+    with open(path) as f:
+        return re.findall(pat, f.read())
 
 def build_root_store(fstab, pack=None):
     logging.info('build_root_store %s', fstab)
@@ -92,7 +93,8 @@ def build_root_store(fstab, pack=None):
 def get_store_cls(type):
     def load(x):
         logging.info('load: %s', x)
-        exec(compile(pack.read(x), filename='%s'%(x,), mode='exec'), globals())
+        with open(x) as f:
+            exec(compile(f.read(), filename=x, mode='exec'), globals())
     cls_name = '%sStore'%(type)
     if not globals().get(cls_name, None):
         load('w/%s_store.py'%(type.lower()))

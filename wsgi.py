@@ -11,10 +11,14 @@ def fork_as_daemon(daemon):
         time.sleep(0.1)
         sys.exit(0)
 
+def safe_read(p):
+    with open(p) as f:
+        return f.read()
+
 def parse_qs_to_dict(qs):
     return dict((k, v[-1]) for k, v in list(urllib.parse.parse_qs(qs).items()))
 
-def make_wsgi_app(handlers, pack):
+def make_wsgi_app(handlers):
     '''def handler(env, path, query, post): return mime_type, content'''
     def echo_handler(env, path, query, post):
         if query.get('__echo__', None) == 'true':
@@ -22,7 +26,7 @@ def make_wsgi_app(handlers, pack):
             return dict(type='text/plain'), '%s %s\n'%(path, query)
     def err_handler(env, path, query, post):
         logging.debug("HANDLE_404: %s", path)
-        return dict(type='text/html'), pack.read("w/404.html")
+        return dict(type='text/html'), safe_read("w/404.html")
     def try_these(handlers, env, path, query, post):
         for f in handlers:
             ret = f(env, path, query, post)
