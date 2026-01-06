@@ -21,19 +21,20 @@ import chardet
 def get_encoding(content):
     return chardet.detect(content)['encoding']
 
-def safe_read(path, n=-1):
-    try:
-        pack.read(path, n)
-    except Exception as e:
-        #print e
-        return ''
+read_chunk_sz = 1<<19
+def lazy_read_part_file(path, fsize, start, end):
+    with open(path, 'rb') as f:
+        f.seek(start)
+        for i in range(start, end, read_chunk_sz):
+            buf = f.read(min(end - i, read_chunk_sz))
+            if buf:
+                yield buf
+
+def _path_is_dir(x): return (x in ['', '.', '..']) or x.endswith('/')
 
 class DirStore:
     def __init__(self, base_dir):
         self.base_dir = os.path.realpath(os.path.expanduser(base_dir))
-        need_enc = os.path.exists(self.get_real_path('.need_enc'))
-        print(f"DirStore(need_enc={need_enc})")
-        self.pack = pack
 
     def get_real_path(self, path):
         return os.path.join(self.base_dir, path) or '/'
@@ -48,19 +49,18 @@ class DirStore:
     def head(self, path):
         header_vars = dict()
         real_path = self.get_real_path(path)
-        if self.pack.is_path_dir(real_path):
+        if _path_is_dir(path):
             mime_type = 'dir'
             header_vars = dict(rpath=real_path)
         else:
-            content = self.pack.read(real_path, 1024)
-            # if content == None: raise StoreException("'%s' not found, real_path=%s!"%(path, real_path))
+            content = self.read_file(real_path, 1024)
             if content != None:
                 mime_type = get_mime_type(real_path)
                 first_line = content.split(r'\n'.encode(), 1)[0]
                 header_vars = dict([(k.decode(), v.decode()) for k,v in re.findall(rb'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', first_line)])
                 header_vars.update(rpath=real_path)
                 if mime_type.startswith('text'):
-                    sample = self.pack.read(real_path, 1<<14)
+                    sample = self.read_file(real_path, 1<<14)
                     header_vars.update(encoding=get_encoding(sample))
             else:
                 mime_type = None
@@ -70,27 +70,64 @@ class DirStore:
         return meta
 
     def read_dir(self, path):
-        items = self.pack.list(path)
-        return '\n'.join(['../'] + [name + ['', '/'][self.pack.is_path_dir('%s/%s'%(path, name))] for name in items])
+        path = self.get_real_path(path)
+        items = sorted(os.listdir(path))
+        return '\n'.join(['../'] + [name + ['', '/'][os.path.isdir(self.get_real_path(f'{path}/{name}'))] for name in items])
+
+    def read_file(self, path, limit=-1):
+        if os.path.isfile(path):
+            with open(path, 'rb') as f:
+                return f.read(limit)
+    def lazy_read_file(self, path, range_req):
+        def limit_read_size(start, end):
+            return start, min(start + read_chunk_sz, end)
+        def parse_range(range_seq, fsize):
+            _ = re.findall(r'\d+', range_req)
+            if len(_) == 2:
+                return int(_[0]), int(_[1]) + 1
+            elif len(_) == 1:
+                return limit_read_size(int(_[0]), fsize)
+            else:
+                return 0, fsize
+        if os.path.isfile(path):
+            fsize = os.stat(path).st_size
+            start, end = parse_range(range_req, fsize)
+            logging.debug("RangeRead: '%s' start=%d end=%d path=%s", range_req, start, end, path)
+            return fsize, start, end, lazy_read_part_file(path, fsize, start, end)
+        elif range_req:
+            raise Exception('not support range request: %s'%(path))
+        else:
+            data = self.read(path)
+            if data == None:
+                return 0, 0, 0, ''
+            else:
+                return len(data), 0, len(data), data
 
     def lazy_read(self, path, range_req=''):
         real_path = self.get_real_path(path)
-        if self.pack.is_path_dir(real_path):
+        if _path_is_dir(real_path):
             d = self.read_dir(real_path)
             return len(d), 0, len(d), d
         else:
-            return self.pack.lazy_read(real_path, range_req)
+            return self.lazy_read_file(real_path, range_req)
 
     def read(self, path):
         real_path = self.get_real_path(path)
-        if self.pack.is_path_dir(real_path):
+        if _path_is_dir(real_path):
             return self.read_dir(real_path)
         else:
-            return self.pack.read(real_path)
+            return self.read_file(real_path)
 
     def write(self, path, content):
         real_path = self.get_real_path(path)
-        return self.pack.write(real_path, content);
+        try:
+            with open(real_path, 'wb') as f:
+                if type(content) == str:
+                    content = content.encode('utf-8')
+                f.write(content)
+        except IOError as e:
+            logging.error(e)
+            raise e
 
     def __repr__(self):
         return 'DirStore(%s)'%(repr(self.base_dir))
