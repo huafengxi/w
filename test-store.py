@@ -3,6 +3,7 @@ import requests
 import os
 import random
 import sys
+import mimetypes
 
 # Configuration
 SERVER_BASE_URL = "http://127.0.0.1:8080/nvr"
@@ -111,5 +112,71 @@ def main():
             os.remove(TEST_FILENAME)
             print(f"\nCleaned up local file: {TEST_FILENAME}")
 
-if __name__ == "__main__":
-    main()
+def test_mime_type_and_utf8_filename():
+    print("\n--- Testing MIME type and UTF-8 filename ---")
+    utf8_filename = "クリア.txt" # Japanese for "clear"
+    test_content = b"This is a test file with UTF-8 name."
+    expected_mime_type = "text/plain"
+
+    # Write the UTF-8 named file to the server
+    print(f"Writing {utf8_filename} to server...")
+    write_url = f"{SERVER_BASE_URL}/{utf8_filename}?v=write&post=store_content"
+    try:
+        response = requests.post(write_url, data=test_content)
+        response.raise_for_status()
+        print(f"File '{utf8_filename}' written successfully. Status code: {response.status_code}")
+    except requests.exceptions.RequestException as e:
+        print(f"Error writing UTF-8 file to server: {e}", file=sys.stderr)
+        return False
+
+    # Read the UTF-8 named file from the server and verify content and MIME type
+    print(f"Reading {utf8_filename} from server and verifying...")
+    read_url = f"{SERVER_BASE_URL}/{utf8_filename}"
+    try:
+        response = requests.get(read_url)
+        response.raise_for_status()
+        
+        # Verify content
+        if response.content == test_content:
+            print(f"Content for '{utf8_filename}' verified successfully.")
+            content_match = True
+        else:
+            print(f"Content for '{utf8_filename}' FAILED: Mismatch.", file=sys.stderr)
+            content_match = False
+
+        # Verify MIME type
+        actual_mime_type = response.headers.get('Content-Type', '').split(';')[0].strip()
+        if actual_mime_type == expected_mime_type:
+            print(f"MIME type for '{utf8_filename}' verified successfully: {actual_mime_type}")
+            mime_type_match = True
+        else:
+            print(f"MIME type for '{utf8_filename}' FAILED: Expected '{expected_mime_type}', got '{actual_mime_type}'.", file=sys.stderr)
+            mime_type_match = False
+            
+        return content_match and mime_type_match
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error reading UTF-8 file from server: {e}", file=sys.stderr)
+        return False
+    finally:
+        # Clean up on server (no explicit delete available in this test, would require another test function or manual cleanup)
+        pass # Assuming server cleanup is handled separately or not critical for test pass/fail.
+
+    if __name__ == "__main__":
+        if main():
+            if test_mime_type_and_utf8_filename():
+                print("\nAll tests passed!")
+                # Clean up the UTF-8 named file from the server if it was created
+                utf8_filename = "クリア.txt"
+                delete_url = f"{SERVER_BASE_URL}/{utf8_filename}?v=delete" # Assuming a delete mechanism
+                try:
+                    requests.post(delete_url)
+                    print(f"Cleaned up server file: {utf8_filename}")
+                except requests.exceptions.RequestException as e:
+                    print(f"Warning: Could not delete {utf8_filename} from server: {e}", file=sys.stderr)
+            else:
+                print("\nSome tests failed.", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print("\nSome tests failed.", file=sys.stderr)
+            sys.exit(1)

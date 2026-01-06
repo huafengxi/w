@@ -55,6 +55,33 @@ def make_wsgi_app(handlers, pack):
     def wsgi_app(env, response):
         env.setdefault('QUERY_STRING', '')
         env.update(wsgi_handler=wsgi_app)
+
+        # Correctly decode PATH_INFO from the WSGI server
+        original_path_info = env.get('PATH_INFO', '')
+        if isinstance(original_path_info, str):
+            try:
+                # Assume WSGI servers might provide PATH_INFO as latin-1 decoded string
+                # Re-encode to bytes with latin-1, then decode to utf-8
+                env['PATH_INFO'] = original_path_info.encode('latin-1').decode('utf-8')
+                logging.debug("Decoded PATH_INFO from latin-1 to utf-8: %s -> %s", original_path_info, env['PATH_INFO'])
+            except (UnicodeEncodeError, UnicodeDecodeError) as e:
+                logging.warning("Failed to decode PATH_INFO from latin-1 to utf-8 (string input): %s, Error: %s", original_path_info, e)
+                # Fallback: keep original if decoding fails, though it might be corrupted
+                env['PATH_INFO'] = original_path_info
+        elif isinstance(original_path_info, bytes):
+            try:
+                # If it's already bytes, assume it's utf-8 and decode
+                env['PATH_INFO'] = original_path_info.decode('utf-8')
+                logging.debug("Decoded PATH_INFO from bytes to utf-8: %s -> %s", original_path_info, env['PATH_INFO'])
+            except UnicodeDecodeError as e:
+                logging.warning("Failed to decode PATH_INFO (bytes input) as utf-8: %s, Error: %s", original_path_info, e)
+                # Fallback: attempt latin-1 then utf-8 if direct utf-8 fails for bytes
+                try:
+                    env['PATH_INFO'] = original_path_info.decode('latin-1') # Fallback to latin-1
+                    logging.warning("Attempted latin-1 decoding for PATH_INFO (bytes input): %s -> %s", original_path_info, env['PATH_INFO'])
+                except UnicodeDecodeError:
+                    pass # Keep as bytes if all decoding fails, though it's problematic
+            
         header, content = handle_request(env, env.get('PATH_INFO'), env['QUERY_STRING'], env['wsgi.input'])
         response(*header)
         if not content: content = []
