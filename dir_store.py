@@ -21,6 +21,10 @@ import chardet
 def get_encoding(content):
     return chardet.detect(content)['encoding']
 
+def safe_read(p, limit=-1):
+    with open(p, 'rb') as f:
+        return f.read(limit)
+
 read_chunk_sz = 1<<19
 def lazy_read_part_file(path, fsize, start, end):
     with open(path, 'rb') as f:
@@ -53,14 +57,14 @@ class DirStore:
             mime_type = 'dir'
             header_vars = dict(rpath=real_path)
         else:
-            content = self.read_file(real_path, 1024)
+            content = safe_read(real_path, 1024)
             if content != None:
                 mime_type = get_mime_type(real_path)
                 first_line = content.split(r'\n'.encode(), 1)[0]
                 header_vars = dict([(k.decode(), v.decode()) for k,v in re.findall(rb'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', first_line)])
                 header_vars.update(rpath=real_path)
                 if mime_type.startswith('text'):
-                    sample = self.read_file(real_path, 1<<14)
+                    sample = safe_read(real_path, 1<<14)
                     header_vars.update(encoding=get_encoding(sample))
             else:
                 mime_type = None
@@ -74,10 +78,6 @@ class DirStore:
         items = sorted(os.listdir(path))
         return '\n'.join(['../'] + [name + ['', '/'][os.path.isdir(self.get_real_path(f'{path}/{name}'))] for name in items])
 
-    def read_file(self, path, limit=-1):
-        if os.path.isfile(path):
-            with open(path, 'rb') as f:
-                return f.read(limit)
     def lazy_read_file(self, path, range_req):
         def limit_read_size(start, end):
             return start, min(start + read_chunk_sz, end)
@@ -113,10 +113,7 @@ class DirStore:
 
     def read(self, path):
         real_path = self.get_real_path(path)
-        if _path_is_dir(real_path):
-            return self.read_dir(real_path)
-        else:
-            return self.read_file(real_path)
+        return safe_read(real_path)
 
     def write(self, path, content):
         real_path = self.get_real_path(path)

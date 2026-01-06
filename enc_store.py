@@ -12,7 +12,6 @@ def data_conv(buf, start=0):
     def xor_char(i): return ord(char_map[i % char_map_len]) if i < (1<<21) else 0
     return bytes([c ^ xor_char(i + start) for i,c in enumerate(buf)])
 
-def _path_is_dir(x): return (x in ['', '.', '..']) or x.endswith('/')
 class EncStore:
     def __init__(self, base_dir):
         self.store = DirStore(base_dir)
@@ -42,12 +41,12 @@ class EncStore:
                     offset += len(x)
             return fsz, start, end, resp_part(data, start)
 
+    def read_dir(self, path):
+        data = self.store.read_dir(name_conv(path))
+        return name_conv(data)
     def read(self, path):
         data = self.store.read(name_conv(path))
-        if _path_is_dir(path):
-            return name_conv(data)
-        else:
-            return data_conv(data)
+        return data_conv(data)
 
     def write(self, path, content):
         return self.store.write(name_conv(path), data_conv(content.encode('utf-8')))

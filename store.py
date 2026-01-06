@@ -6,6 +6,7 @@ import os
 class StoreException(Exception):
     pass
 
+def _path_is_dir(x): return (x in ['', '.', '..']) or x.endswith('/')
 class RootStore:
     def __init__(self, fstab):
         self.fstab = fstab
@@ -65,14 +66,19 @@ class RootStore:
 
     def read(self, path):
         store, new_path = self.get_store(path)
-        x = store.read(new_path)
+        if _path_is_dir(path):
+            if callable(getattr(store, 'read_dir', None)):
+                x = store.read_dir(new_path)
+            else:
+                x = store.read(new_path)
+        else:
+            x = store.read(new_path)
         logging.debug("root.read: %s -> %s %.100s", path, store, new_path)
         return x
 
     def write(self, path, content):
         store, new_path = self.get_store(path)
         return store.write(new_path, content)
-
 
 def file_find_all(pat, path):
     with open(path) as f:
