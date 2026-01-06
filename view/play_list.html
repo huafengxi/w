@@ -66,6 +66,9 @@
                  videos[i].muted = !videos[i].muted;
              }
          }
+         function toggleSharePlayer() {
+             toggleVisible($('share-player'));
+         }
          function tunePlaybackRate(t) {
              var audios = document.getElementsByTagName('audio');
              var videos = document.getElementsByTagName('video');
@@ -98,6 +101,7 @@
     <body onload="initApp()">
         <button onclick="edit_save()">edit/save</button>
         <button onclick="toggleMute()">toggle mute</button>
+        <button onclick="toggleSharePlayer()">toggle share player</button>
         <select id="listop" onchange="onListOpChange()">
             <option value="sort">sort</option>
             <option value="last">last</option>
@@ -109,7 +113,7 @@
         <a href="?v=del">del</a>
 
         <!-- <input type="range" min="1" max="8" value="2" oninput="tunePlaybackRate(this)"> -->
-        <div id='share-player'></div>
+        <div id='share-player' hidden></div>
         <ul id="edit"></ul>
         <ul id="playlist"></ul>
     </body>
