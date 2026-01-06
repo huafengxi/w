@@ -72,32 +72,27 @@ def watch_file(path, last_mtime):
         return 0
 
 def handle_client(client_socket, address):
-    """
-    This function runs in a dedicated thread for each client. It periodically
-    watches the state file, calculates the state, and sends it to the client.
-    """
     logging.info(f"Client connected: {address}")
     
     my_last_mtime = 0
     raw_state = {}
+    last_broadcast_time = 0
+    BROADCAST_INTERVAL = 1.0 # seconds
 
     try:
         while True:
+            current_time = time.time()
             new_mtime = watch_file(STATE_FILE_PATH, my_last_mtime)
 
             file_exists = new_mtime != 0
-            is_stale = file_exists and (time.time() - new_mtime > 2)
+            is_stale = file_exists and (current_time - new_mtime > 2)
+            file_changed_now = (new_mtime != my_last_mtime)
 
+            # Determine the current state (from file or mock)
             if not file_exists or is_stale:
-                # File is invalid, does not exist or is stale.
-                # Use a mock paused state
-                raw_state = {'state': 'paused', 'file': ''} 
-                my_last_mtime = 0
-                time.sleep(1)
-            elif new_mtime == my_last_mtime:
-                continue
-            else:
-                # File changed, read it.
+                raw_state = {'state': 'paused', 'file': ''}
+                my_last_mtime = new_mtime
+            elif file_changed_now:
                 my_last_mtime = new_mtime
                 try:
                     with open(STATE_FILE_PATH, 'r') as f:
@@ -105,14 +100,17 @@ def handle_client(client_socket, address):
                         raw_state = json.loads(content) if content else {'state': 'paused', 'file': ''}
                 except (FileNotFoundError, json.JSONDecodeError) as e:
                     logging.warning(f"Error reading/parsing {STATE_FILE_PATH} for {address}: {e}")
-                    raw_state = {'state': 'paused', 'file': ''} # Invalid content, treat as paused
+                    raw_state = {'state': 'paused', 'file': ''}
+
+            # Now, decide whether to broadcast based on time or file change
+            time_for_periodic_update = (current_time - last_broadcast_time) >= BROADCAST_INTERVAL
             
-            message_to_send = transform_and_calculate_state(raw_state)
-            
-            encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
-            client_socket.sendall(encoded_message)
-            
-            # Short sleep for polling interval
+            if file_changed_now or time_for_periodic_update:
+                message_to_send = transform_and_calculate_state(raw_state)
+                encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
+                client_socket.sendall(encoded_message)
+                last_broadcast_time = current_time
+
             time.sleep(0.1)
 
     except (BrokenPipeError, ConnectionResetError):
