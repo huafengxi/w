@@ -94,7 +94,9 @@ def handle_client(client_socket, address):
                 raw_state = {'state': 'paused', 'file': ''} 
                 my_last_mtime = 0
                 time.sleep(1)
-            elif new_mtime != my_last_mtime:
+            elif new_mtime == my_last_mtime:
+                continue
+            else:
                 # File changed, read it.
                 my_last_mtime = new_mtime
                 try:
