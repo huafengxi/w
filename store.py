@@ -73,43 +73,31 @@ class RootStore:
         store, new_path = self.get_store(path)
         return store.write(new_path, content)
 
-from enc_handler import EncHandler
-EH = EncHandler()
 read_chunk_sz = 1<<19
-def lazy_read_part_file(path, fsize, start, end, use_enc=False):
+def lazy_read_part_file(path, fsize, start, end):
     with open(path, 'rb') as f:
         f.seek(start)
-        offset = start
         for i in range(start, end, read_chunk_sz):
             buf = f.read(min(end - i, read_chunk_sz))
             if buf:
-                if use_enc: buf = EH.content_conv(buf, offset)
-                offset += len(buf)
                 yield buf
 
 class Pack:
-    def __init__(self, pack=None, use_enc=False):
+    def __init__(self, pack=None):
         self.pack = pack
-        self.use_enc = use_enc
     def set_pack(self, pack):
         self.pack = pack
 
     def is_path_dir(self, path):
-        if self.use_enc:
-            path = EH.path_conv(path)
         return os.path.isdir(path) or path.endswith('/')
     def list(self, path):
         items = []
-        if self.use_enc: path = EH.path_conv(path)
         if os.path.isdir(path):
             items.extend(sorted(os.listdir(path)))
-            print(f"items: {items}")
-            if self.use_enc: items = map(EH.path_conv, items)
         if self.pack:
             items.extend([p[len(path):] for p in self.pack.list(path)])
         return items
     def lazy_read(self, path, range_req=''):
-        if self.use_enc: path = EH.path_conv(path)
         def limit_read_size(start, end):
             return start, min(start + read_chunk_sz, end)
         def parse_range(range_seq, fsize):
@@ -124,7 +112,7 @@ class Pack:
             fsize = os.stat(path).st_size
             start, end = parse_range(range_req, fsize)
             logging.debug("RangeRead: '%s' start=%d end=%d path=%s", range_req, start, end, path)
-            return fsize, start, end, lazy_read_part_file(path, fsize, start, end, self.use_enc)
+            return fsize, start, end, lazy_read_part_file(path, fsize, start, end)
         elif range_req:
             raise Exception('not support range request: %s'%(path))
         else:
@@ -134,29 +122,24 @@ class Pack:
             else:
                 return len(data), 0, len(data), data
     def read(self, path, limit=-1):
-        if self.use_enc: path = EH.path_conv(path)
         if os.path.isfile(path):
             with open(path, 'rb') as f:
                 buf = f.read(limit)
-                if self.use_enc: return EH.content_conv(buf)
                 return buf
         if self.pack:
             return self.pack.read(path)
 
     def write(self, path, content):
-        if self.use_enc: path = EH.path_conv(path)
         try:
             with open(path, 'wb') as f:
                 if type(content) == str:
                     content = content.encode('utf-8')
-                if self.use_enc: content = EH.content_conv(content)
                 f.write(content)
         except IOError as e:
             logging.error(e)
             raise e
 
 pack = Pack()
-enc_pack = Pack(None, True)
 
 def file_find_all(pat, path):
     return re.findall(pat, pack.read(path).decode())

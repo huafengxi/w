@@ -1,6 +1,6 @@
 /vmap   Dict	w/vmap
 /w      Dir     w
 /g      PyEnv
-/nvr  Dir nvr
-/ARJ  Dir ARJ
+/nvr  Enc nvr
+/ARJ  Enc ARJ
 /	Dir	.

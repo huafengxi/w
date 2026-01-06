@@ -33,10 +33,8 @@ class DirStore:
         self.base_dir = os.path.realpath(os.path.expanduser(base_dir))
         need_enc = os.path.exists(self.get_real_path('.need_enc'))
         print(f"DirStore(need_enc={need_enc})")
-        self.pack = (enc_pack if need_enc else pack)
+        self.pack = pack
 
-    #def set_pack(self, pack):
-    #    self.pack = pack
     def get_real_path(self, path):
         return os.path.join(self.base_dir, path) or '/'
 
