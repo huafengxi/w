@@ -79,30 +79,36 @@ def handle_client(client_socket, address):
     logging.info(f"Client connected: {address}")
     
     my_last_mtime = 0
+    raw_state = {}
 
     try:
         while True:
             new_mtime = watch_file(STATE_FILE_PATH, my_last_mtime)
-            file_changed = new_mtime != my_last_mtime
-            
-            if file_changed:
-                my_last_mtime = new_mtime
-                if new_mtime == 0: # File disappeared or error
-                    processed_state = {}
-                else:
-                    try:
-                        with open(STATE_FILE_PATH, 'r') as f:
-                            content = f.read()
-                            processed_state = json.loads(content) if content else {}
-                    except (FileNotFoundError, json.JSONDecodeError) as e:
-                        logging.warning(f"Error reading/parsing {STATE_FILE_PATH} for {address}: {e}")
-                        processed_state = {}
 
-            # If the file changed or we have a playing state, send an update
-            if file_changed:
-                message_to_send = transform_and_calculate_state(processed_state)
-                encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
-                client_socket.sendall(encoded_message)
+            file_exists = new_mtime != 0
+            is_stale = file_exists and (time.time() - new_mtime > 2)
+
+            if not file_exists or is_stale:
+                # File is invalid, does not exist or is stale.
+                # Use a mock paused state
+                raw_state = {'state': 'paused', 'file': ''} 
+                my_last_mtime = 0
+                time.sleep(1)
+            elif new_mtime != my_last_mtime:
+                # File changed, read it.
+                my_last_mtime = new_mtime
+                try:
+                    with open(STATE_FILE_PATH, 'r') as f:
+                        content = f.read()
+                        raw_state = json.loads(content) if content else {'state': 'paused', 'file': ''}
+                except (FileNotFoundError, json.JSONDecodeError) as e:
+                    logging.warning(f"Error reading/parsing {STATE_FILE_PATH} for {address}: {e}")
+                    raw_state = {'state': 'paused', 'file': ''} # Invalid content, treat as paused
+            
+            message_to_send = transform_and_calculate_state(raw_state)
+            
+            encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
+            client_socket.sendall(encoded_message)
             
             # Short sleep for polling interval
             time.sleep(0.1)
