@@ -34,8 +34,6 @@ def lazy_read_part_file(path, fsize, start, end):
             if buf:
                 yield buf
 
-def _path_is_dir(x): return (x in ['', '.', '..']) or x.endswith('/')
-
 class DirStore:
     def __init__(self, base_dir):
         self.base_dir = os.path.realpath(os.path.expanduser(base_dir))
