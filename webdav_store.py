@@ -14,24 +14,23 @@ class WebDavStore:
         self.root = root
         options = {
             'webdav_hostname': hostname,
-            #'webdav_token': 'bmZpajpna2NieGZ6cQ==',
             'webdav_login': username,
             'webdav_password': password,
-            'disable_check': True,
+            'disable_check': True, # To allow self-signed certs, etc.
             'webdav_root': root
         }
+        self.opt = options
         self.client = Client(options)
         self.base_dir = root
 
     def get_real_path(self, path):
-        # The webdav client handles joining the root path
+        # The webdav client handles joining the root path, so the path is relative to the root.
         return path
-        return os.path.join(self.root, path)
 
     def mv(self, src, dest):
         real_src = self.get_real_path(src)
         real_dest = self.get_real_path(dest)
-        self.client.move(real_src, real_dest)
+        self.client.move(real_src, real_dest, overwrite=True)
         logging.info(f"Moved {real_src} to {real_dest}")
         return f'mv {real_src} {real_dest}'
 
@@ -45,8 +44,8 @@ class WebDavStore:
         try:
             info = self.client.info(real_path)
         except Exception as e:
-            print(f'dav head: {real_path} {e}')
             # The client raises an exception for 404 Not Found
+            logging.warning(f'dav head failed: {real_path} {e}')
             return {'type': None, 'rpath': real_path}
 
         meta = {
@@ -66,20 +65,15 @@ class WebDavStore:
 
     def read_dir(self, path):
         real_path = self.get_real_path(path)
-        # The webdavclient3 list() method returns full paths from the root,
-        # so we need to make them relative to the current path.
         items = self.client.list(real_path)
         
         # First item is the directory itself, skip it.
-        # The path from the client includes the webdav root, so we strip it.
-        # We also need to handle the case where we are at the root ('/')
-        
         relative_items = []
-        for item in items[1:]:
-            # Make path relative to the store's root, not the WebDAV server root
-            if item.startswith(self.base_dir):
-                item = item[len(self.base_dir):]
-            relative_items.append(item)
+        for item_path in items[1:]:
+            # Make path relative to the store's root
+            if item_path.startswith(self.base_dir):
+                item_path = item_path[len(self.base_dir):]
+            relative_items.append(item_path)
             
         return '\n'.join(['../'] + sorted(relative_items))
 
@@ -89,19 +83,50 @@ class WebDavStore:
         if _path_is_dir(path):
             d = self.read_dir(path)
             return len(d), 0, len(d), [d.encode('utf-8')]
-        
-        # webdavclient3 doesn't directly support streaming or range requests in a simple way.
-        # This implementation reads the whole file. A more advanced version would use
-        # the underlying requests session to perform a ranged GET.
-        if range_req:
-            logging.warning("WebDavStore lazy_read does not fully support range requests. Reading entire file.")
 
         try:
-            content = self.read(path)
-            return len(content), 0, len(content), [content]
+            info = self.client.info(real_path)
+            fsize = int(info.get('size', 0))
         except Exception as e:
-            logging.error(f"Error reading {real_path} from WebDAV: {e}")
+            logging.error(f"Could not get info for {real_path} to perform lazy_read: {e}")
             return 0, 0, 0, []
+
+        read_chunk_sz = 1 << 19 # 512KB
+
+        def parse_range(range_seq, fsize):
+            _ = re.findall(r'\d+', range_seq)
+            if len(_) == 2:
+                return int(_[0]), int(_[1]) + 1
+            elif len(_) == 1:
+                # This form means "from offset to the end", but we limit the chunk size for streaming.
+                return int(_[0]), min(int(_[0]) + read_chunk_sz, fsize)
+            else:
+                return 0, fsize
+
+        start, end = parse_range(range_req, fsize)
+        
+        if start >= fsize:
+            return fsize, start, end, []
+        
+        end = min(end, fsize)
+
+        def download_chunk_generator(start, end):
+            try:
+                # Use the client's session to make a streaming GET request with a Range header.
+                # The session handles authentication and base URL.
+                url = self.client.get_url('/' + real_path)
+                headers = {'Range': f'bytes={start}-{end-1}'}
+                
+                with self.client.session.get(url, headers=headers, stream=True,  auth=(self.opt['webdav_login'], self.opt['webdav_password'])) as response:
+                    response.raise_for_status()
+                    for chunk in response.iter_content(chunk_size=read_chunk_sz):
+                        yield chunk
+            except Exception as e:
+                logging.error(f"Error during partial read of {real_path}: {e}")
+                # On error, the generator will simply stop yielding chunks.
+                return
+
+        return fsize, start, end, download_chunk_generator(start, end)
 
     def read(self, path):
         real_path = self.get_real_path(path)
@@ -120,7 +145,9 @@ class WebDavStore:
         try:
             if isinstance(content, str):
                 content = content.encode('utf-8')
-            self.client.resource(real_path).write(content)
+            # Use upload_to which is more robust for binary data
+            buffer = io.BytesIO(content)
+            self.client.upload_to(buff=buffer, remote_path=real_path)
             logging.info(f"Wrote {len(content)} bytes to {real_path}")
         except Exception as e:
             logging.error(f"Error writing to {real_path} on WebDAV: {e}")
