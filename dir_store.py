@@ -22,8 +22,11 @@ def get_encoding(content):
     return chardet.detect(content)['encoding']
 
 def safe_read(p, limit=-1):
-    with open(p, 'rb') as f:
-        return f.read(limit)
+    try:
+        with open(p, 'rb') as f:
+            return f.read(limit)
+    except IOError as e:
+        return None
 
 read_chunk_sz = 1<<19
 def lazy_read_part_file(path, fsize, start, end):
