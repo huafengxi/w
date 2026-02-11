@@ -23,7 +23,7 @@ STATE_FILE_PATH = './playing-state.json'
 # --- Globals ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def transform_and_calculate_state(raw_state):
+def transform_and_calculate_state(raw_state, mtime_ms):
     """
     Transforms raw state and calculates the real-time currentTime.
     Returns the final dictionary to be broadcast.
@@ -41,7 +41,7 @@ def transform_and_calculate_state(raw_state):
         }
 
         reported_time = raw_state.get('time', 0)
-        report_timestamp_ms = raw_state.get('report_time', 0)
+        report_timestamp_ms = mtime_ms
 
         if current_state['playerState'] == 0: # playing
             report_timestamp_sec = report_timestamp_ms / 1000.0
@@ -106,7 +106,7 @@ def handle_client(client_socket, address):
             time_for_periodic_update = (current_time - last_broadcast_time) >= BROADCAST_INTERVAL
             
             if file_changed_now or time_for_periodic_update:
-                message_to_send = transform_and_calculate_state(raw_state)
+                message_to_send = transform_and_calculate_state(raw_state, int(my_last_mtime * 1000))
                 encoded_message = (json.dumps(message_to_send) + '\n').encode('utf-8')
                 client_socket.sendall(encoded_message)
                 last_broadcast_time = current_time
