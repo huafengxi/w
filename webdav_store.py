@@ -22,7 +22,9 @@ class WebDavStore:
         self.client = Client(
             base_url, 
             auth=(username, password), 
-            verify=verify  # False replaces 'disable_check'
+            verify=verify,  # False replaces 'disable_check'
+	    follow_redirects=True,
+	    timeout=60.0 
         )
 
     def get_real_path(self, path):
@@ -49,7 +51,7 @@ class WebDavStore:
             
             meta = {
                 'rpath': real_path,
-                'size': info.get('size', 0),
+                'size': info.get('content_length', 0),
                 'modified': info.get('modified'),
                 'created': info.get('created'),
             }
@@ -101,7 +103,7 @@ class WebDavStore:
 
         try:
             info = self.client.info(real_path)
-            fsize = info.get('size', 0)
+            fsize = info.get('content_length', 0)
         except Exception as e:
             logging.error(f"Could not get info for {real_path}: {e}")
             return 0, 0, 0, []
