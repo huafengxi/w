@@ -40,7 +40,7 @@ function create_video(path) {
     return ctrl;
 }
 
-function is_audio(line) { return !is_comment(line) && line.match(/.(mp3|wav)$/i); }
+function is_audio(line) { return !is_comment(line) && line.match(/.(mp3|wav|flac)$/i); }
 function retryAudio(e) {
     var audio = e.target;
     mylog("handle play error", e, audio, audio.currentTime);
