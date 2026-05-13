@@ -31,8 +31,19 @@
              white-space: pre-wrap;
              word-wrap: break-word;
          }
+         .video-thumb {
+             max-width: 600px;
+             max-height: 340px;
+             /*object-fit: contain;*/
+             border: 1px solid #ccc;
+             border-radius: 4px;
+         }
+         .video-item video {
+             max-width: 600px;
+         }
         </style>
         <script type="application/javascript" src="/w/view/my.js"></script>
+        <script type="application/javascript" src="/w/view/state_reporter.js"></script>
         <script type="application/javascript" src="/w/view/expo.js"></script>
         <script type="application/javascript">
          const url_base = window.location.pathname;
@@ -60,6 +71,7 @@
          function toggleText() { return toggleMedia('text'); }
          function toggleAudio() { return toggleMedia('audio'); }
          function toggleImg() { return toggleMedia('img'); }
+         function toggleVideo() { return toggleMedia('video'); }
          function toggleRate() { return showPanel($('rate')); }
          function initExpo() {
              appendExpo($('plist'))('all.plist');
@@ -67,6 +79,7 @@
              findMedia('text').forEach(appendExpo($('text')));
              findMedia('audio').forEach(appendExpo($('audio')));
              findMedia('img').forEach(appendExpo($('img')));
+              findMedia('video').forEach(appendExpo($('video')));
          }
          function initApp() {
              initExpo();
@@ -80,6 +93,7 @@
 		    <a href="javascript:toggleText()">text</a>
 		    <a href="javascript:toggleAudio()">audio</a>
 		    <a href="javascript:toggleImg()">img</a>
+		    <a href="javascript:toggleVideo()">video</a>
 		    <a href="javascript:toggleRate()">rate</a>
 	            <a href="?v=mv&target=/rj-rate/trash">trash</a>
         </nav>
@@ -89,6 +103,7 @@
         <div id="text" style="display: none"></div>
         <div id="audio" style="display: none"></div>
         <div id="img" style="display: none"></div>
+        <div id="video" style="display: none"></div>
         <div id="rate" style="display: none">
             <a href="?v=mv&target=/rj-rate/nts">nts</a>
           <a href="?v=mv&target=/rj-rate/ts-3">ts-3</a>
