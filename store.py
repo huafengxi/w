@@ -28,7 +28,7 @@ class RootStore:
                 return flist
             path = flist[i]
             if path.endswith('/'):
-                flist.extend([path + p for p in self.read(path).split(r'\n') if p != '../' and p != './'])
+                flist.extend([path + p for p in self.read(path).split('\n') if p != '../' and p != './'])
         return flist
     def head(self, path):
         try:
