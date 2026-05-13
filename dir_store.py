@@ -13,6 +13,7 @@ def get_mime_type(path):
     elif path.endswith('.db'): type = 'db'
     elif path.endswith('.ish'): type = 'ish'
     elif path.endswith('.plist'): type = 'plist'
+    elif path.endswith('.flac'): type = 'audio/flac'
     elif path: type = mimetypes.guess_type(path)[0] or text_mime_type
     else: type = text_mime_type
     return type
