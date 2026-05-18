@@ -84,7 +84,7 @@ def file_find_all(pat, path):
     with open(path) as f:
         return re.findall(pat, f.read())
 
-def build_root_store(fstab, pack=None):
+def build_root_store(fstab):
     logging.info('build_root_store %s', fstab)
     def parse_cmd_args(args):
         return [i for i in args if not re.match(r'^\w+=', i)], dict(i.split('=', 1) for i in args if re.match(r'^\w+=', i))

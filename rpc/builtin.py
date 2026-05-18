@@ -5,8 +5,6 @@ def interp(store, v='echo', src=None, **kw):
         return string.Template(store.read(html).decode()).safe_substitute(meta=meta, **kw)
     if v == 'echo':
         return dict(type='text/plain'), 'src=%s kw=%s'%(src, kw)
-    elif v == 'pack':
-        return dict(type='text/plain'), pack()
     elif v == 'head':
         return dict(type='text/plain'), repr(store.head(src))
     elif v == 'find':

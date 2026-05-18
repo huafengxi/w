@@ -53,19 +53,14 @@ from wsgi import run_wsgi, make_wsgi_app
 import vfs_handler
 from store import build_root_store
 
-def get_pack():
-    return globals().get('__pack__', None)
-
 def main():
     len(sys.argv) > 1 or help() or sys.exit(1)
     log_level = os.getenv('log') or 'info'
     logging.basicConfig(level=getattr(logging, log_level.upper(), None), format="%(asctime)s %(levelname)s %(message)s")
-    if get_pack():
-        sys.argv[0] = '<pack>/web.py'
     listen_addr = sys.argv[1]
     log_file = len(sys.argv) > 2 and sys.argv[2] or ''
     set_path()
-    logging.info('web_start: listen=%s dir=%s log=%s(%s) pack=%s PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, get_pack(), os.getenv('PATH'), os.getenv('PYTHONPATH'))
+    logging.info('web_start: listen=%s dir=%s log=%s(%s) PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, os.getenv('PATH'), os.getenv('PYTHONPATH'))
     kill_process('web.py +{}'.format(listen_addr))
     kill_process('timestamp-server.py')
     
@@ -79,9 +74,6 @@ def main():
 
     set_logging(log_file)
     root = build_root_store('w/fstab')
-    if 'genpack' in globals():
-        logging.info('set pack in /g/self')
-        root.write('/g/self', genpack(__pack__))
     handler = vfs_handler.Handler(root).handle_req
     app = make_wsgi_app([handler])
     vfs_handler.set_wsgi_fetcher(app)
