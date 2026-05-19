@@ -8,10 +8,16 @@
 store用来持久化file，接口如下：
 #+begin_example
 class AbstractStore:
-   def head(self, path): pass # head返回文件的meta info
-   def read(self, path): pass
+   def head(self, path): pass                       # 返回文件meta，至少包含 'type'
+   def read(self, path): pass                       # 读取整个文件 (目录路径以 '/' 结尾)
+   def read_dir(self, path): pass                   # 可选，目录读取的快路径
+   def lazy_read(self, path, range_req=''): pass    # 可选，分段读取，返回 (total, start, end, iter)
    def write(self, path, content): pass
+   def delete(self, path): pass                     # 可选
+   def mv(self, path, new_path): pass               # 可选，仅限同一store内
 #+end_example
+=head= 返回的dict除了 =type= 还可能带 =rpath= / =size= / =modified= 等字段，
+=RootStore= 会按 =fstab= 把请求路径分发到对应的子store。
 
 ** mime type
 store.head(path)返回一个dict，字典的'type'域就是mime type. head通过文件后缀来猜测mime type，也可以在文本文件的前面显式指定mime type.
@@ -34,7 +40,19 @@ interp的结果应该是一个tuple，形式是 =(meta, content_iterator)= , 也
 
 ** RootStore和fstab
 通过 [[/w/fstab]] 可以把各种不同类型的store挂载到root store, 目前支持的store:
-1. DictStore
-2. DirStore
-3. PyEnvStore
+1. DictStore — 简单的内存键值store，用来加载 =vmap= 等配置文件。
+2. DirStore — 把本地目录挂载为store。
+3. PyEnvStore — 把当前python进程的全局变量暴露为store，用于introspect ([[/g/]]).
+4. EncStore — 在DirStore基础上对文件名和内容做混淆，实现简单的加密目录。
+5. WebDavStore — 通过 =webdav4= 把远端WebDAV挂载为store，支持range read.
+6. CmdStore — 把read/write/delete委托给外部命令执行。
+7. SqlStore — 用关系数据库实现的store (见 =sql_store.py=).
+
+每种store对应 =w/<type>_store.py=，由 =store.get_store_cls= 按 =fstab= 中的类型按需加载。
+
+** playback state broadcast
+=web.py= 启动时会同时拉起 =timestamp-server.py= 监听TCP 23554，
+浏览器端的 =view/state_reporter.js= 在播放/暂停/定时回报时把状态写入
+=playing-state.json= ，server读取该文件并向所有连接的客户端广播实时进度，
+用于多端同步播放。
 

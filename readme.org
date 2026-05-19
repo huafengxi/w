@@ -60,18 +60,28 @@ once deployed, you can creat file with special extensions for different purpose.
 * encrypt in js
 + [[/w/demo/a.enc?v=enc]] view encrypt file
 + [[/w/demo/a.tips?v=code]] store decrypt tips
++ mount an encrypted directory via =fstab= with =Enc= type, e.g. =/nvr Enc nvr=,
+  the on-disk file/dir names and content are obfuscated by =enc_store.py=.
 
-* audio/img view
-+ [[/w/demo/?v=expo]] list as audio/img/text etc.
+* audio/img/video view
++ [[/w/demo/?v=expo]] list as audio/img/video/text etc.
 + [[/w/demo/?v=album]] find =.meta= dir, list =.meta/cover.jpg=
 + [[/w/demo/a.plist?v=plist]] play list edit.
++ [[/w/demo/a.mp4?v=video]] play single video file.
++ shared playback state is broadcast on TCP port 23554 via =timestamp-server.py=
+  (auto-launched by =web.py=); media views post state through =view/state_reporter.js=.
 
 * javascript API
 + [[/w/demo/a.org?v=head]]
 + [[/w/demo/a.org?v=read]]
-+ [[/w/demo/?v=find]]
++ [[/w/demo/?v=find]] supports =t=video= / =t=audio= filters.
 + [[/w/demo/a.org?v=del]]
 + [[/w/demo/a.org?v=write]]
++ [[/w/demo/a.org?v=mv&dest=/w/demo/b.org]] rename within one store.
+
+* remote storage
++ mount a WebDAV endpoint via =fstab=, e.g. =/dav WebDav https://host user pass /=,
+  see =webdav_store.py= (requires =pip install webdav4=).
 
 * introspect
 + [[/g/]] global vars
