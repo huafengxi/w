@@ -69,13 +69,6 @@ def make_wsgi_app(handlers):
         return content
     return wsgi_app
 
-def run_use_wsgiref(app, host, port, daemon):
-    logging.info('run use built-in wsgi server')
-    from wsgiref.simple_server import make_server
-    server = make_server(host, port, app)
-    fork_as_daemon(daemon)
-    server.serve_forever();
-
 def get_socket_timeout():
     t = os.getenv("timeout")
     t = int(t if t else '60')
@@ -98,19 +91,6 @@ def run_use_wsgiserver(app, host, port, daemon):
     server.start()
     return True
 
-def run_use_bjoern(app, host, port, daemon):
-    try:
-        import bjoern
-        import_ok = True
-    except:
-        logging.info(traceback.format_exc())
-        import_ok = False
-    if import_ok:
-        logging.info('run use bjoern')
-        fork_as_daemon(daemon)
-        bjoern.run(app, host, port)
-        return True
-
 def read_crendential():
     path = os.path.expanduser('~/.auth/passwd')
     try:
@@ -122,4 +102,4 @@ os.environ.update(WSGI_AUTH_CREDENTIALS=read_crendential().strip())
 from wsgi_basic_auth import BasicAuth
 def run_wsgi(app, host, port, daemon=False):
     app = BasicAuth(app)
-    return run_use_wsgiserver(app, host, port, daemon) or run_use_wsgiref(app, host, port, daemon)
+    return run_use_wsgiserver(app, host, port, daemon)
