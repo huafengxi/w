@@ -1,7 +1,4 @@
-import traceback
-import platform
 import logging
-import urllib
 import os
 import sys
 import time
@@ -14,7 +11,6 @@ def fork_as_daemon(daemon):
         sys.exit(0)
 
 def make_wsgi_app(handlers):
-    '''def handler(env, path, query, post): return mime_type, content'''
     def echo_handler(env, path, query, post):
         if query.get('__echo__', None) == 'true':
             logging.debug("echo req: %s, %s", path, query)
@@ -35,7 +31,6 @@ def make_wsgi_app(handlers):
 
     def handle_request(env, path, query, post):
         logging.debug("REQ: %s %s query=%s", path, env, repr(query))
-        #path = os.path.normpath(path)
         query_args = parse_qs_to_dict(query)
         meta, content = try_these([echo_handler] + handlers + [err_handler], env, path, query_args, post)
         logging.info("RESP: %s meta=%s", path, meta)
@@ -53,8 +48,6 @@ def make_wsgi_app(handlers):
         return (meta.get('http_status') or '200 OK', headers), content
     def wsgi_app(env, response):
         env.setdefault('QUERY_STRING', '')
-        env.update(wsgi_handler=wsgi_app)
-
         pi = env.get('PATH_INFO', '')
         try:
             env['PATH_INFO'] = (pi.encode('latin-1') if isinstance(pi, str) else pi).decode('utf-8', errors='replace')
@@ -80,26 +73,25 @@ def run_use_wsgiserver(app, host, port, daemon):
     cert, keyfile = os.path.expanduser('~/.auth/fullchain.pem'), os.path.expanduser('~/.auth/privkey.pem')
     if os.getenv('nossl') == '1':
         cert, keyfile = None, None
-        logging.warn('nossl mode: run with danger')
+        logging.warning('nossl mode: run with danger')
     elif not os.path.exists(cert) or not os.path.exists(keyfile):
-        logging.warn("ssl key %s/%s not exists: run with danger", cert, keyfile)
+        logging.warning("ssl key %s/%s not exists: run with danger", cert, keyfile)
         cert, keyfile = None, None
     timeout = get_socket_timeout()
     logging.info("run use wsgiserver: socket timeout: %s", timeout)
     server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout, numthreads=30)
     fork_as_daemon(daemon)
     server.start()
-    return True
 
-def read_crendential():
+def read_credential():
     path = os.path.expanduser('~/.auth/passwd')
     try:
         with open(path) as f:
             return f.read()
     except IOError:
         return ''
-os.environ.update(WSGI_AUTH_CREDENTIALS=read_crendential().strip())
+os.environ.update(WSGI_AUTH_CREDENTIALS=read_credential().strip())
 from wsgi_basic_auth import BasicAuth
 def run_wsgi(app, host, port, daemon=False):
     app = BasicAuth(app)
-    return run_use_wsgiserver(app, host, port, daemon)
+    run_use_wsgiserver(app, host, port, daemon)
