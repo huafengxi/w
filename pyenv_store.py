@@ -1,3 +1,5 @@
+from store import StoreException
+
 class PyEnvStore(dict):
     def __init__(self):
         self.env = globals()

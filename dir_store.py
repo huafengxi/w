@@ -1,6 +1,9 @@
 import os
+import re
+import logging
 import mimetypes
 import shutil
+from store import _path_is_dir
 
 def get_mime_type(path):
     text_mime_type = 'text/plain'
@@ -62,7 +65,7 @@ class DirStore:
             content = safe_read(real_path, 1024)
             if content != None:
                 mime_type = get_mime_type(real_path)
-                first_line = content.split(r'\n'.encode(), 1)[0]
+                first_line = content.split(b'\n', 1)[0]
                 header_vars = dict([(k.decode(), v.decode()) for k,v in re.findall(rb'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', first_line)])
                 header_vars.update(rpath=real_path)
                 if mime_type.startswith('text'):
@@ -121,7 +124,7 @@ class DirStore:
         real_path = self.get_real_path(path)
         try:
             with open(real_path, 'wb') as f:
-                if type(content) == str:
+                if isinstance(content, str):
                     content = content.encode('utf-8')
                 f.write(content)
         except IOError as e:

@@ -2,6 +2,7 @@ import traceback
 import logging
 import re
 import os
+import importlib
 
 class StoreException(Exception):
     pass
@@ -97,14 +98,8 @@ def build_root_store(fstab):
     return RootStore(mstore)
 
 def get_store_cls(type):
-    def load(x):
-        logging.info('load: %s', x)
-        with open(x) as f:
-            exec(compile(f.read(), filename=x, mode='exec'), globals())
-    cls_name = '%sStore'%(type)
-    if not globals().get(cls_name, None):
-        load('w/%s_store.py'%(type.lower()))
-    return globals().get(cls_name)
+    mod = importlib.import_module('%s_store' % type.lower())
+    return getattr(mod, '%sStore' % type)
 
 def mount(type, *args, **kw):
     return get_store_cls(type)(*args, **kw)

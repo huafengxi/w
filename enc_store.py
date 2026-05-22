@@ -1,4 +1,7 @@
 import os
+from store import _path_is_dir
+from dir_store import DirStore, get_mime_type
+
 char_map = 'iFXhbcNYDuUgsjrIMJwTpPAqnyvOfSxeEzWBkdtQmlZCoRVKLGHa'
 char_map_len = len(char_map)
 def fuzz_str(f):

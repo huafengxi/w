@@ -4,12 +4,7 @@ import mimetypes
 import re
 import io
 from webdav4.client import Client
-
-# Note: This store requires the 'webdav4' library.
-# You can install it using: pip install webdav4
-
-#def _path_is_dir(path):
-#    return path.endswith('/')
+from store import _path_is_dir
 
 class WebDavStore:
     def __init__(self, hostname, username, password, root='/', verify=False):

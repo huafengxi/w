@@ -1,11 +1,10 @@
+import ast
 import traceback
 import logging
 import urllib.parse
 import cgi
 import re
-
-def parse_qs_to_dict(qs):
-    return dict((k, v[-1]) for k, v in list(urllib.parse.parse_qs(qs).items()))
+from utils import parse_qs_to_dict
 
 def parse_post(ctype, post, post_size):
     if ctype.startswith('multipart/form-data'):
@@ -49,7 +48,9 @@ def get_meta(store, path):
 
 class VMap(dict):
     def __init__(self, store):
-        dict.__init__(self, eval(store.read('/vmap/')))
+        data = store.read('/vmap/')
+        if isinstance(data, bytes): data = data.decode()
+        dict.__init__(self, ast.literal_eval(data))
     def translate(self, path, meta, args):
         mime = meta.get('type')
         if not mime: return path
@@ -156,14 +157,6 @@ def make_wsgi_fetcher(wsgi_handler):
 
 def set_wsgi_fetcher(app):
     archive.fetch = make_wsgi_fetcher(app)
-
-def cmd_wrapper(head):
-    if os.name != 'nt':
-        return head
-    if head.endswith('.es'):
-        print('cmd_wrapper=%s'%(head))
-        return 'emacs --script %s'%(popen('where %s'%(head)))
-    return head
 
 def popen(cmd, input=None, env=None):
     p = Popen(cmd, cwd='.', shell=True, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)

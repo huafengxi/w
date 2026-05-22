@@ -1,83 +1,45 @@
 function is_empty_line(line) { return !/\S/.test(line); }
 function is_comment(line) { return line.startsWith('#'); }
 function is_video(line) { return !is_comment(line) && line.match(/.(mp4|webm|ogg)$/i); }
-function retryVideo(e) {
-    var video = e.target;
-    mylog("handle play error", e, video, video.currentTime);
-    if (video.error.code == video.error.MEDIA_ERR_NETWORK) {
-        var startTime = video.currentTime;
-        mylog("retry play", startTime, video.src);
-        video.src = video.src;
-        video.load();
-        video.currentTime = startTime;
-        var playPromise = video.play();
-        playPromise.catch(error => {
-            mylog("video play error occur", error);
-        });
-    }
-}
-
-function create_video(path) {
-    var ctrl = document.createElement('div');
-    ctrl.innerHTML = '<video preload="metadata" controls muted src="{path}"></video><pre>{basename}</pre>'.format({path: path, basename:basename(path)})
-    function getVideo(ctrl) { return ctrl.children[0]; }
-    function playNext() {
-        var next = ctrl.nextSibling;
-        if (next) {
-            getVideo(next).play();
-        }
-    }
-    function playInShare(event) {
-        playInSharePlayer(event.target.parentNode);
-    }
-    ctrl.children[1].addEventListener('click', playInShare);
-    getVideo(ctrl).playbackRate = 1;
-    getVideo(ctrl).addEventListener('ended', onEnded);
-    getVideo(ctrl).addEventListener('ended', playNext);
-    getVideo(ctrl).addEventListener('error', retryVideo);
-    getVideo(ctrl).addEventListener('play', onPlay);
-    getVideo(ctrl).addEventListener('pause', onPause);
-    return ctrl;
-}
-
 function is_audio(line) { return !is_comment(line) && line.match(/.(mp3|wav|flac)$/i); }
-function retryAudio(e) {
-    var audio = e.target;
-    mylog("handle play error", e, audio, audio.currentTime);
-    if (audio.error.code == audio.error.MEDIA_ERR_NETWORK) {
-        var startTime = audio.currentTime;
-        mylog("retry play", startTime, audio.src);
-        audio.src = audio.src;
-        audio.load();
-        audio.currentTime = startTime;
-        var playPromise = audio.play();
-        playPromise.catch(error => {
-            mylog("audio play error occur", error);
+
+function retryMedia(e) {
+    var el = e.target;
+    mylog("handle play error", e, el, el.currentTime);
+    if (el.error.code == el.error.MEDIA_ERR_NETWORK) {
+        var startTime = el.currentTime;
+        mylog("retry play", startTime, el.src);
+        el.src = el.src;
+        el.load();
+        el.currentTime = startTime;
+        el.play().catch(error => {
+            mylog("media play error occur", error);
         });
     }
 }
-function create_audio(path) {
+
+function createMediaCtrl(tag, path) {
     var ctrl = document.createElement('div');
-    ctrl.innerHTML = '<audio preload="metadata" controls muted src="{path}"></audio><pre>{basename}</pre>'.format({path: path, basename:basename(path)})
-    function getAudio(ctrl) { return ctrl.children[0]; }
+    ctrl.innerHTML = ('<' + tag + ' preload="metadata" controls muted src="{path}"></' + tag + '><pre>{basename}</pre>')
+        .format({path: path, basename: basename(path)});
+    function getMedia() { return ctrl.children[0]; }
     function playNext() {
         var next = ctrl.nextSibling;
-        if (next) {
-            getAudio(next).play();
-        }
+        if (next) { next.children[0].play(); }
     }
-    function playInShare(event) {
-        playInSharePlayer(event.target.parentNode);
-    }
+    function playInShare(event) { playInSharePlayer(event.target.parentNode); }
     ctrl.children[1].addEventListener('click', playInShare);
-    getAudio(ctrl).playbackRate = 1;
-    getAudio(ctrl).onended = playNext;
-    getAudio(ctrl).addEventListener('error', retryAudio);
-    getAudio(ctrl).addEventListener('play', onPlay);
-    getAudio(ctrl).addEventListener('pause', onPause);
-    getAudio(ctrl).addEventListener('ended', onEnded);
+    var m = getMedia();
+    m.addEventListener('ended', onEnded);
+    m.addEventListener('ended', playNext);
+    m.addEventListener('error', retryMedia);
+    m.addEventListener('play', onPlay);
+    m.addEventListener('pause', onPause);
     return ctrl;
 }
+
+function create_video(path) { return createMediaCtrl('video', path); }
+function create_audio(path) { return createMediaCtrl('audio', path); }
 
 function is_text(line) { return line.match(/.(txt|text)$/i); }
 function toggleTextVisible(ctrl, path) {

@@ -1,3 +1,5 @@
+from store import StoreException, file_find_all
+
 class DictStore(dict):
     def __init__(self, path):
         dict.__init__(self, file_find_all(r'(?m)^([^# ]+):\s+(\S*)\n', path))

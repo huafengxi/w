@@ -18,7 +18,7 @@ _web_path_ = locate_web_path(os.path.dirname(sys.argv[0]) if sys.argv[0].endswit
 def web_path(name):
     return os.path.realpath(os.path.join(_web_path_, name))
 os.chdir(_web_path_)
-sys.path.extend(['pylib'])
+sys.path.extend(['pylib', 'w'])
 import logging
 
 def help():

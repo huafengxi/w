@@ -1,4 +1,7 @@
+import os
 from subprocess import Popen, PIPE, STDOUT
+from dir_store import get_mime_type
+
 class CmdStore(dict):
     def __init__(self, cmd):
         self.cmd = cmd

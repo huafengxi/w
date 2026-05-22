@@ -1,3 +1,9 @@
+import os
+import re
+import logging
+from store import StoreException
+from dir_store import get_mime_type
+
 class SqlStore:
     def __init__(self, conn_str):
         self.conn_str = conn_str
@@ -33,28 +39,22 @@ class SqlStore:
             param = '%s'
         sql = '''replace into __root_dict__  values(%d, %s, %s, %s)''' %(id, param, param, param)
         def get_value(v):
-            if type(v) == int:
-                return None
-            else:
-                return v
+            return None if isinstance(v, int) else v
         def get_ref(v):
-            if type(v) == int:
-                return v
-            else:
-                return None
+            return v if isinstance(v, int) else None
         cursor = conn.cursor()
         cursor.executemany(sql, [(k, get_value(v), get_ref(v)) for k, v in list(attr.items())])
         conn.commit()
         
     def list(self, id):
-        sql = '''select name,ref from __root_dict__ where id = %ld''' % (id)
+        sql = '''select name,ref from __root_dict__ where id = %d''' % (id)
         return [(str(name), ref) for name, ref in self.sql_query(sql).fetchall()]
     def get(self, id, key_list):
         if not key_list:
             sql = '''select name, value, ref from __root_dict__ where id = %d'''%(id)
         else:
             sql = '''select name, value, ref from __root_dict__ where id = %d and name in (%s)'''%(id, ','.join(['"%s"'%(key) for key in key_list]))
-        return dict((name, ref == None and str(value) or int(ref)) for name, value, ref in self.sql_query(sql).fetchall())
+        return dict((name, str(value) if ref is None else int(ref)) for name, value, ref in self.sql_query(sql).fetchall())
 
 class SqlDirStore:
     def __init__(self, get_sql_conn):
@@ -70,7 +70,7 @@ class SqlDirStore:
             if part == '.': continue
             obj = self.obj_store.get(id, [part])
             value = obj.get(part)
-            if type(value) == int:
+            if isinstance(value, int):
                 id = value
             else:
                 id = None
@@ -88,11 +88,11 @@ class SqlDirStore:
             if part == '.': continue
             obj = self.obj_store.get(id, [part])
             value = obj.get(part)
-            if value == None:
+            if value is None:
                 new_id = self.obj_store.create()
                 self.obj_store.update(id, {part:new_id})
                 value = new_id
-            if type(value) == int:
+            if isinstance(value, int):
                 id = value
             else:
                 id = None
@@ -103,13 +103,13 @@ class SqlDirStore:
         if not m: raise StoreException('"%s" is not a file'%(path))
         dir, file = m.groups()
         id = self.do_search(dir)
-        if type(id) != int:
+        if not isinstance(id, int):
             raise StoreException('"%s" is not a dir'%(dir))
         self.obj_store.update(id, {file:content})
     def read(self, path):
         value = self.do_search(path)
-        if type(value) == int:
-             dir_content = ['..'] + [str(row[0]) + ['', '/'][row[1] != None] for row in self.obj_store.list(value)]
+        if isinstance(value, int):
+             dir_content = ['..'] + [str(row[0]) + ['', '/'][row[1] is not None] for row in self.obj_store.list(value)]
              ret = str('\n'.join(dir_content))
              return ret
         else:
@@ -117,9 +117,9 @@ class SqlDirStore:
     def head(self, path):
         value = self.do_search(path)
         header_vars = {}
-        if type(value) == int:
+        if isinstance(value, int):
             mime_type = 'dir'
-        elif type(value) == str:
+        elif isinstance(value, str):
             mime_type = get_mime_type(path)
             header_vars = dict(re.findall(r'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', value))
         else:
@@ -137,5 +137,6 @@ def make_sqlite_conn(path):
     return sqlite3, conn
 def make_sql_conn(conn_str):
     sqlite_prefix = 'sqlite:'
-    if conn_str.starswitch(sqlite_prefix):
+    if conn_str.startswith(sqlite_prefix):
         return make_sqlite_conn(conn_str[len(sqlite_prefix):])
+    raise StoreException('unsupported conn_str: %s' % conn_str)

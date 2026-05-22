@@ -5,18 +5,13 @@ import urllib
 import os
 import sys
 import time
+from utils import parse_qs_to_dict, safe_read_text
+
 def fork_as_daemon(daemon):
     if not daemon: return
     if os.fork() > 0:
         time.sleep(0.1)
         sys.exit(0)
-
-def safe_read(p):
-    with open(p) as f:
-        return f.read()
-
-def parse_qs_to_dict(qs):
-    return dict((k, v[-1]) for k, v in list(urllib.parse.parse_qs(qs).items()))
 
 def make_wsgi_app(handlers):
     '''def handler(env, path, query, post): return mime_type, content'''
@@ -26,14 +21,14 @@ def make_wsgi_app(handlers):
             return dict(type='text/plain'), '%s %s\n'%(path, query)
     def err_handler(env, path, query, post):
         logging.debug("HANDLE_404: %s", path)
-        return dict(type='text/html'), safe_read("w/404.html")
+        return dict(type='text/html'), safe_read_text("w/404.html")
     def try_these(handlers, env, path, query, post):
         for f in handlers:
             ret = f(env, path, query, post)
             if ret: return ret
     def build_cache_control_header(meta):
         mime = meta.get('type', '')
-        if meta.get('rpath') and (mime.startswith('image/') or mime.startswith('XXXaudio')):
+        if meta.get('rpath') and mime.startswith('image/'):
             return [('Cache-control', 'Private,Max-age=86400')]
         else:
             return []
@@ -60,37 +55,17 @@ def make_wsgi_app(handlers):
         env.setdefault('QUERY_STRING', '')
         env.update(wsgi_handler=wsgi_app)
 
-        # Correctly decode PATH_INFO from the WSGI server
-        original_path_info = env.get('PATH_INFO', '')
-        if isinstance(original_path_info, str):
-            try:
-                # Assume WSGI servers might provide PATH_INFO as latin-1 decoded string
-                # Re-encode to bytes with latin-1, then decode to utf-8
-                env['PATH_INFO'] = original_path_info.encode('latin-1').decode('utf-8')
-                logging.debug("Decoded PATH_INFO from latin-1 to utf-8: %s -> %s", original_path_info, env['PATH_INFO'])
-            except (UnicodeEncodeError, UnicodeDecodeError) as e:
-                logging.warning("Failed to decode PATH_INFO from latin-1 to utf-8 (string input): %s, Error: %s", original_path_info, e)
-                # Fallback: keep original if decoding fails, though it might be corrupted
-                env['PATH_INFO'] = original_path_info
-        elif isinstance(original_path_info, bytes):
-            try:
-                # If it's already bytes, assume it's utf-8 and decode
-                env['PATH_INFO'] = original_path_info.decode('utf-8')
-                logging.debug("Decoded PATH_INFO from bytes to utf-8: %s -> %s", original_path_info, env['PATH_INFO'])
-            except UnicodeDecodeError as e:
-                logging.warning("Failed to decode PATH_INFO (bytes input) as utf-8: %s, Error: %s", original_path_info, e)
-                # Fallback: attempt latin-1 then utf-8 if direct utf-8 fails for bytes
-                try:
-                    env['PATH_INFO'] = original_path_info.decode('latin-1') # Fallback to latin-1
-                    logging.warning("Attempted latin-1 decoding for PATH_INFO (bytes input): %s -> %s", original_path_info, env['PATH_INFO'])
-                except UnicodeDecodeError:
-                    pass # Keep as bytes if all decoding fails, though it's problematic
-            
+        pi = env.get('PATH_INFO', '')
+        try:
+            env['PATH_INFO'] = (pi.encode('latin-1') if isinstance(pi, str) else pi).decode('utf-8', errors='replace')
+        except Exception as e:
+            logging.warning('PATH_INFO decode failed: %r %s', pi, e)
+
         header, content = handle_request(env, env.get('PATH_INFO'), env['QUERY_STRING'], env['wsgi.input'])
         response(*header)
         if not content: content = []
-        elif type(content) == bytes: content = [content]
-        elif type(content) == str: content = [content.encode()]
+        elif isinstance(content, bytes): content = [content]
+        elif isinstance(content, str): content = [content.encode()]
         return content
     return wsgi_app
 
