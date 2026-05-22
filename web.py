@@ -2,12 +2,14 @@
 # -*- coding: utf-8-unix -*-
 '''
 # echo 'user:passwd' > ~/.auth/passwd
-# ssl: ~/.auth/cert.pem ~/.auth/privkey.pem
+# ssl: ~/.auth/fullchain.pem ~/.auth/privkey.pem
 log=info ./myapp.py 8080 [log_file]
 '''
 
 import sys, os, os.path
-#sys.setdefaultencoding('UTF8')
+import signal
+import subprocess
+import logging
 sys.path.append('%s/pylib'%(os.path.dirname(sys.argv[0])))
 def locate_web_path(path):
     p = os.path.realpath(path)
@@ -19,13 +21,10 @@ def web_path(name):
     return os.path.realpath(os.path.join(_web_path_, name))
 os.chdir(_web_path_)
 sys.path.extend(['pylib', 'w'])
-import logging
 
 def help():
     print(__doc__)
 
-import signal
-import subprocess
 def list_process(pat):
     for pid in subprocess.Popen(['pgrep', '-f', pat], stdout=subprocess.PIPE).communicate()[0].split(b'\n'):
         if not pid: continue
@@ -34,14 +33,11 @@ def kill_process(pat):
     for p in list_process(pat):
         if p != os.getpid(): os.kill(p, signal.SIGKILL)
 def set_path():
-    if os.name == 'nt':
-        os.putenv('PATH', 'c:/Python27;c:/emacs/bin;c:/cygwin64/bin;%s;%s'%(web_path('bin'), os.getenv('PATH')))
-    else:
-        bin_path = web_path('w/bin')
-        if not os.path.exists(bin_path):
-            bin_path = os.path.expanduser('~/m/w/bin')
-        if bin_path not in os.getenv('PATH'):
-            os.environ['PATH'] = '%s:%s'%(bin_path, os.getenv('PATH'))
+    bin_path = web_path('w/bin')
+    if not os.path.exists(bin_path):
+        bin_path = os.path.expanduser('~/m/w/bin')
+    if bin_path not in os.getenv('PATH'):
+        os.environ['PATH'] = '%s:%s'%(bin_path, os.getenv('PATH'))
 
 def set_logging(log_file=''):
     if log_file:
@@ -54,11 +50,13 @@ import vfs_handler
 from store import build_root_store
 
 def main():
-    len(sys.argv) > 1 or help() or sys.exit(1)
+    if len(sys.argv) <= 1:
+        help()
+        sys.exit(1)
     log_level = os.getenv('log') or 'info'
     logging.basicConfig(level=getattr(logging, log_level.upper(), None), format="%(asctime)s %(levelname)s %(message)s")
     listen_addr = sys.argv[1]
-    log_file = len(sys.argv) > 2 and sys.argv[2] or ''
+    log_file = sys.argv[2] if len(sys.argv) > 2 else ''
     set_path()
     logging.info('web_start: listen=%s dir=%s log=%s(%s) PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, os.getenv('PATH'), os.getenv('PYTHONPATH'))
     kill_process('web.py +{}'.format(listen_addr))
@@ -83,7 +81,7 @@ def main():
         host, port = host_port
     else:
         host, port = '', listen_addr
-    run_wsgi(app, host, int(port), log_file)
+    run_wsgi(app, host, int(port), daemon=bool(log_file))
 
 if __name__ == '__main__':
     main()
