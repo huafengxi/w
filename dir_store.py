@@ -55,6 +55,8 @@ class DirStore:
     def delete(self, path):
         real_path = self.get_real_path(path)
         os.unlink(real_path)
+    def mkdir(self, path):
+        os.makedirs(self.get_real_path(path), exist_ok=True)
     def head(self, path):
         header_vars = dict()
         real_path = self.get_real_path(path)

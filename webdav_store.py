@@ -38,6 +38,11 @@ class WebDavStore:
         self.client.remove(real_path)
         logging.info(f"Deleted {real_path}")
 
+    def mkdir(self, path):
+        real_path = self.get_real_path(path)
+        self.client.mkdir(real_path)
+        logging.info(f"Mkdir {real_path}")
+
     def head(self, path):
         real_path = self.get_real_path(path)
         try:

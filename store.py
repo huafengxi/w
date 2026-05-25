@@ -1,4 +1,3 @@
-import traceback
 import logging
 import re
 import os
@@ -45,16 +44,23 @@ class RootStore:
             store, src = self.get_store(path)
             store2, dest = self.get_store(new_path)
             if store != store2:
-                raise StoreException("mv src and dest not on same store: %s %s", path, new_path)
+                raise StoreException("mv src and dest not on same store: %s %s" % (path, new_path))
             return store.mv(src, dest)
         except StoreException as e:
+            logging.debug('root.mv: %s', e)
             return None
     def delete(self, path):
         try:
             store, new_path = self.get_store(path)
             return store.delete(new_path)
         except StoreException as e:
+            logging.debug('root.delete: %s %s', e, path)
             return None
+    def mkdir(self, path):
+        store, new_path = self.get_store(path)
+        if not callable(getattr(store, 'mkdir', None)):
+            raise StoreException('mkdir not supported on %s' % store)
+        return store.mkdir(new_path)
     def lazy_read(self, path, range_req=''):
         store, new_path = self.get_store(path)
         if callable(getattr(store, 'lazy_read', None)):
