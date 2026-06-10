@@ -21,7 +21,7 @@
         var gitlab_url = "http://gitlab.alibaba-inc.com/yuanqi.xhf/mysite-mirror/blob/master/";
         $("gitlab_link").href = gitlab_url + url;
         if (inIframe())hide($('head-bar'));
-        makeEditor($('editor'), function (content){ var converter = new showdown.Converter({tables: true}); setWindowTitle(getTitle(content)); $("doc").innerHTML = converter.makeHtml(content); });
+        makeEditor($('editor'), function (content){ var converter = new showdown.Converter({tables: true}); setWindowTitle(getTitle(content)); $("doc").innerHTML = converter.makeHtml(content.replace(/_/g, '\\_')); });
       }
     </script>
 </script>
