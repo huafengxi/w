@@ -13,7 +13,7 @@ function appendButton(pane, text) {
    but.value = text;
    return but;
 }
-function dump2html(arg, ret, err, _ret, _err) {
+function mkResultPanel(arg, _ret) {
      var pan = document.createElement('div');
      _ret.prepend(pan);
      var x = appendButton(pan, 'X');
@@ -21,14 +21,35 @@ function dump2html(arg, ret, err, _ret, _err) {
      pan.appendChild(document.createTextNode(arg));
      var res = document.createElement('div');
      pan.appendChild(res);
-     x.onclick = function() { pan.remove(); } 
+     x.onclick = function() { pan.remove(); }
      h.onclick = function() { toggleVisible(res); }
+     return res;
+}
+function dump2html(arg, ret, err, _ret, _err) {
+     var res = mkResultPanel(arg, _ret);
      res.innerHTML = preHtml(str(ret));
      _err.innerHTML = exceptionFormat(err);
      return [ret, err];
 }
 function dumpCall(func, arg, _ret, _err){ if (!arg) return [null, null]; var res = safeCall(func, arg);  return dump2html(arg, res[0], res[1], _ret, _err);}
 function mkDumper(func, _ret, _err) {return function(arg) {return dumpCall(func, arg, _ret, _err); }; }
+
+// Streaming variant: func(arg, on_chunk, on_done, on_error) appends text as it arrives.
+function dumpStream(func, arg, _ret, _err) {
+    if (!arg) return;
+    var pre = document.createElement('pre');
+    mkResultPanel(arg, _ret).appendChild(pre);
+    _err.innerHTML = '';
+    func(arg,
+         function(chunk){ pre.appendChild(document.createTextNode(chunk)); },
+         null,
+         function(e){ _err.innerHTML += exceptionFormat(e); });
+}
+function mkStreamDumper(func, _ret, _err) { return function(arg) { return dumpStream(func, arg, _ret, _err); }; }
+function lish_stream(interp, panel) {
+    panel.innerHTML = '<input type="text" class="input"/><pre class="error"></pre><div class="output"></div>';
+    return _lish(mkStreamDumper(interp, $s(panel,'output'), $s(panel, 'error')), $s(panel, 'input'));
+}
 
 // lish means `line shell'
 function safeCall(func, arg) {
@@ -70,7 +91,7 @@ function _fish(interp, input) {
 function fish(interp, panel, text_filter) {
     panel.innerHTML = '<textarea name="content" class="input" rows="12">${content}</textarea><pre class="error"></pre><div class="status">Fish <button type="button" id="fish_go">Go</button> </div><div class="lish"></div>';
     text_filter = text_filter || function(line, content){ return line;};
-    var sh = lish(interp, $s(panel, 'lish'));
+    var sh = lish_stream(interp, $s(panel, 'lish'));
     bindHotKey($('fish_go'), 'button0', function(e){ e.stopPropagation(); return fishHandle(doCmd, $s(panel, 'input'));});
     bindHotKey($s(panel, 'status'), 'button0', function(e){return toggleVisible($s(panel, 'input'));});
     bindHotKey($s(panel, 'input'), 'alt-wheel', function(e){ e.target.rows += getWheelDelta(e)/40; e.preventDefault();});

@@ -13,6 +13,29 @@ def interp(store, i='', src=None, input=None, cmd='', dir='', **kw):
         if p.wait():
             raise Exception('popen Fail: req_cmd=%s cmd_list=%s %s'%(cmd, cmd_list, err))
         return dict(type= 'text/html' if is_html(output) else 'text/plain'), output
+    def stream_popen(cmd_list, input, env):
+        # Yield stdout as it is produced so the client can render progressively.
+        # stderr is merged so failures show up inline; no content_len is set, so
+        # wsgiserver falls back to HTTP/1.1 chunked transfer-encoding.
+        def gen():
+            p = Popen(cmd_list, cwd=os.path.realpath('./' + dir), env=env, stdin=input and PIPE or NULLFD, stdout=PIPE, stderr=STDOUT)
+            if input:
+                import threading
+                data = input if isinstance(input, bytes) else input.encode()
+                def feed():
+                    try: p.stdin.write(data)
+                    finally: p.stdin.close()
+                threading.Thread(target=feed, daemon=True).start()
+            try:
+                fd = p.stdout.fileno()
+                while True:
+                    chunk = os.read(fd, 65536)
+                    if not chunk: break
+                    yield chunk
+            finally:
+                p.stdout.close()
+                p.wait()
+        return dict(type='text/plain'), gen()
     term = kw.get('is_crawled_by_curl', False) and 'term' or 'html'
     input = input or (src and store.read(src))
     env = dict_updated(os.environ, term=term, http_root='/')
@@ -24,6 +47,8 @@ def interp(store, i='', src=None, input=None, cmd='', dir='', **kw):
     if i == 'bash':
         if not cmd: cmd = 'sh'
         cmd_list = ['/bin/bash', '-c', cmd]
+        logging.debug('i=%s cmd=%s input=%.100s src=%s (stream)', i, cmd_list, input, src)
+        return stream_popen(cmd_list, input, env)
     elif i == 'conv':
         cmd_list = [sys.executable, 'bin/conv.py', 'guess']
         if cmd: cmd_list.append(cmd)

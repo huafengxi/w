@@ -171,6 +171,29 @@ function rpcDecode(str){
 function rpc(url, content){ if (!content)content = {}; content['token'] = getCookie('token'); return rpcDecode(http(url? url:getUrl(), encodeQueryString(content))); }
 function rpc_link(url, content){ return (url? url:getUrl()) + '?' + encodeQueryString(content); }
 
+// Streaming POST: on_chunk(text) is called for each decoded chunk as it arrives.
+function http_stream(url, content, on_chunk, on_done, on_error) {
+    fetch(url, {method: "POST", headers: {"Content-type": "application/x-www-form-urlencoded"}, body: content})
+    .then(function(resp){
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder('utf-8');
+        function pump(){
+            return reader.read().then(function(r){
+                if (r.done) { var tail = decoder.decode(); if (tail && on_chunk) on_chunk(tail); if (on_done) on_done(); return; }
+                var text = decoder.decode(r.value, {stream: true});
+                if (text && on_chunk) on_chunk(text);
+                return pump();
+            });
+        }
+        return pump();
+    }).catch(function(e){ if (on_error) on_error(e); });
+}
+function rpc_stream(url, content, on_chunk, on_done, on_error) {
+    if (!content) content = {};
+    content['token'] = getCookie('token');
+    return http_stream(url? url:getUrl(), encodeQueryString(content), on_chunk, on_done, on_error);
+}
+
 function http_async(url, content, on_load) {
     var req = new XMLHttpRequest();
     req.open("POST", url, true);
