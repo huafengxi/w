@@ -1,8 +1,4 @@
 /vmap   Dict	w/vmap
 /w      Dir     w
 /g      PyEnv
-/nvr  Enc nvr
-/ARJ  Enc ARJ
-/dav  WebDav https://dav.mypikpak.com nfij gkcbxfzq /
-/R Cmd w/bin/model_router_md_template_serve.py
 /	Dir	.

@@ -1,0 +1,118 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>console</title>
+    <base target="target">
+    <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
+    <script type="application/javascript" src="/w/view/my.js"></script>
+    <script type="application/javascript" src="/w/ext/markdown/deps/showdown.js"></script>
+    <script type="application/javascript">
+      function split() { window.location.assign(getUrl() + "?type=split"); }
+      function toggle_editor() { toggleVisible($('editor')); }
+      function dirname(path) { return path.match(/.*\//);  }
+      function getTitle(content) {
+         var m = content.match(/^# (.*)/m);
+         if (m) return m[1];
+         return "untitle";
+      }
+      function underscore_escape_filter(content) {
+         return content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|_/g, function(m, code){ return code ? code : '\\_'; });
+      }
+      function renderMarkdown(text) {
+         var converter = new showdown.Converter({tables: true});
+         return converter.makeHtml(underscore_escape_filter(text));
+      }
+      function getInterp(content) {
+         var m = content.match(/^#!cmd-interp (.*)$/m);
+         return m ? m[1].trim() : '';
+      }
+      // Build an inline-command widget: a run button, a hideable stderr log
+      // console, and a stdout result rendered as markdown. cmd.py streams the
+      // output line-framed with a leading tag byte ('1'=stdout, '2'=stderr).
+      function buildCmdWidget(w, interp) {
+         var ph = $(w.id);
+         if (!ph) return null;
+         var box = $n('div');
+         var btn = $n('button'); btn.textContent = 'run: ' + w.cmd;
+         var refreshBtn = $n('button'); refreshBtn.textContent = 'refresh';
+         var logBtn = $n('button'); logBtn.textContent = 'log';
+         var log = $n('pre'); log.className = 'output console'; hide(log);
+         var result = $n('div'); result.className = 'doc';
+         logBtn.onclick = function(){ toggleVisible(log); };
+         box.appendChild(btn); box.appendChild(refreshBtn); box.appendChild(logBtn); box.appendChild(log); box.appendChild(result);
+         ph.parentNode.replaceChild(box, ph);
+         var outText, logText, buf;
+         function run(done, fresh){
+            outText = ''; logText = ''; buf = '';
+            result.innerHTML = ''; log.textContent = ''; show(log);
+            var params = {interp: interp, path: getUrl(), cmd: w.cmd};
+            if (fresh) params._fresh_ = 1;
+            rpc_stream('/w/ext/shell/rpc/cmd.py', params,
+               function(text){
+                  buf += text; var i;
+                  while ((i = buf.indexOf('\n')) >= 0) {
+                     var line = buf.slice(0, i + 1); buf = buf.slice(i + 1);
+                     var data = line.slice(1);
+                     if (line.charAt(0) === '2') { logText += data; log.textContent = logText; }
+                     else { outText += data; result.innerHTML = renderMarkdown(outText); }
+                  }
+               },
+               function(){ if (done) done(); },
+               function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); if (done) done(); });
+         }
+         btn.onclick = function(){ run(); };
+         refreshBtn.onclick = function(){ run(null, true); };
+         return {run: run, log: log};
+      }
+      var cmdRunners = [], cmdLogs = [];
+      function runAll(fresh){
+         var i = 0;
+         (function next(){ if (i < cmdRunners.length) cmdRunners[i++](next, fresh); })();
+      }
+      function toggleLogs(){
+         var anyVisible = cmdLogs.some(function(l){ return isVisible(l); });
+         cmdLogs.forEach(function(l){ anyVisible ? hide(l) : show(l); });
+      }
+      function renderDoc(content) {
+         var interp = getInterp(content);
+         var body = content.replace(/^#!cmd-interp .*$/m, '');
+         var widgets = [];
+         var replaced = body.replace(/\$\{([^}]+)\}/g, function(_, cmd){
+            var id = 'cmdw' + widgets.length;
+            widgets.push({id: id, cmd: cmd});
+            return '<span id="' + id + '"></span>';
+         });
+         setWindowTitle(getTitle(content));
+         $("doc").innerHTML = renderMarkdown(replaced);
+         cmdRunners = []; cmdLogs = [];
+         for (var i = 0; i < widgets.length; i++) {
+            var w = buildCmdWidget(widgets[i], interp);
+            if (w) { cmdRunners.push(w.run); cmdLogs.push(w.log); }
+         }
+         var disp = cmdRunners.length ? 'inline' : 'none';
+         $('run-all').style.display = disp;
+         $('refresh-all').style.display = disp;
+         $('log-all').style.display = disp;
+      }
+
+      function initApp(){
+        var url = window.location.pathname;
+        var gitlab_url = "http://gitlab.alibaba-inc.com/yuanqi.xhf/mysite-mirror/blob/master/";
+        $("gitlab_link").href = gitlab_url + url;
+        if (inIframe())hide($('head-bar'));
+        makeEditor($('editor'), function (content){ renderDoc(content); });
+      }
+    </script>
+  </head>
+  <body onload="initApp()">
+    <nav id="head-bar"><a href="javascript:toggle_editor()">edit</a><a  href="javascript:split()">split</a><a id="run-all" href="javascript:runAll()" style="display:none">run-all</a><a id="refresh-all" href="javascript:runAll(true)" style="display:none">refresh-all</a><a id="log-all" href="javascript:toggleLogs()" style="display:none">log</a>
+      <!-- <a href="https://www.google.com/cse/publicurl?cx=005037642699962415424:bbpmoxhiswm">search</a> -->
+      <span style="float:right">
+        <a id="gitlab_link" href="#">gitlab</a>
+    </span>
+    <hr style="margin:0;"/>
+    </nav>
+    <div id="editor"></div>
+    <div id="doc" class="doc"></div>
+  </body>
+</html>

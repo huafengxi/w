@@ -6,7 +6,16 @@ once deployed, you can creat file with special extensions for different purpose.
 * start service
 : cd $webroot # change to your webroot
 : git clone git@github.com:huafengxi/w.git w
-: log=debug w/web.py 8080 
+: log=debug w/core/server.py 8080
+
+The server is split into a feature-free =core/= plus per-feature =ext/<feature>/=
+extensions. On startup =core/server.py= reads env =ext= (comma-separated) and
+calls =register(REGISTRY)= in each =ext/<feature>/register.py=; store classes,
+mime rules, vmap/fstab fragments, =PATH= bin dirs, and startup hooks all
+register through this harness. Default =ext= is the full ordered list
+=introspect,dsync,org,markdown,encrypt,shell,sql,webdav,fileops,media= (media
+last — it owns the =timestamp-server.py= startup hook). Set =ext= empty for a
+feature-free core run: =ext= w/core/server.py 8080=.
 
 * config ssl/basic auth
 : echo 'user:passwd' > ~/.auth/passwd
@@ -61,7 +70,7 @@ once deployed, you can creat file with special extensions for different purpose.
 + [[/w/demo/a.enc?v=enc]] view encrypt file
 + [[/w/demo/a.tips?v=code]] store decrypt tips
 + mount an encrypted directory via =fstab= with =Enc= type, e.g. =/nvr Enc nvr=,
-  the on-disk file/dir names and content are obfuscated by =enc_store.py=.
+  the on-disk file/dir names and content are obfuscated by =ext/encrypt/enc_store.py=.
 
 * audio/img/video view
 + [[/w/demo/?v=expo]] list as audio/img/video/text etc.
@@ -69,7 +78,7 @@ once deployed, you can creat file with special extensions for different purpose.
 + [[/w/demo/a.plist?v=plist]] play list edit.
 + [[/w/demo/a.mp4?v=video]] play single video file.
 + shared playback state is broadcast on TCP port 23554 via =timestamp-server.py=
-  (auto-launched by =web.py=); media views post state through =view/state_reporter.js=.
+  (auto-launched by the =ext/media= startup hook); media views post state through =view/state_reporter.js=.
 
 * javascript API
 + [[/w/demo/a.org?v=head]]
@@ -81,7 +90,7 @@ once deployed, you can creat file with special extensions for different purpose.
 
 * remote storage
 + mount a WebDAV endpoint via =fstab=, e.g. =/dav WebDav https://host user pass /=,
-  see =webdav_store.py= (requires =pip install webdav4=).
+  see =ext/webdav/webdav_store.py= (requires =pip install webdav4=; optional =httpx[socks]= if the endpoint needs a SOCKS proxy).
 
 * introspect
 + [[/g/]] global vars

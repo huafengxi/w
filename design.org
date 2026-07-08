@@ -28,13 +28,13 @@ store.head(path)返回一个dict，字典的'type'域就是mime type. head通过
 ** view_map
 =mime type= 到 =view_path= 的映射叫view_map， 保存在 [[/vmap/]] 文件里。
 
-view文件被放置在 [[/w/view/]] 目录
+view文件分布在 =core/view/= (核心视图如 template/404/code/iframe/split 等) 和各 =ext/<feature>/view/= 目录；基线 =w/vmap= 只保留核心映射，各 ext 通过自己的 =vmap.frag= 追加。
 
 ** script
 只有python文件type才能定义为script，script类型的python文件中应该定义 =interp(store, **args)= 函数，
 如果 =view_path= 是script，那么处理url请求时，会调用 =interp(...)= 产生结果。
 
-script文件被放置在 [[/w/rpc/]] 目录
+script文件分布在 =core/rpc/= (核心只读 rpc 如 =core_read.py=) 和各 =ext/<feature>/rpc/= 目录；script 的全局命名空间由 =core/vfs_handler._register_script_globals()= 注入核心helper，各 ext 在 =register.py= 里再追加自己的全局 (如 =archive= / =AlbumDB= / =lfop= / =find_presets=)。
 
 interp的结果应该是一个tuple，形式是 =(meta, content_iterator)= , 也可以是个字符串，如果是字符串，那么 =mime_typ= 当作 =text/plain= 来处理。
 
@@ -46,12 +46,14 @@ interp的结果应该是一个tuple，形式是 =(meta, content_iterator)= , 也
 4. EncStore — 在DirStore基础上对文件名和内容做混淆，实现简单的加密目录。
 5. WebDavStore — 通过 =webdav4= 把远端WebDAV挂载为store，支持range read.
 6. CmdStore — 把read/write/delete委托给外部命令执行。
-7. SqlStore — 用关系数据库实现的store (见 =sql_store.py=).
+7. SqlStore — 用关系数据库实现的store (见 =ext/sql/sql_store.py=).
 
-每种store对应 =w/<type>_store.py=，由 =store.get_store_cls= 按 =fstab= 中的类型按需加载。
+每种store由所属的 =ext/<feature>/register.py= 通过 =reg.register_store(type, cls)= 注册，
+=core/store.py= 的 =build_root_store= 解析 =fstab= 时按类型查表加载；基线 fstab
+在 =w/fstab= ，各 ext 通过 =fstab.frag= 追加挂载点。
 
 ** playback state broadcast
-=web.py= 启动时会同时拉起 =timestamp-server.py= 监听TCP 23554，
+=core/server.py= 启动时通过 =ext/media= 注册的 startup hook 拉起 =timestamp-server.py= 监听TCP 23554，
 浏览器端的 =view/state_reporter.js= 在播放/暂停/定时回报时把状态写入
 =playing-state.json= ，server读取该文件并向所有连接的客户端广播实时进度，
 用于多端同步播放。

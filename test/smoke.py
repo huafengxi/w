@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+# In-process smoke harness: exercises the request pipeline without sockets/fork.
+# Usage: cd <webroot> && fstab=<path> python3 w/test/smoke.py
+import os, sys, io, logging
+logging.basicConfig(level=getattr(logging, os.getenv('log', 'WARNING').upper(), logging.WARNING),
+                    format="%(levelname)s %(message)s")
+WEBROOT = os.getenv('webroot', '/home/yuanqi.xhf/m')
+os.chdir(WEBROOT)
+for p in ('w', 'w/pylib'):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+from core.store import build_root_store
+from core.utils import parse_qs_to_dict
+from core.extloader import load_extensions
+import core.vfs_handler as vfs_handler
+
+# Mirror core/server.py DEFAULT_EXTS; override with env `ext` (`ext=` for core-only).
+DEFAULT_EXTS = 'introspect,dsync,org,markdown,encrypt,shell,sql,webdav,fileops,media'
+_ext_env = os.environ.get('ext')
+load_extensions((DEFAULT_EXTS if _ext_env is None else _ext_env).split(','))
+
+root = build_root_store(os.getenv('fstab', 'w/fstab'))
+h = vfs_handler.Handler(root)
+
+def req(path, qs=''):
+    env = {'PATH_INFO': path, 'QUERY_STRING': qs, 'CONTENT_LENGTH': '0',
+           'CONTENT_TYPE': 'application/x-www-form-urlencoded'}
+    try:
+        meta, content = h.handle_req(env, path, parse_qs_to_dict(qs), io.BytesIO()) or (None, None)
+        if hasattr(content, '__iter__') and not isinstance(content, (bytes, str)):
+            content = b''.join(x if isinstance(x, bytes) else str(x).encode() for x in content)
+        c = (content if isinstance(content, (bytes, str)) else repr(content))[:70]
+        print('OK   %-24s %-10s type=%-12s len~%s :: %.50r' % (
+            path, qs, (meta or {}).get('type'), (meta or {}).get('content_len'), c))
+    except Exception as e:
+        print('ERR  %-24s %-10s %r' % (path, qs, e))
+
+if __name__ == '__main__':
+    req('/w/readme.org')
+    req('/w/readme.org', 'v=read')
+    req('/w/readme.org', 'v=head')
+    req('/w/', '')
+    req('/w/', 'v=dir')
+    req('/w/test/a.md')
+    req('/vmap/')
+    print('--- smoke done ---')
