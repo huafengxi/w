@@ -1,6 +1,6 @@
 import os
 from subprocess import Popen, PIPE, STDOUT
-from dir_store import get_mime_type
+from dir_store import get_mime_type, safe_read
 
 class CmdStore(dict):
     def __init__(self, cmd):
@@ -12,11 +12,14 @@ class CmdStore(dict):
             mime_type = get_mime_type(path)
         return dict(type=mime_type)
     def delete(self, path):
-        return Popen('%s del %s'%(self.cmd, os.path.join('/', path)), shell=True, stdout=PIPE, stderr=STDOUT).communicate()[0]
+        raise Exception('delete disabled: %s'%(path))
     def read(self, path):
-        return Popen('%s read %s'%(self.cmd, os.path.join('/', path)), shell=True, stdout=PIPE, stderr=STDOUT).communicate()[0]
+        real_path = os.path.join('/', path)
+        if os.path.exists(real_path):
+            return safe_read(real_path)
+        return Popen('%s %s'%(self.cmd, real_path), shell=True, stdout=PIPE, stderr=STDOUT).communicate()[0]
     def write(self, path, content):
-        Popen('%s write %s'%(self.cmd, path), shell=True, stdin=PIPE).communicate(content)
+        raise Exception('write disabled: %s'%(path))
     def __repr__(self):
         return 'Cmd("%s")'%(repr(self.cmd))
 
