@@ -15,13 +15,16 @@
          if (m) return m[1];
          return "untitle";
       }
+      function underscore_escape_filter(content) {
+         return content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|_/g, function(m, code){ return code ? code : '\\_'; });
+      }
 
       function initApp(){
         var url = window.location.pathname;
         var gitlab_url = "http://gitlab.alibaba-inc.com/yuanqi.xhf/mysite-mirror/blob/master/";
         $("gitlab_link").href = gitlab_url + url;
         if (inIframe())hide($('head-bar'));
-        makeEditor($('editor'), function (content){ var converter = new showdown.Converter({tables: true}); setWindowTitle(getTitle(content)); $("doc").innerHTML = converter.makeHtml(content.replace(/_/g, '\\_')); });
+        makeEditor($('editor'), function (content){ var converter = new showdown.Converter({tables: true}); setWindowTitle(getTitle(content)); $("doc").innerHTML = converter.makeHtml(underscore_escape_filter(content)); });
       }
     </script>
 </script>
