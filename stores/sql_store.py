@@ -1,8 +1,8 @@
 import os
 import re
 import logging
-from core.store import StoreException
-from core.stores.dir_store import get_mime_type
+from stores.store import StoreException
+from stores.dir_store import get_mime_type
 
 class SqlStore:
     def __init__(self, conn_str):

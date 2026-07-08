@@ -1,4 +1,4 @@
-from core.store import StoreException
+from stores.store import StoreException
 
 class PyEnvStore(dict):
     def __init__(self):

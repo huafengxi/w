@@ -23,7 +23,7 @@ for p in (_repo_root, os.path.join(_repo_root, 'pylib')):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from core.store import _path_is_dir, StoreException
+from stores.store import _path_is_dir, StoreException
 
 ALLOWED = 'OPTIONS, GET, HEAD, PROPFIND, PROPPATCH, PUT, DELETE, MKCOL, COPY, MOVE, LOCK, UNLOCK'
 
@@ -259,12 +259,12 @@ def main():
     if log_file:
         f = open(log_file, 'wb+')
         os.dup2(f.fileno(), 1); os.dup2(f.fileno(), 2)
-    from core.store import build_root_store
+    from stores.store import build_root_store
     from core.wsgi import run_wsgi
     from core.extloader import load_extensions
     # only the webdav ext is needed to register the WebDav store + /dav mount.
     load_extensions(os.environ.get('ext', 'webdav').split(','))
-    root = build_root_store('w/fstab')
+    root = build_root_store('w/stores/fstab')
     app = make_dav_app(root)
     host_port = listen_addr.split(':')
     host, port = (host_port[0], host_port[1]) if len(host_port) == 2 else ('', listen_addr)

@@ -57,7 +57,7 @@ def set_logging(log_file=''):
 
 from core.wsgi import run_wsgi, make_wsgi_app
 import core.vfs_handler as vfs_handler
-from core.store import build_root_store
+from stores.store import build_root_store
 from core.extloader import load_extensions
 import core.registry as registry
 
@@ -87,7 +87,7 @@ def main():
             logging.warning('startup hook failed: %r', e)
 
     set_logging(log_file)
-    root = build_root_store('w/fstab')
+    root = build_root_store('w/stores/fstab')
     handler = vfs_handler.Handler(root).handle_req
     app = make_wsgi_app([handler])
     vfs_handler.set_wsgi_fetcher(app)

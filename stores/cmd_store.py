@@ -1,6 +1,6 @@
 import os
 from subprocess import Popen, PIPE, STDOUT
-from core.stores.dir_store import get_mime_type, safe_read
+from stores.dir_store import get_mime_type, safe_read
 
 class CmdStore(dict):
     def __init__(self, cmd):

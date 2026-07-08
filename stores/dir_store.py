@@ -2,7 +2,7 @@ import os
 import re
 import logging
 import shutil
-from core.store import _path_is_dir
+from stores.store import _path_is_dir
 
 def get_mime_type(path):
     import core.registry as registry

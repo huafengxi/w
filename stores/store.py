@@ -98,14 +98,12 @@ def build_root_store(fstab):
         logging.info('mount %s %s %s', mpoint, type, arg)
         args, kw = parse_cmd_args(arg.split())
         return mount(type, *args, **kw)
-    import core.registry as registry
     mstore = []
-    for table in [fstab] + list(registry.REGISTRY.fstab_fragments):
-        for mpoint, type, arg in file_find_all(r'(?m)^([^# \t]+)\s+(\w+)(.*)\n', table):
-            try:
-                mstore.append((mpoint, do_mount(mpoint, type, arg)))
-            except Exception as e:
-                logging.warning('mount skipped: %s %s %s: %r', mpoint, type, arg, e)
+    for mpoint, type, arg in file_find_all(r'(?m)^([^# \t]+)\s+(\w+)(.*)\n', fstab):
+        try:
+            mstore.append((mpoint, do_mount(mpoint, type, arg)))
+        except Exception as e:
+            logging.warning('mount skipped: %s %s %s: %r', mpoint, type, arg, e)
     logging.info(mstore)
     return RootStore(mstore)
 

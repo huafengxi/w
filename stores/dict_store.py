@@ -1,4 +1,4 @@
-from core.store import StoreException, file_find_all
+from stores.store import StoreException, file_find_all
 
 _VMAP_RE = r'(?m)^([^# ]+):\s+(\S*)\n'
 

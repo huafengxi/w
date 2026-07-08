@@ -9,7 +9,7 @@ os.chdir(WEBROOT)
 for p in ('w', 'w/pylib'):
     if p not in sys.path:
         sys.path.insert(0, p)
-from core.store import build_root_store
+from stores.store import build_root_store
 from core.utils import parse_qs_to_dict
 from core.extloader import load_extensions
 import core.vfs_handler as vfs_handler
@@ -19,7 +19,7 @@ DEFAULT_EXTS = 'introspect,dsync,org,markdown,encrypt,shell,sql,webdav,fileops,m
 _ext_env = os.environ.get('ext')
 load_extensions((DEFAULT_EXTS if _ext_env is None else _ext_env).split(','))
 
-root = build_root_store(os.getenv('fstab', 'w/fstab'))
+root = build_root_store(os.getenv('fstab', 'w/stores/fstab'))
 h = vfs_handler.Handler(root)
 
 def req(path, qs=''):

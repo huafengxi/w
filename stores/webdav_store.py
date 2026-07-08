@@ -4,7 +4,7 @@ import mimetypes
 import re
 import io
 from webdav4.client import Client
-from core.store import _path_is_dir
+from stores.store import _path_is_dir
 
 class WebDavStore:
     def __init__(self, hostname, username, password, root='/', verify=False):

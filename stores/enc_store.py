@@ -1,6 +1,6 @@
 import os
-from core.store import _path_is_dir
-from core.stores.dir_store import DirStore, get_mime_type
+from stores.store import _path_is_dir
+from stores.dir_store import DirStore, get_mime_type
 
 char_map = 'iFXhbcNYDuUgsjrIMJwTpPAqnyvOfSxeEzWBkdtQmlZCoRVKLGHa'
 char_map_len = len(char_map)

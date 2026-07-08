@@ -9,7 +9,6 @@ class CoreRegistry:
         self.script_globals = {}    # names injected into run_script's exec namespace
         self.startup_hooks = []     # callable(context) run once at server start
         self.vmap_fragments = []    # extra vmap file paths merged into /vmap
-        self.fstab_fragments = []   # extra fstab file paths merged into the mount table
         self.bin_dirs = []          # extra dirs prepended to PATH
         self._core_ready = False
 
@@ -22,8 +21,9 @@ class CoreRegistry:
         cls = self.store_classes.get(type)
         if cls is not None:
             return cls
-        # Fallback for not-yet-registered backends (flat layout / legacy).
-        mod = importlib.import_module('%s_store' % type.lower())
+        # Auto-load by fstab type: `T` -> stores.<t_lower>_store -> class TStore.
+        # No explicit registration needed; mount types in fstab resolve directly.
+        mod = importlib.import_module('stores.%s_store' % type.lower())
         cls = getattr(mod, '%sStore' % type)
         self.store_classes[type] = cls
         return cls
@@ -58,12 +58,6 @@ def ensure_core_defaults():
     if reg._core_ready:
         return
     reg._core_ready = True  # set first to avoid re-entrancy during imports
-    # Core store backends.
-    from core.stores.dir_store import DirStore
-    from core.stores.dict_store import DictStore
-    from core.stores.pyenv_store import PyEnvStore
-    reg.register_store('Dir', DirStore)
-    reg.register_store('Dict', DictStore)
-    reg.register_store('PyEnv', PyEnvStore)
-    # Generic mime rule owned by core.
+    # Core stores are auto-loaded by fstab type via get_store_cls; no explicit
+    # registration needed here. Core still owns the generic mime rule.
     reg.register_mime(suffix_rule({'.svg': 'image/svg+xml'}))
