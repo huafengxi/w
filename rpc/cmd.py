@@ -5,7 +5,7 @@ def interp(store, interp='', path='', cmd='', dir='', **kw):
         return dict(type='text/plain'), '2no #!cmd-interp directive for %s\n' % path
     import shlex, threading, queue
     rpath = store.get_rpath(path) or path
-    cwd = dir or os.path.dirname(rpath) or '.'
+    cwd = dir or 'w/bin'
     cmd_list = shlex.split(interp) + [rpath, cmd]
     def gen():
         # One HTTP stream carries both streams: each line is prefixed with a tag
