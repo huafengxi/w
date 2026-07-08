@@ -31,20 +31,23 @@
       // output line-framed with a leading tag byte ('1'=stdout, '2'=stderr).
       function buildCmdWidget(w, interp) {
          var ph = $(w.id);
-         if (!ph) return;
+         if (!ph) return null;
          var box = $n('div');
          var btn = $n('button'); btn.textContent = 'run: ' + w.cmd;
+         var refreshBtn = $n('button'); refreshBtn.textContent = 'refresh';
          var logBtn = $n('button'); logBtn.textContent = 'log';
          var log = $n('pre'); log.className = 'output console'; hide(log);
          var result = $n('div'); result.className = 'doc';
          logBtn.onclick = function(){ toggleVisible(log); };
-         box.appendChild(btn); box.appendChild(logBtn); box.appendChild(log); box.appendChild(result);
+         box.appendChild(btn); box.appendChild(refreshBtn); box.appendChild(logBtn); box.appendChild(log); box.appendChild(result);
          ph.parentNode.replaceChild(box, ph);
          var outText, logText, buf;
-         btn.onclick = function(){
+         function run(done, fresh){
             outText = ''; logText = ''; buf = '';
             result.innerHTML = ''; log.textContent = ''; show(log);
-            rpc_stream('/w/rpc/cmd.py', {interp: interp, path: getUrl(), cmd: w.cmd},
+            var params = {interp: interp, path: getUrl(), cmd: w.cmd};
+            if (fresh) params._fresh_ = 1;
+            rpc_stream('/w/rpc/cmd.py', params,
                function(text){
                   buf += text; var i;
                   while ((i = buf.indexOf('\n')) >= 0) {
@@ -54,9 +57,21 @@
                      else { outText += data; result.innerHTML = renderMarkdown(outText); }
                   }
                },
-               null,
-               function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); });
-         };
+               function(){ if (done) done(); },
+               function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); if (done) done(); });
+         }
+         btn.onclick = function(){ run(); };
+         refreshBtn.onclick = function(){ run(null, true); };
+         return {run: run, log: log};
+      }
+      var cmdRunners = [], cmdLogs = [];
+      function runAll(fresh){
+         var i = 0;
+         (function next(){ if (i < cmdRunners.length) cmdRunners[i++](next, fresh); })();
+      }
+      function toggleLogs(){
+         var anyVisible = cmdLogs.some(function(l){ return isVisible(l); });
+         cmdLogs.forEach(function(l){ anyVisible ? hide(l) : show(l); });
       }
       function renderDoc(content) {
          var interp = getInterp(content);
@@ -69,7 +84,15 @@
          });
          setWindowTitle(getTitle(content));
          $("doc").innerHTML = renderMarkdown(replaced);
-         for (var i = 0; i < widgets.length; i++) buildCmdWidget(widgets[i], interp);
+         cmdRunners = []; cmdLogs = [];
+         for (var i = 0; i < widgets.length; i++) {
+            var w = buildCmdWidget(widgets[i], interp);
+            if (w) { cmdRunners.push(w.run); cmdLogs.push(w.log); }
+         }
+         var disp = cmdRunners.length ? 'inline' : 'none';
+         $('run-all').style.display = disp;
+         $('refresh-all').style.display = disp;
+         $('log-all').style.display = disp;
       }
 
       function initApp(){
@@ -82,7 +105,7 @@
     </script>
   </head>
   <body onload="initApp()">
-    <nav id="head-bar"><a href="javascript:toggle_editor()">edit</a><a  href="javascript:split()">split</a>
+    <nav id="head-bar"><a href="javascript:toggle_editor()">edit</a><a  href="javascript:split()">split</a><a id="run-all" href="javascript:runAll()" style="display:none">run-all</a><a id="refresh-all" href="javascript:runAll(true)" style="display:none">refresh-all</a><a id="log-all" href="javascript:toggleLogs()" style="display:none">log</a>
       <!-- <a href="https://www.google.com/cse/publicurl?cx=005037642699962415424:bbpmoxhiswm">search</a> -->
       <span style="float:right">
         <a id="gitlab_link" href="#">gitlab</a>

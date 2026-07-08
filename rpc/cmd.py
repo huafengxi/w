@@ -1,12 +1,14 @@
 # -*- type=script -*-
-def interp(store, interp='', path='', cmd='', dir='', **kw):
-    logging.info('cmd: interp=%s path=%s cmd=%s dir=%s', interp, path, cmd, dir)
+def interp(store, interp='', path='', cmd='', dir='', _fresh_='', **kw):
+    logging.info('cmd: interp=%s path=%s cmd=%s dir=%s fresh=%s', interp, path, cmd, dir, _fresh_)
     if not interp:
         return dict(type='text/plain'), '2no #!cmd-interp directive for %s\n' % path
     import shlex, threading, queue
     rpath = store.get_rpath(path) or path
     cwd = dir or 'w/bin'
     cmd_list = shlex.split(interp) + [rpath, cmd]
+    if _fresh_:
+        cmd_list.append('_fresh_')
     def gen():
         # One HTTP stream carries both streams: each line is prefixed with a tag
         # byte ('1'=stdout, '2'=stderr) so the client can route it to the result
