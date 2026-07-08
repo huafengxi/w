@@ -18,16 +18,68 @@
       function underscore_escape_filter(content) {
          return content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|_/g, function(m, code){ return code ? code : '\\_'; });
       }
+      function renderMarkdown(text) {
+         var converter = new showdown.Converter({tables: true});
+         return converter.makeHtml(underscore_escape_filter(text));
+      }
+      function getInterp(content) {
+         var m = content.match(/^#!cmd-interp (.*)$/m);
+         return m ? m[1].trim() : '';
+      }
+      // Build an inline-command widget: a run button, a hideable stderr log
+      // console, and a stdout result rendered as markdown. cmd.py streams the
+      // output line-framed with a leading tag byte ('1'=stdout, '2'=stderr).
+      function buildCmdWidget(w, interp) {
+         var ph = $(w.id);
+         if (!ph) return;
+         var box = $n('div');
+         var btn = $n('button'); btn.className = 'large_button'; btn.textContent = 'run: ' + w.cmd;
+         var logBtn = $n('a'); logBtn.href = 'javascript:void(0)'; logBtn.textContent = ' log ';
+         var log = $n('pre'); log.className = 'output console'; hide(log);
+         var result = $n('div'); result.className = 'doc';
+         logBtn.onclick = function(){ toggleVisible(log); };
+         box.appendChild(btn); box.appendChild(logBtn); box.appendChild(log); box.appendChild(result);
+         ph.parentNode.replaceChild(box, ph);
+         var outText, logText, buf;
+         btn.onclick = function(){
+            outText = ''; logText = ''; buf = '';
+            result.innerHTML = ''; log.textContent = ''; show(log);
+            rpc_stream('/w/rpc/cmd.py', {interp: interp, path: getUrl(), cmd: w.cmd},
+               function(text){
+                  buf += text; var i;
+                  while ((i = buf.indexOf('\n')) >= 0) {
+                     var line = buf.slice(0, i + 1); buf = buf.slice(i + 1);
+                     var data = line.slice(1);
+                     if (line.charAt(0) === '2') { logText += data; log.textContent = logText; }
+                     else { outText += data; result.innerHTML = renderMarkdown(outText); }
+                  }
+               },
+               null,
+               function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); });
+         };
+      }
+      function renderDoc(content) {
+         var interp = getInterp(content);
+         var body = content.replace(/^#!cmd-interp .*$/m, '');
+         var widgets = [];
+         var replaced = body.replace(/\$\{([^}]+)\}/g, function(_, cmd){
+            var id = 'cmdw' + widgets.length;
+            widgets.push({id: id, cmd: cmd});
+            return '<span id="' + id + '"></span>';
+         });
+         setWindowTitle(getTitle(content));
+         $("doc").innerHTML = renderMarkdown(replaced);
+         for (var i = 0; i < widgets.length; i++) buildCmdWidget(widgets[i], interp);
+      }
 
       function initApp(){
         var url = window.location.pathname;
         var gitlab_url = "http://gitlab.alibaba-inc.com/yuanqi.xhf/mysite-mirror/blob/master/";
         $("gitlab_link").href = gitlab_url + url;
         if (inIframe())hide($('head-bar'));
-        makeEditor($('editor'), function (content){ var converter = new showdown.Converter({tables: true}); setWindowTitle(getTitle(content)); $("doc").innerHTML = converter.makeHtml(underscore_escape_filter(content)); });
+        makeEditor($('editor'), function (content){ renderDoc(content); });
       }
     </script>
-</script>
   </head>
   <body onload="initApp()">
     <nav id="head-bar"><a href="javascript:toggle_editor()">edit</a><a  href="javascript:split()">split</a>
