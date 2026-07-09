@@ -9,7 +9,7 @@ Each `${name}` below renders as three things:
 3. a **result** pane, showing the command's stdout rendered as markdown.
 
 The `#!cmd-interp` line above names the interpreter. Clicking a button sends
-`/w/rpc/cmd.py?interp=<interp>&path=<this file>&cmd=<name>`, and the server runs
+`/w/ext/shell/rpc/cmd.py?interp=<interp>&path=<this file>&cmd=<name>`, and the server runs
 `<interp> <path> <name>`. Here the interp reads this file, finds the matching
 ` ```cmd <name> ` block, and runs it with bash.
 
