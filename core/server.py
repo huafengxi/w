@@ -60,7 +60,7 @@ def set_logging(log_file=''):
         os.dup2(f.fileno(), 2)
 
 from core.wsgi import run_wsgi, make_wsgi_app
-import core.vfs_handler as vfs_handler
+from core.handler import Handler
 from stores.store import build_root_store
 
 def main():
@@ -77,7 +77,7 @@ def main():
 
     set_logging(log_file)
     root = build_root_store('w/stores/fstab')
-    handler = vfs_handler.Handler(root).handle_req
+    handler = Handler(root).handle_req
     app = make_wsgi_app([handler])
     logging.info("listen at: %s", listen_addr)
     host_port = listen_addr.split(':')

@@ -10,10 +10,10 @@ if 'w' not in sys.path:
     sys.path.insert(0, 'w')
 from stores.store import build_root_store
 from core.utils import parse_qs_to_dict
-import core.vfs_handler as vfs_handler
+import core.handler as handler
 
 root = build_root_store(os.getenv('fstab', 'w/stores/fstab'))
-h = vfs_handler.Handler(root)
+h = handler.Handler(root)
 
 def req(path, qs=''):
     env = {'PATH_INFO': path, 'QUERY_STRING': qs, 'CONTENT_LENGTH': '0',
