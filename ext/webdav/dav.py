@@ -19,9 +19,8 @@ from email.utils import formatdate
 # .../w/ext/webdav/dav.py, so three dirnames up. Put it on sys.path so
 # `import core.*` and `import ext.*` resolve when run as a standalone script.
 _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-for p in (_repo_root, os.path.join(_repo_root, 'pylib')):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
 from stores.store import _path_is_dir, StoreException
 

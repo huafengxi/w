@@ -6,9 +6,8 @@ logging.basicConfig(level=getattr(logging, os.getenv('log', 'WARNING').upper(), 
                     format="%(levelname)s %(message)s")
 WEBROOT = os.getenv('webroot', '/home/yuanqi.xhf/m')
 os.chdir(WEBROOT)
-for p in ('w', 'w/pylib'):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if 'w' not in sys.path:
+    sys.path.insert(0, 'w')
 from stores.store import build_root_store
 from core.utils import parse_qs_to_dict
 from core.extloader import load_extensions

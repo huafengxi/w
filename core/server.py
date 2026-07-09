@@ -15,9 +15,8 @@ import logging
 # `import core.*` (and, during migration, bare ext modules) resolve regardless
 # of how this script is invoked.
 _repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-for p in (_repo_root, os.path.join(_repo_root, 'pylib')):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
 def locate_web_path(path):
     p = os.path.realpath(path)
