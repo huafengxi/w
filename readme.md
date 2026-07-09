@@ -67,10 +67,6 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 - [/w/demo/a.txt?v=append&text=hello](/w/demo/a.txt?v=append&text=hello) append text
 - [/w/demo/a.org?v=code](/w/demo/a.org?v=code), ctrl-alt-s to save file
 
-## utility
-
-- [?v=split](?v=split) or [?v=hsplit](?v=hsplit) to split the screen, obsolet feature.
-
 ## directory view
 
 - [/w/?v=dir](/w/?v=dir) expand sub directory.
