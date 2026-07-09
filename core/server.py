@@ -90,7 +90,6 @@ def main():
     root = build_root_store('w/stores/fstab')
     handler = vfs_handler.Handler(root).handle_req
     app = make_wsgi_app([handler])
-    vfs_handler.set_wsgi_fetcher(app)
     logging.info("listen at: %s", listen_addr)
     host_port = listen_addr.split(':')
     if len(host_port) == 2:

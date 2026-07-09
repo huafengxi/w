@@ -1,4 +1,6 @@
 # -*- type=script -*-
+from ext.dsync import local_file_operator as lfop
+
 def interp(store, src='', q='ls', ts='0', data='', **kw):
     rp = store.get_rpath(src)
     ts = int(ts)

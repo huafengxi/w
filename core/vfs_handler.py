@@ -66,7 +66,6 @@ class VMap(dict):
         return vpath or path
 
 def run_script(store, path, args):
-    import core.registry as registry
     ns = dict(
         os=os, sys=sys, re=re, string=string, json=json, io=io, time=time,
         logging=logging, urllib=urllib, itertools=itertools, copy=copy,
@@ -74,7 +73,6 @@ def run_script(store, path, args):
         dict_updated=dict_updated, popen=popen, sub=sub,
         response_part_file=response_part_file, build_dict=build_dict,
     )
-    ns.update(registry.REGISTRY.script_globals)
     exec(compile(store.read(path), path[1:], mode='exec'), ns)
     output = ns['interp'](store, **args)
     if type(output) != tuple:
@@ -153,19 +151,6 @@ def dict_updated(d, **kw):
     new_dict = copy.copy(d)
     new_dict.update(**kw)
     return new_dict
-
-def make_wsgi_fetcher(wsgi_handler):
-    def dummy_response(*args):pass
-    def fetch(host, path, query_string):
-        env = {'PATH_INFO': path, 'CONTENT_LENGTH': '0', 'wsgi.input': io.StringIO(), 'QUERY_STRING': query_string}
-        return ''.join(wsgi_handler(env, dummy_response))
-    return fetch
-
-def set_wsgi_fetcher(app):
-    import core.registry as registry
-    archive = registry.REGISTRY.script_globals.get('archive')
-    if archive is not None:
-        archive.fetch = make_wsgi_fetcher(app)
 
 def popen(cmd, input=None, env=None):
     p = Popen(cmd, cwd='.', shell=True, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)

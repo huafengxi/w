@@ -1,4 +1,6 @@
 # -*- type=script -*-
+from ext.media.album import AlbumDB
+
 def interp(store, q=None, e=None, src=None, **kw):
     a = AlbumDB(src, store)
     attrs = 'name tags circle va'.split()

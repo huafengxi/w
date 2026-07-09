@@ -1,32 +1,11 @@
-#!/bin/env python2
-'''
-Usages:
-  ./archive.py http://127.0.0.1:8080/         # print sitemap
-  ./archive.py http://127.0.0.1:8080/script
-  type=tar ./archive.py http://127.0.0.1:8080 >a.tar
-'''
-import sys
-import os
 import re
 import io
 import tarfile
-import urllib.request, urllib.error, urllib.parse
 import time
 import logging
 
 def need_ignore(path):
     return re.match('/.git|/nohup.out|/myapp.log|/emacs.d/local|/emacs.d/server|.+[.]elc', path)
-def fetch(host, path, query_string):
-    url = '%s/%s?%s'%(host, path, query_string)
-    sleep_time = 1
-    while True:
-        try:
-            print('fetch url: %s'%(url))
-            return urllib.request.urlopen(url).read()
-        except:
-            print("urlopen(%s) fail, need retry"%(url))
-            time.sleep(sleep_time)
-            sleep_time *= 2
 
 def join_path(p1, p2):
     return re.sub('[/]+', '/', '%s/%s'%(p1, p2))
@@ -55,7 +34,7 @@ class TarHandler:
         tarinfo.mtime = self.time
         self.tar.addfile(tarinfo, fileobj)
 
-def gen_sitemap(host, base='/'):
+def gen_sitemap(store, base='/'):
     unfetched, fetched = [base], {}
     while unfetched:
         path = unfetched.pop()
@@ -64,38 +43,23 @@ def gen_sitemap(host, base='/'):
         if need_ignore(path):
             continue
         if path.endswith('/'):
-            content = fetch(host, path, 'v=read')
-            if type(content) != 'str':
-                print('path=%s content=%s'%(path, content))
+            content = store.read(path)
+            if isinstance(content, bytes):
+                content = content.decode()
             unfetched.extend(join_path(path, line) for line in content.split('\n') if not line.startswith('..') and not line.startswith('.git'))
-        fetched.update(**{path:True})
+        fetched[path] = True
         yield path
 
-def archive(host, base='/'):
-    for path in gen_sitemap(host, base):
+def archive(store, base='/'):
+    for path in gen_sitemap(store, base):
         logging.info('archive: %s', path)
         if path.endswith('/'):
             yield path, None
         else:
-            content = fetch(host, path, 'v=read')
-            yield path, content
+            yield path, store.read(path)
 
-def archive_to_tar(host, base='/'):
+def archive_to_tar(store, base='/'):
     handler = TarHandler()
-    for path, content in archive(host, base):
+    for path, content in archive(store, base):
         handler.add(path, content)
     return handler.get_content()
-    
-def help():
-    print(__doc__)
-    
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    type = os.getenv('type', 'list')
-    if type == 'list':
-        print('\n'.join(gen_sitemap(sys.argv[1])))
-    elif type == 'tar':
-        sys.stdout.write(archive_to_tar(sys.argv[1]))
-    else:
-        help()
-            

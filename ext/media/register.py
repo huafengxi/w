@@ -4,7 +4,6 @@ import sys
 import subprocess
 
 from core.registry import suffix_rule
-from ext.media.album import AlbumDB
 
 # content-type presets for the core `find?t=` shorthand; media owns this knowledge.
 _FIND_PRESETS = dict(
@@ -24,8 +23,7 @@ def _start_timestamp_server(ctx):
     subprocess.Popen([sys.executable, script])
 
 def register(reg):
-    reg.script_globals['AlbumDB'] = AlbumDB
-    reg.script_globals['find_presets'] = _FIND_PRESETS
+    reg.find_presets.update(_FIND_PRESETS)
     reg.register_mime(suffix_rule({'.plist': 'plist', '.flac': 'audio/flac'}))
     reg.startup_hooks.append(_start_timestamp_server)
     reg.vmap_fragments.append('w/ext/media/vmap.frag')

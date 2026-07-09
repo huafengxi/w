@@ -1,6 +1,7 @@
 # -*- type=script -*-
 # Core read-only file rpc: echo/head/find/read/dir/dir2. No mutation, no ext deps.
-# `find_presets` is an injected global (dict); ext/media populates t= presets.
+# t= presets live on registry.REGISTRY.find_presets (populated by ext/media).
+import core.registry as registry
 
 def interp(store, v='echo', src=None, **kw):
     def make_html(html='/w/view/template.html', meta='<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">', **kw):
@@ -10,8 +11,7 @@ def interp(store, v='echo', src=None, **kw):
     elif v == 'head':
         return dict(type='text/plain'), repr(store.head(src))
     elif v == 'find':
-        presets = globals().get('find_presets', {})
-        pat = kw.get('pat') or presets.get(kw.get('t'), '')
+        pat = kw.get('pat') or registry.REGISTRY.find_presets.get(kw.get('t'), '')
         li = [i for i in store.find(src) if re.search(pat, i, re.IGNORECASE)]
         return dict(type='text/plain'), '\n'.join(li)
     elif v == 'read':
