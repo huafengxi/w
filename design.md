@@ -102,6 +102,6 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 ## playback state broadcast
 
 `servers/timestamp-server.py` 独立启动，监听 TCP 23554。
-浏览器端的 `view/state_reporter.js` 在播放/暂停/定时回报时把状态写入
+浏览器端的 `ext/media/view/state_reporter.js` 在播放/暂停/定时回报时把状态写入
 `playing-state.json` ，server 直接监视该文件并向所有连接的客户端广播实时进度，
 用于多端同步播放。

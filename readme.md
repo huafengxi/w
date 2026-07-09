@@ -88,7 +88,7 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 - [/w/demo/a.plist?v=plist](/w/demo/a.plist?v=plist) play list edit.
 - [/w/demo/a.mp4?v=video](/w/demo/a.mp4?v=video) play single video file.
 - shared playback state is broadcast on TCP port 23554 via `servers/timestamp-server.py`
-  (launch separately); media views post state through `view/state_reporter.js`.
+  (launch separately); media views post state through `ext/media/view/state_reporter.js`.
 
 ## javascript API
 
