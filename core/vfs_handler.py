@@ -67,7 +67,14 @@ class VMap(dict):
 
 def run_script(store, path, args):
     import core.registry as registry
-    ns = dict(registry.REGISTRY.script_globals)
+    ns = dict(
+        os=os, sys=sys, re=re, string=string, json=json, io=io, time=time,
+        logging=logging, urllib=urllib, itertools=itertools, copy=copy,
+        Popen=Popen, PIPE=PIPE, STDOUT=STDOUT, NULLFD=NULLFD,
+        dict_updated=dict_updated, popen=popen, sub=sub,
+        response_part_file=response_part_file, build_dict=build_dict,
+    )
+    ns.update(registry.REGISTRY.script_globals)
     exec(compile(store.read(path), path[1:], mode='exec'), ns)
     output = ns['interp'](store, **args)
     if type(output) != tuple:
@@ -171,18 +178,3 @@ def popen(cmd, input=None, env=None):
 def sub(tpl, __d={}, **kw):
     return string.Template(tpl).safe_substitute(__d, **kw)
 
-def _core_script_globals():
-    # Generic helpers scripts may rely on; all core-owned, no ext dependency.
-    return dict(
-        os=os, sys=sys, re=re, string=string, json=json, io=io, time=time,
-        logging=logging, urllib=urllib, itertools=itertools, copy=copy,
-        Popen=Popen, PIPE=PIPE, STDOUT=STDOUT, NULLFD=NULLFD,
-        dict_updated=dict_updated, popen=popen, sub=sub,
-        response_part_file=response_part_file, build_dict=build_dict,
-    )
-
-def _register_script_globals():
-    import core.registry as registry
-    registry.REGISTRY.script_globals.update(_core_script_globals())
-
-_register_script_globals()
