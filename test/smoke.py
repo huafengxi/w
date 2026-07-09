@@ -34,5 +34,4 @@ if __name__ == '__main__':
     req('/w/', '')
     req('/w/', 'v=dir')
     req('/w/test/a.md')
-    req('/vmap/')
     print('--- smoke done ---')

@@ -1,9 +1,10 @@
-import ast
 import traceback
 import logging
 import urllib.parse
 import cgi
 import re
+
+from vmap import build as vmap_build
 
 def parse_post(ctype, post, post_size):
     if ctype.startswith('multipart/form-data'):
@@ -46,10 +47,8 @@ def get_meta(store, path):
     return meta
 
 class VMap(dict):
-    def __init__(self, store):
-        data = store.read('/vmap/')
-        if isinstance(data, bytes): data = data.decode()
-        dict.__init__(self, ast.literal_eval(data))
+    def __init__(self):
+        dict.__init__(self, vmap_build())
     def translate(self, path, meta, args):
         mime = meta.get('type')
         if not mime: return path
@@ -113,7 +112,7 @@ def build_dict(*__args, **__kw):
 class Handler:
     def __init__(self, store):
         self.store = store
-        self.vmap = VMap(store)
+        self.vmap = VMap()
     def handle_req(self, env, path, query, post):
         return self.do_req(path, prepare_args(env, query, post))
     def do_req(self, path, args):

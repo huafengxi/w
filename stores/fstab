@@ -1,4 +1,3 @@
-/vmap   Vmap
 /w      Dir     w
 # -- ext mounts (auto-loaded by fstab type via stores.<t_lower>_store) --
 /nvr  Enc nvr

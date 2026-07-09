@@ -44,8 +44,8 @@ query string 一起并入 args。
 `mime type` 到 `view_path` 的映射叫 view_map，服务时通过 [/vmap/](/vmap/) 暴露。
 
 view_map 也是按约定拼装：`vmap/__init__.py:build()` 读入 `vmap/vmap.frag`
-(核心映射) 再合并所有 `ext/<name>/vmap.frag` (ext 追加自己的映射)，结果由
-挂在 `/vmap` 的 `DictStore` 提供给 `VMap` 加载。
+(核心映射) 再合并所有 `ext/<name>/vmap.frag` (ext 追加自己的映射)，
+`core/handler.py:VMap` 在启动时直接调用 `vmap.build()` 加载。
 
 view 文件本身分布在 `core/view/` 与各 `ext/<feature>/view/` 目录。
 `core/view/` 只保留通用组件 (`template/404/code/iframe/split` 等)，每个 ext
@@ -74,18 +74,17 @@ script 分布在 `core/rpc/` (核心只读 rpc，如 `core_read.py`) 与
 (没有 fstab.frag)，每行 `挂载点 类型 参数...`。目前 `stores/` 下提供的
 store 实现：
 
-1. DictStore  — 简单的内存键值 store，用来加载 `vmap` 等配置。
+1. DictStore  — 通用的内存键值 store (空 dict 起步，通过 write 更新)。
 2. DirStore   — 把本地目录挂载为 store。
-3. PyEnvStore — 把当前 python 进程的全局变量暴露为 store，用于 introspect ([/g/](/g/))。
-4. EncStore   — 在 DirStore 基础上对文件名与内容做混淆，实现简单的加密目录。
-5. WebDavStore — 通过 `webdav4` 把远端 WebDAV 挂载为 store，支持 range read。
-6. CmdStore   — 把 read/write/delete 委托给外部命令执行。
-7. SqlStore   — 用关系数据库实现的 store (见 `stores/sql_store.py`)。
+3. EncStore   — 在 DirStore 基础上对文件名与内容做混淆，实现简单的加密目录。
+4. WebDavStore — 通过 `webdav4` 把远端 WebDAV 挂载为 store，支持 range read。
+5. CmdStore   — 把 read/write/delete 委托给外部命令执行。
+6. SqlStore   — 用关系数据库实现的 store (见 `stores/sql_store.py`)。
 
 store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的类型 `T` 后，
-`import stores.<t>_store` 并取 `TStore` 类；若类上定义了 `from_fstab`
-classmethod，则用它作为工厂 (否则直接调用类)。因此新增 store 只要在
-`stores/` 下放一个 `<t>_store.py` 并在 fstab 里加行即可，不需要注册代码。
+`import stores.<t>_store` 并取 `TStore` 类，然后 `cls(*args, **kw)` 实例化。
+因此新增 store 只要在 `stores/` 下放一个 `<t>_store.py` 并在 fstab 里加行即可，
+不需要注册代码。
 
 ## 扩展的约定
 
