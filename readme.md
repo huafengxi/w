@@ -14,8 +14,7 @@ log=debug w/core/server.py 8080
 The server is split into a feature-free `core/` plus per-feature `ext/<feature>/`
 extensions. vmap, mime, and `PATH` bin dirs are picked up by convention from
 `ext/<name>/{vmap,mime}.frag` and `ext/<name>/bin/` (composed by `w/vmap`,
-`w/mime`, and `core/server.py:set_path`). `v=find` and its `t` presets live in
-`ext/media/rpc/find_rpc.py`.
+`w/mime`, and `core/server.py:set_path`).
 
 ## config ssl/basic auth
 
@@ -45,7 +44,7 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 - [/w/demo/interp.py?v=q](/w/demo/interp.py?v=q) interactive `interp()` defined in python file.
 - [/w/demo/demo.ish](/w/demo/demo.ish) ctrl+click to execute cmd.
 
-## hit.py console
+## more on shell
 
 - [/w/demo/a.ish](/w/demo/a.ish) for a more complex example.
 - [/w/demo/a.ish?_log_=3](/w/demo/a.ish?_log_=3) for verbose log.
@@ -70,7 +69,6 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 
 ## utility
 
-- [?v=qrcode](?v=qrcode)
 - [?v=split](?v=split) or [?v=hsplit](?v=hsplit) to split the screen, obsolet feature.
 
 ## directory view
@@ -104,12 +102,3 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 - [/w/demo/a.org?v=del](/w/demo/a.org?v=del)
 - [/w/demo/a.org?v=write](/w/demo/a.org?v=write)
 - [/w/demo/a.org?v=mv&dest=/w/demo/b.org](/w/demo/a.org?v=mv&dest=/w/demo/b.org) rename within one store.
-
-## remote storage
-
-- mount a WebDAV endpoint via `fstab`, e.g. `/dav WebDav https://host user pass /`,
-  see `stores/webdav_store.py` (requires `pip install webdav4`; optional `httpx[socks]` if the endpoint needs a SOCKS proxy).
-
-## introspect
-
-- [/g/](/g/) global vars
