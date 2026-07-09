@@ -1,8 +1,5 @@
 # -*- type=script -*-
-# Core read-only file rpc: echo/head/find/read/dir/dir2. No mutation, no ext deps.
-# t= presets live on registry.REGISTRY.find_presets (populated by ext/media).
-import core.registry as registry
-
+# Core read-only file rpc: echo/head/read/dir/dir2. No mutation, no ext deps.
 def interp(store, v='echo', src=None, **kw):
     def make_html(html='/w/view/template.html', meta='<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">', **kw):
         return string.Template(store.read(html).decode()).safe_substitute(meta=meta, **kw)
@@ -10,10 +7,6 @@ def interp(store, v='echo', src=None, **kw):
         return dict(type='text/plain'), 'src=%s kw=%s'%(src, kw)
     elif v == 'head':
         return dict(type='text/plain'), repr(store.head(src))
-    elif v == 'find':
-        pat = kw.get('pat') or registry.REGISTRY.find_presets.get(kw.get('t'), '')
-        li = [i for i in store.find(src) if re.search(pat, i, re.IGNORECASE)]
-        return dict(type='text/plain'), '\n'.join(li)
     elif v == 'read':
         return response_part_file(store, src)
     elif v == 'dir' or v == 'dir2':

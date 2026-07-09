@@ -1,6 +1,5 @@
 # file rpc (core read-only)
 head: /w/core/rpc/core_read.py
-find: /w/core/rpc/core_read.py
 read: /w/core/rpc/core_read.py
 
 # directory view (core read-only)
