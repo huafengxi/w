@@ -8,8 +8,6 @@ dir2: /w/core/rpc/core_read.py?v=dir2
 
 # utility
 code: /w/view/code.html
-qrcode: /w/view/qrcode.html
-
 
 # python script, for rpc impl
 script:
