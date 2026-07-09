@@ -10,13 +10,7 @@ if 'w' not in sys.path:
     sys.path.insert(0, 'w')
 from stores.store import build_root_store
 from core.utils import parse_qs_to_dict
-from core.extloader import load_extensions
 import core.vfs_handler as vfs_handler
-
-# Mirror core/server.py DEFAULT_EXTS; override with env `ext` (`ext=` for core-only).
-DEFAULT_EXTS = 'introspect,org,markdown,encrypt,shell,sql,fileops,media'
-_ext_env = os.environ.get('ext')
-load_extensions((DEFAULT_EXTS if _ext_env is None else _ext_env).split(','))
 
 root = build_root_store(os.getenv('fstab', 'w/stores/fstab'))
 h = vfs_handler.Handler(root)

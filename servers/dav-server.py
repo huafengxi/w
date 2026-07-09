@@ -260,9 +260,6 @@ def main():
         os.dup2(f.fileno(), 1); os.dup2(f.fileno(), 2)
     from stores.store import build_root_store
     from core.wsgi import run_wsgi
-    from core.extloader import load_extensions
-    # Store classes auto-load by fstab type; only load exts when caller asks.
-    load_extensions(os.environ.get('ext', '').split(','))
     root = build_root_store('w/stores/fstab')
     app = make_dav_app(root)
     host_port = listen_addr.split(':')

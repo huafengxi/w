@@ -62,11 +62,6 @@ def set_logging(log_file=''):
 from core.wsgi import run_wsgi, make_wsgi_app
 import core.vfs_handler as vfs_handler
 from stores.store import build_root_store
-from core.extloader import load_extensions
-
-# Extensions loaded by default; override with env `ext` (comma-separated,
-# `ext=` for a feature-free core).
-DEFAULT_EXTS = 'introspect,org,markdown,encrypt,shell,sql,fileops,media'
 
 def main():
     if len(sys.argv) <= 1:
@@ -76,8 +71,6 @@ def main():
     logging.basicConfig(level=getattr(logging, log_level.upper(), None), format="%(asctime)s %(levelname)s %(message)s")
     listen_addr = sys.argv[1]
     log_file = sys.argv[2] if len(sys.argv) > 2 else ''
-    ext_env = os.environ.get('ext')
-    load_extensions((DEFAULT_EXTS if ext_env is None else ext_env).split(','))
     set_path()
     logging.info('web_start: listen=%s dir=%s log=%s(%s) PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, os.getenv('PATH'), os.getenv('PYTHONPATH'))
     kill_process('server.py +{}'.format(listen_addr))

@@ -9,13 +9,10 @@ once deployed, you can creat file with special extensions for different purpose.
 : log=debug w/core/server.py 8080
 
 The server is split into a feature-free =core/= plus per-feature =ext/<feature>/=
-extensions. On startup =core/server.py= reads env =ext= (comma-separated) and
-pre-imports each =ext/<feature>/=; vmap, mime, and =PATH= bin dirs are picked up
-by convention from =ext/<name>/{vmap,mime}.frag= and =ext/<name>/bin/= (composed
-by =w/vmap=, =w/mime=, and =core/server.py:set_path=). =v=find= and its =t=
-presets live in =ext/media/rpc/find_rpc.py=. Default =ext= is the full ordered
-list =introspect,org,markdown,encrypt,shell,sql,fileops,media=. Set =ext= empty
-for a feature-free core run: =ext= w/core/server.py 8080=.
+extensions. vmap, mime, and =PATH= bin dirs are picked up by convention from
+=ext/<name>/{vmap,mime}.frag= and =ext/<name>/bin/= (composed by =w/vmap=,
+=w/mime=, and =core/server.py:set_path=). =v=find= and its =t= presets live in
+=ext/media/rpc/find_rpc.py=.
 
 * config ssl/basic auth
 : echo 'user:passwd' > ~/.auth/passwd
