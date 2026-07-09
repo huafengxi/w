@@ -19,4 +19,4 @@ hsplit: /w/view/hsplit.html
 tsplit: /w/view/tsplit.html
 
 # python script, for rpc impl
-script: 
+script:

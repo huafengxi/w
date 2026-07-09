@@ -1,4 +1,4 @@
-/vmap   Dict	w/vmap
+/vmap   Dict	vmap
 /w      Dir     w
 /g      PyEnv
 # -- ext mounts (auto-loaded by fstab type via stores.<t_lower>_store) --

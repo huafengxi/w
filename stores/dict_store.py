@@ -1,20 +1,16 @@
-import os
+import importlib
 
-from stores.store import StoreException, file_find_all
-
-_VMAP_RE = r'(?m)^([^# ]+):\s+(\S*)\n'
+from stores.store import StoreException
 
 class DictStore(dict):
-    def __init__(self, path):
-        # Base vmap + any sibling ext/<name>/vmap.frag by convention.
-        pairs = file_find_all(_VMAP_RE, path)
-        ext_dir = os.path.join(os.path.dirname(path), 'ext')
-        if os.path.isdir(ext_dir):
-            for name in sorted(os.listdir(ext_dir)):
-                frag = os.path.join(ext_dir, name, 'vmap.frag')
-                if os.path.isfile(frag):
-                    pairs.extend(file_find_all(_VMAP_RE, frag))
-        dict.__init__(self, pairs)
+    def __init__(self, data):
+        dict.__init__(self, data)
+
+    @classmethod
+    def from_fstab(cls, module='vmap'):
+        """fstab factory: `/vmap Dict vmap` -> DictStore(vmap.build())."""
+        return cls(importlib.import_module(module).build())
+
     def head(self, path):
         if path == '/' or path == '' or path in self:
             return dict(type='text/plain')

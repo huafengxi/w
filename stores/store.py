@@ -120,4 +120,6 @@ def get_store_cls(type):
     return cls
 
 def mount(type, *args, **kw):
-    return get_store_cls(type)(*args, **kw)
+    cls = get_store_cls(type)
+    factory = getattr(cls, 'from_fstab', cls)
+    return factory(*args, **kw)

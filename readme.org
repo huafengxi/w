@@ -10,9 +10,9 @@ once deployed, you can creat file with special extensions for different purpose.
 
 The server is split into a feature-free =core/= plus per-feature =ext/<feature>/=
 extensions. On startup =core/server.py= reads env =ext= (comma-separated) and
-calls =register(REGISTRY)= in each =ext/<feature>/register.py=; store classes,
-mime rules, vmap/fstab fragments, and =PATH= bin dirs all register through this
-harness. Default =ext= is the full ordered list
+calls =register(REGISTRY)= in each =ext/<feature>/register.py= for =PATH= bin
+dirs and =find?t== presets; vmap and mime entries are picked up by convention
+from =ext/<name>/{vmap,mime}.frag= (composed by =w/vmap= and =w/mime=). Default =ext= is the full ordered list
 =introspect,org,markdown,encrypt,shell,sql,fileops,media=. Set =ext= empty for a
 feature-free core run: =ext= w/core/server.py 8080=.
 

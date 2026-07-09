@@ -5,8 +5,8 @@ import shutil
 from stores.store import _path_is_dir
 
 def get_mime_type(path):
-    import core.registry as registry
-    return registry.REGISTRY.guess_mime(path)
+    import mime
+    return mime.guess(path)
 
 import chardet
 def get_encoding(content):
