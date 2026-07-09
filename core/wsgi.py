@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 import time
-from core.utils import parse_qs_to_dict, safe_read_text
+import urllib.parse
 
 def fork_as_daemon(daemon):
     if not daemon: return
@@ -17,7 +17,7 @@ def make_wsgi_app(handlers):
             return dict(type='text/plain'), '%s %s\n'%(path, query)
     def err_handler(env, path, query, post):
         logging.debug("HANDLE_404: %s", path)
-        return dict(type='text/html'), safe_read_text("w/view/404.html")
+        return dict(type='text/html'), open("w/view/404.html").read()
     def try_these(handlers, env, path, query, post):
         for f in handlers:
             ret = f(env, path, query, post)
@@ -31,7 +31,7 @@ def make_wsgi_app(handlers):
 
     def handle_request(env, path, query, post):
         logging.debug("REQ: %s %s query=%s", path, env, repr(query))
-        query_args = parse_qs_to_dict(query)
+        query_args = {k: v[-1] for k, v in urllib.parse.parse_qs(query).items()}
         meta, content = try_these([echo_handler] + handlers + [err_handler], env, path, query_args, post)
         logging.info("RESP: %s meta=%s", path, meta)
         if not meta.get('type'):

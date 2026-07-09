@@ -4,7 +4,6 @@ import logging
 import urllib.parse
 import cgi
 import re
-from core.utils import parse_qs_to_dict
 
 def parse_post(ctype, post, post_size):
     if ctype.startswith('multipart/form-data'):
@@ -41,7 +40,7 @@ def get_meta(store, path):
     meta = store.head(path) or dict()
     if 'path' in meta:
         url_info = urllib.parse.urlparse(meta.get('path'))
-        meta.update(parse_qs_to_dict(url_info.query), path=url_info.path)
+        meta.update({k: v[-1] for k, v in urllib.parse.parse_qs(url_info.query).items()}, path=url_info.path)
     else:
         meta.update(path=path)
     return meta
@@ -61,7 +60,7 @@ class VMap(dict):
             vpath = self.get(mime + '/curl', vpath)
         if vpath:
             url_info =  urllib.parse.urlparse(vpath)
-            vpath, view_query_args = url_info.path, parse_qs_to_dict(url_info.query)
+            vpath, view_query_args = url_info.path, {k: v[-1] for k, v in urllib.parse.parse_qs(url_info.query).items()}
             args.update(view_query_args, src=path)
         return vpath or path
 
