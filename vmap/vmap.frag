@@ -11,11 +11,5 @@ code: /w/view/code.html
 qrcode: /w/view/qrcode.html
 
 
-# view frame
-iframe: /w/view/iframe.html
-split: /w/view/split.html
-hsplit: /w/view/hsplit.html
-tsplit: /w/view/tsplit.html
-
 # python script, for rpc impl
 script:
