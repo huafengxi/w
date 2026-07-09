@@ -28,9 +28,9 @@ def req(path, qs=''):
         print('ERR  %-24s %-10s %r' % (path, qs, e))
 
 if __name__ == '__main__':
-    req('/w/readme.org')
-    req('/w/readme.org', 'v=read')
-    req('/w/readme.org', 'v=head')
+    req('/w/readme.md')
+    req('/w/readme.md', 'v=read')
+    req('/w/readme.md', 'v=head')
     req('/w/', '')
     req('/w/', 'v=dir')
     req('/w/test/a.md')
