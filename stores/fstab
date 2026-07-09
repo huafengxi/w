@@ -1,9 +1,9 @@
 /vmap   Dict	w/vmap
 /w      Dir     w
 /g      PyEnv
-/	Dir	.
 # -- ext mounts (auto-loaded by fstab type via stores.<t_lower>_store) --
 /nvr  Enc nvr
 /ARJ  Enc ARJ
-/dav  WebDav https://dav.mypikpak.com nfij gkcbxfzq /
+/dav  WebDav dav.env
 /R    Cmd w/ext/shell/bin/model_router_md_template_serve.py
+/	Dir	.

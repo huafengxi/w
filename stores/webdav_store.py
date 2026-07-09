@@ -1,13 +1,66 @@
 import os
+import re
 import logging
 import mimetypes
-import re
 import io
+from urllib.parse import urlsplit, unquote
 from webdav4.client import Client
 from stores.store import _path_is_dir
 
+def _resolve_env_path(name):
+    if os.path.isabs(name) and os.path.isfile(name):
+        return name
+    cand = os.path.join(os.getcwd(), name)
+    if os.path.isfile(cand):
+        return cand
+    cand = os.path.join(os.path.dirname(os.path.realpath(__file__)), name)
+    if os.path.isfile(cand):
+        return cand
+    return name  # let the open() downstream raise the real error
+
+def _parse_env_file(path):
+    env = {}
+    with open(path) as f:
+        for line in f:
+            m = re.match(r"^\s*(?:export\s+)?([A-Za-z_]\w*)\s*=\s*(.*)\s*$", line)
+            if not m:
+                continue
+            val = m.group(2).strip()
+            if (len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'")):
+                val = val[1:-1]
+            env[m.group(1)] = val
+    return env
+
+def _creds_from_env(env):
+    url = env.get('WEBDAV_ENDPOINT_URL') or env.get('WEBDAV_URL')
+    if url:
+        p = urlsplit(url)
+        hostname = '://'.join([p.scheme, (p.hostname or '')])
+        if p.port:
+            hostname = '%s:%d' % (hostname, p.port)
+        return (
+            hostname,
+            unquote(p.username) if p.username else env.get('WEBDAV_USERNAME', ''),
+            unquote(p.password) if p.password else env.get('WEBDAV_PASSWORD', ''),
+            env.get('WEBDAV_ROOT', '/'),
+            _str_bool(env.get('WEBDAV_VERIFY', '0')),
+        )
+    return (
+        env.get('WEBDAV_HOSTNAME', ''),
+        env.get('WEBDAV_USERNAME', ''),
+        env.get('WEBDAV_PASSWORD', ''),
+        env.get('WEBDAV_ROOT', '/'),
+        _str_bool(env.get('WEBDAV_VERIFY', '0')),
+    )
+
+def _str_bool(s):
+    return str(s).lower() in ('1', 'true', 'yes', 'on')
+
 class WebDavStore:
-    def __init__(self, hostname, username, password, root='/', verify=False):
+    def __init__(self, hostname, username=None, password=None, root='/', verify=False):
+        if username is None and isinstance(hostname, str) and hostname.endswith('.env'):
+            env = _parse_env_file(_resolve_env_path(hostname))
+            hostname, username, password, root, verify = _creds_from_env(env)
         self.hostname = hostname.rstrip('/')
         self.root = '/' + root.strip('/')
         
