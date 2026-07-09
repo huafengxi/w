@@ -62,7 +62,7 @@ import core.registry as registry
 
 # Extensions loaded by default; override with env `ext` (comma-separated,
 # `ext=` for a feature-free core). Media is last (owns the startup hook).
-DEFAULT_EXTS = 'introspect,dsync,org,markdown,encrypt,shell,sql,webdav,fileops,media'
+DEFAULT_EXTS = 'introspect,org,markdown,encrypt,shell,sql,webdav,fileops,media'
 
 def main():
     if len(sys.argv) <= 1:
