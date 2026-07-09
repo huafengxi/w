@@ -52,4 +52,6 @@ class EncStore:
         return data_conv(data)
 
     def write(self, path, content):
-        return self.store.write(name_conv(path), data_conv(content.encode('utf-8')))
+        if isinstance(content, str):
+            content = content.encode('utf-8')
+        return self.store.write(name_conv(path), data_conv(content))
