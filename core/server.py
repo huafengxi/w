@@ -58,11 +58,10 @@ from core.wsgi import run_wsgi, make_wsgi_app
 import core.vfs_handler as vfs_handler
 from stores.store import build_root_store
 from core.extloader import load_extensions
-import core.registry as registry
 
 # Extensions loaded by default; override with env `ext` (comma-separated,
-# `ext=` for a feature-free core). Media is last (owns the startup hook).
-DEFAULT_EXTS = 'introspect,org,markdown,encrypt,shell,sql,webdav,fileops,media'
+# `ext=` for a feature-free core).
+DEFAULT_EXTS = 'introspect,org,markdown,encrypt,shell,sql,fileops,media'
 
 def main():
     if len(sys.argv) <= 1:
@@ -77,13 +76,6 @@ def main():
     set_path()
     logging.info('web_start: listen=%s dir=%s log=%s(%s) PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, os.getenv('PATH'), os.getenv('PYTHONPATH'))
     kill_process('server.py +{}'.format(listen_addr))
-
-    hook_ctx = dict(web_path=web_path, _web_path_=_web_path_)
-    for hook in registry.REGISTRY.startup_hooks:
-        try:
-            hook(hook_ctx)
-        except Exception as e:
-            logging.warning('startup hook failed: %r', e)
 
     set_logging(log_file)
     root = build_root_store('w/stores/fstab')

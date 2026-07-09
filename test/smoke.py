@@ -14,7 +14,7 @@ from core.extloader import load_extensions
 import core.vfs_handler as vfs_handler
 
 # Mirror core/server.py DEFAULT_EXTS; override with env `ext` (`ext=` for core-only).
-DEFAULT_EXTS = 'introspect,org,markdown,encrypt,shell,sql,webdav,fileops,media'
+DEFAULT_EXTS = 'introspect,org,markdown,encrypt,shell,sql,fileops,media'
 _ext_env = os.environ.get('ext')
 load_extensions((DEFAULT_EXTS if _ext_env is None else _ext_env).split(','))
 

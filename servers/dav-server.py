@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 '''
-dav.py PORT [LOG_FILE]
+dav-server.py PORT [LOG_FILE]
 
 Standalone WebDAV server exposing the RootStore from w/fstab.
 Auth + SSL come from wsgi.run_wsgi (BasicAuth, ~/.auth/*).
 
-  log=info ./dav.py 8081
-  nossl=1 log=debug ./dav.py 8081
+  log=info ./dav-server.py 8081
+  nossl=1 log=debug ./dav-server.py 8081
 '''
 import logging
 import os
@@ -16,9 +16,9 @@ import xml.etree.ElementTree as ET
 from email.utils import formatdate
 
 # repo root = dir containing the `core` package (.../w); this file lives at
-# .../w/ext/webdav/dav.py, so three dirnames up. Put it on sys.path so
+# .../w/servers/dav-server.py, so two dirnames up. Put it on sys.path so
 # `import core.*` and `import ext.*` resolve when run as a standalone script.
-_repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+_repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
@@ -261,8 +261,8 @@ def main():
     from stores.store import build_root_store
     from core.wsgi import run_wsgi
     from core.extloader import load_extensions
-    # only the webdav ext is needed to register the WebDav store + /dav mount.
-    load_extensions(os.environ.get('ext', 'webdav').split(','))
+    # Store classes auto-load by fstab type; only load exts when caller asks.
+    load_extensions(os.environ.get('ext', '').split(','))
     root = build_root_store('w/stores/fstab')
     app = make_dav_app(root)
     host_port = listen_addr.split(':')

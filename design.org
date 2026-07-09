@@ -53,7 +53,7 @@ interp的结果应该是一个tuple，形式是 =(meta, content_iterator)= , 也
 在 =w/fstab= ，各 ext 通过 =fstab.frag= 追加挂载点。
 
 ** playback state broadcast
-=core/server.py= 启动时通过 =ext/media= 注册的 startup hook 拉起 =timestamp-server.py= 监听TCP 23554，
+=servers/timestamp-server.py= 独立启动，监听TCP 23554，
 浏览器端的 =view/state_reporter.js= 在播放/暂停/定时回报时把状态写入
 =playing-state.json= ，server读取该文件并向所有连接的客户端广播实时进度，
 用于多端同步播放。
