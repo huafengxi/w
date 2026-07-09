@@ -1,6 +1,7 @@
 import logging
 import re
 import os
+import importlib
 
 class StoreException(Exception):
     pass
@@ -107,9 +108,16 @@ def build_root_store(fstab):
     logging.info(mstore)
     return RootStore(mstore)
 
+_store_cls_cache = {}
+
 def get_store_cls(type):
-    import core.registry as registry
-    return registry.REGISTRY.get_store_cls(type)
+    # Auto-load by fstab type: `T` -> stores.<t_lower>_store -> class TStore.
+    cls = _store_cls_cache.get(type)
+    if cls is None:
+        mod = importlib.import_module('stores.%s_store' % type.lower())
+        cls = getattr(mod, '%sStore' % type)
+        _store_cls_cache[type] = cls
+    return cls
 
 def mount(type, *args, **kw):
     return get_store_cls(type)(*args, **kw)
