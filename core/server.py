@@ -39,11 +39,16 @@ def kill_process(pat):
     for p in list_process(pat):
         if p != os.getpid(): os.kill(p, signal.SIGKILL)
 def set_path():
-    import core.registry as registry
     bin_path = web_path('w/bin')
     if not os.path.exists(bin_path):
         bin_path = os.path.expanduser('~/m/w/bin')
-    bin_dirs = [bin_path] + [web_path(d) for d in registry.REGISTRY.bin_dirs]
+    bin_dirs = [bin_path]
+    ext_dir = os.path.join(_repo_root, 'ext')
+    if os.path.isdir(ext_dir):
+        for name in sorted(os.listdir(ext_dir)):
+            d = os.path.join(ext_dir, name, 'bin')
+            if os.path.isdir(d):
+                bin_dirs.append(d)
     for d in reversed(bin_dirs):
         if d not in os.getenv('PATH', '').split(':'):
             os.environ['PATH'] = '%s:%s'%(d, os.getenv('PATH'))
