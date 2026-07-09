@@ -1,6 +1,5 @@
-/vmap   Dict	vmap
+/vmap   Vmap
 /w      Dir     w
-/g      PyEnv
 # -- ext mounts (auto-loaded by fstab type via stores.<t_lower>_store) --
 /nvr  Enc nvr
 /ARJ  Enc ARJ

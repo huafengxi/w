@@ -1,16 +1,8 @@
-import importlib
-
 from stores.store import StoreException
 
 class DictStore(dict):
-    def __init__(self, data):
-        dict.__init__(self, data)
-
-    @classmethod
-    def from_fstab(cls, module='vmap'):
-        """fstab factory: `/vmap Dict vmap` -> DictStore(vmap.build())."""
-        return cls(importlib.import_module(module).build())
-
+    def __init__(self):
+        dict.__init__(self)
     def head(self, path):
         if path == '/' or path == '' or path in self:
             return dict(type='text/plain')
