@@ -8,4 +8,3 @@ _FIND_PRESETS = dict(
 def register(reg):
     reg.find_presets.update(_FIND_PRESETS)
     reg.register_mime(suffix_rule({'.plist': 'plist', '.flac': 'audio/flac'}))
-    reg.vmap_fragments.append('w/ext/media/vmap.frag')

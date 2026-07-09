@@ -1,13 +1,19 @@
+import os
+
 from stores.store import StoreException, file_find_all
 
 _VMAP_RE = r'(?m)^([^# ]+):\s+(\S*)\n'
 
 class DictStore(dict):
     def __init__(self, path):
-        import core.registry as registry  # core's vmap composer: base + ext frags
+        # Base vmap + any sibling ext/<name>/vmap.frag by convention.
         pairs = file_find_all(_VMAP_RE, path)
-        for frag in registry.REGISTRY.vmap_fragments:
-            pairs.extend(file_find_all(_VMAP_RE, frag))
+        ext_dir = os.path.join(os.path.dirname(path), 'ext')
+        if os.path.isdir(ext_dir):
+            for name in sorted(os.listdir(ext_dir)):
+                frag = os.path.join(ext_dir, name, 'vmap.frag')
+                if os.path.isfile(frag):
+                    pairs.extend(file_find_all(_VMAP_RE, frag))
         dict.__init__(self, pairs)
     def head(self, path):
         if path == '/' or path == '' or path in self:

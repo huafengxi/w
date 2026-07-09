@@ -5,7 +5,6 @@ class CoreRegistry:
     def __init__(self):
         self.mime_rules = []        # callable(path) -> mime str | None
         self.find_presets = {}      # {shorthand: regex} for core find?t= handler
-        self.vmap_fragments = []    # extra vmap file paths merged into /vmap
         self.bin_dirs = []          # extra dirs prepended to PATH
         self._core_ready = False
 
