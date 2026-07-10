@@ -46,8 +46,7 @@
          function run(done, fresh){
             outText = ''; logText = ''; buf = '';
             result.innerHTML = ''; log.textContent = ''; show(log);
-            var params = {interp: interp, path: getUrl(), cmd: w.cmd};
-            if (fresh) params._fresh_ = 1;
+            var params = {interp: interp, path: getUrl(), cmd: w.cmd + (fresh ? ' _fresh_' : '')};
             rpc_stream('/w/ext/shell/rpc/cmd.py', params,
                function(text){
                   buf += text; var i;
