@@ -23,16 +23,6 @@
        if(content != _content){content=_content; write(getUrl(), content);}
     }
 
-    function text_filter(line, content, caret){
-        safe_set(content);
-        if (getQueryArgs()['filter'] == 'none')return [line];
-        var global = getBlock(content, 0, '####', '####');
-        var local = getBlock(content, caret, '####', '####');
-        //eval(filterLines(global, '#js:').join(';'));
-        eval(filterLines(local, '#js:').join(';'));
-        return line;
-    }
-
     function text_filter2(line, content, caret){
         safe_set(content);
         var rx = new RegExp("(.*) #link: (.*)", "g")
@@ -58,7 +48,7 @@
         eval(filterLines(content, '#init:').join(';'));
         var code_on_load = filterLines(content, '#onload:').join(';');
         fsh(code_on_load, content);
-        if (code_on_load) { hide_input(); }
+        hide_input();
     }
     </script>
   </head>

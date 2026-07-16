@@ -1,2 +1,4 @@
 # -*- type=ish -*-
-pwd
+date #link: date
+pwd #link: current dir
+ls
