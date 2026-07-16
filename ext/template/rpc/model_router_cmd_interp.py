@@ -1,6 +1,6 @@
 # -*- type=script -*-
-# RPC form of ext/shell/bin/model_router_cmd_interp.py: bridge markdown.html
-# inline commands to model_router's ido without the cmd.py + bin subprocess hop.
+# Bridge markdown.html inline commands to model_router's ido without the
+# cmd.py + bin subprocess hop.
 # markdown.html posts {path, cmd}; we turn the dir path into ido dot-form and
 # dispatch $model_router_dir/ido/ido.py <a.b.c>.<cmd>. Output is streamed
 # line-framed with a leading tag byte ('1'=stdout -> result pane, '2'=stderr ->
