@@ -3,8 +3,8 @@ from subprocess import Popen, PIPE, STDOUT
 from stores.dir_store import get_mime_type, safe_read
 
 class CmdStore(dict):
-    def __init__(self, cmd):
-        self.cmd = cmd
+    def __init__(self, *cmd):
+        self.cmd = ' '.join(cmd)
     def head(self, path):
         if os.path.isdir(os.path.join('/', path)):
             mime_type = 'dir'
