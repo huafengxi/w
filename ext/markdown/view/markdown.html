@@ -25,7 +25,7 @@
       }
       function getInterp(content) {
          var m = content.match(/^#!cmd-interp (.*)$/m);
-         return m ? m[1].trim() : '';
+         return m ? m[1].trim() : '/w/ext/shell/rpc/sh.py';
       }
       // Build an inline-command widget: a run button, a hideable stderr log
       // console, and a stdout result rendered as markdown. #!cmd-interp names
@@ -47,7 +47,7 @@
          function run(done, fresh){
             outText = ''; logText = ''; buf = '';
             result.innerHTML = ''; log.textContent = ''; show(log);
-            var params = {v: 'script', path: getUrl(), cmd: w.cmd + (fresh ? ' _fresh_' : '')};
+            var params = {v: 'script', path: getUrl(), cmd: w.cmd + (fresh ? ' _fresh_' : ''), stream: 2};
             rpc_stream(interp, params,
                function(text){
                   buf += text; var i;
