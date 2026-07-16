@@ -8,18 +8,56 @@
     <script type="application/javascript">
     var __query_args = $QUERY_ARGS;
     var __qargs = dict_merge(__query_args, getQueryArgs());
-    function myinterp(cmd) {
-        $('help').innerHTML = 'curl -d "cmd=' + cmd + '" -X POST -s ' + document.location.href + ' # query from shell';
-        if (getUrl().endsWith('.py')) {
-            return rpc(getUrl(), dict_merge(__qargs, {v:'script', cmd:cmd}));
-        } else {
-            return rpc('/w/ext/shell/rpc/popen.py', dict_merge(__qargs, {v:'script', cmd:cmd, src:getUrl()}));
-        }
+    var __interp = '';
+    function getInterp(content) {
+        var m = content.match(/^#!cmd-interp (.*)$/m);
+        return m ? m[1].trim() : '';
+    }
+    // A .py url is an in-process interpreter: call its own interp(cmd) directly
+    // (buffered v:script) and render the returned value.
+    function runScript(cmd, _ret, _err) {
+        $('help').innerHTML = 'curl -d "v=script&cmd=' + cmd + '" -X POST -s ' + getUrl() + ' # query from shell';
+        var res = mkResultPanel(cmd, _ret);
+        var out = $n('div'); out.className = 'output'; res.appendChild(out);
+        try { out.innerHTML = preHtml(str(rpc(getUrl(), dict_merge(__qargs, {v: 'script', cmd: cmd})))); }
+        catch (e) { _err.innerHTML += exceptionFormat(e); }
+    }
+    // Otherwise stream through cmd.py in stream=2 mode: each output line is
+    // prefixed with a tag byte ('1'=stdout -> result pane, '2'=stderr -> log
+    // console). The interp comes from the current file's #!cmd-interp directive.
+    function runCmd(cmd, _ret, _err) {
+        if (!cmd) return;
+        if (getUrl().endsWith('.py')) return runScript(cmd, _ret, _err);
+        $('help').innerHTML = 'curl -d "v=script&interp=' + __interp + '&path=' + getUrl()
+            + '&cmd=' + cmd + '" -X POST -s /w/ext/shell/rpc/cmd.py # query from shell';
+        var res = mkResultPanel(cmd, _ret);
+        var logBtn = appendButton(res, 'log');
+        var log = $n('pre'); log.className = 'output console'; hide(log);
+        var out = $n('div'); out.className = 'output';
+        logBtn.onclick = function() { toggleVisible(log); };
+        res.appendChild(log); res.appendChild(out);
+        var outText = '', logText = '', buf = '';
+        rpc_stream('/w/ext/shell/rpc/cmd.py',
+            dict_merge(__qargs, {v: 'script', interp: __interp, path: getUrl(), cmd: cmd, stream: 2}),
+            function(text) {
+                buf += text; var i;
+                while ((i = buf.indexOf('\n')) >= 0) {
+                    var line = buf.slice(0, i + 1); buf = buf.slice(i + 1);
+                    var data = line.slice(1);
+                    if (line.charAt(0) === '2') { logText += data; log.textContent = logText; show(log); }
+                    else { outText += data; out.innerHTML = preHtml(outText); }
+                }
+            },
+            null,
+            function(e) { _err.innerHTML += exceptionFormat(e); });
     }
     function initApp(){
         var panel = $('lish');
-        var sh = lish(myinterp, $('lish'));
-        sh(__qargs['q'])
+        panel.innerHTML = '<input type="text" class="input"/><pre class="error"></pre><div class="output"></div>';
+        if (!getUrl().endsWith('.py')) { try { __interp = getInterp(read(getUrl())); } catch (e) { __interp = ''; } }
+        var _ret = $s(panel, 'output'), _err = $s(panel, 'error');
+        var sh = _lish(function(cmd) { runCmd(cmd, _ret, _err); }, $s(panel, 'input'));
+        if (__qargs['q']) sh(__qargs['q']);
     }
     </script>
   </head>
