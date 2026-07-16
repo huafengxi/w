@@ -124,7 +124,7 @@ class Handler:
         vpath = self.vmap.translate(meta['path'], meta, args)
         if vpath != path:
             vmeta = get_meta(self.store, vpath)
-        logging.info('RESOLVE: meta=%s vmeta=%s args=%.200s', meta, vmeta, args)
+        logging.info('RESOLVE: meta=%s vmeta=%s args=%.2000s', meta, vmeta, args)
         if not vmeta.get('type'):
             return None
         try:
