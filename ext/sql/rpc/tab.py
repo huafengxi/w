@@ -1,6 +1,7 @@
 # -*- type=script -*-
 # Render a tabular file through tsql, deducing the mode from the src extension
-# (mirrors the .db/.tab handling in ext/shell/rpc/popen.py). A .db is opened
+# (this rpc took over the .db/.tab handling from the removed
+# ext/shell/rpc/popen.py). A .db is opened
 # directly as a sqlite database; any other file is loaded into an in-memory
 # table t1 via stdin, split on tabs. The sql query (cmd) comes from the
 # ext/sql/vmap.frag entry. stdout is the result; stderr (tsql's own logging)

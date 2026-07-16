@@ -37,7 +37,7 @@
     }
 
     function hide_input() { hide($s($('fish'), 'input'));  }
-    function myinterp(cmd, on_chunk, on_done, on_error) { return rpc_stream('/w/ext/shell/rpc/popen.py', dict_merge(qarg, {cmd:cmd}), on_chunk, on_done, on_error); }
+    function myinterp(cmd, on_chunk, on_done, on_error) { return rpc_stream('/w/ext/shell/rpc/sh.py', dict_merge(qarg, {cmd:cmd}), on_chunk, on_done, on_error); }
     var fsh;
     function go_qlink(link) {
       fsh(unescape(link));
