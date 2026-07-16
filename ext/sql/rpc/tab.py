@@ -9,7 +9,7 @@ def interp(store, src=None, cmd='', **kw):
         raise Exception('no such file: %s' % src)
     if not isinstance(data, bytes):
         data = data.encode('utf-8')
-    tsql = store.get_rpath('/w/ext/sql/bin/tsql/tsql.py')
+    tsql = store.get_rpath('/tsql/tsql.py')
     term = 'text' if kw.get('is_crawled_by_curl') else 'html'
     env = dict_updated(os.environ, sep=r'\s+', term=term, http_root='/', db_path=':memory:')
     p = Popen([sys.executable, tsql, sql], cwd=os.path.dirname(tsql),
