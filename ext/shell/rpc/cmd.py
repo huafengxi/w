@@ -5,7 +5,7 @@ def interp(store, interp='', path='', cmd='', dir='', stream=2, **kw):
         return dict(type='text/plain'), '2no #!cmd-interp directive for %s\n' % path
     import shlex, threading, queue
     rpath = store.get_rpath(path) or path
-    cwd = dir or 'w/ext/shell/bin'
+    cwd = dir
     cmd_list = shlex.split(interp) + [rpath] + shlex.split(cmd)
     stream = int(stream)
     if stream == 0:

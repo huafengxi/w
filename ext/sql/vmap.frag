@@ -1,4 +1,3 @@
-q: /w/ext/shell/view/lish.html
 db: /w/ext/shell/view/lish.html
 tab: /w/ext/shell/view/lish.html?i=tsql&q=select+*+from+t1+limit+1
 tab/curl: /w/ext/shell/rpc/popen.py?i=tsql
