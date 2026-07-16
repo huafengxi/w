@@ -28,8 +28,9 @@
          return m ? m[1].trim() : '';
       }
       // Build an inline-command widget: a run button, a hideable stderr log
-      // console, and a stdout result rendered as markdown. cmd.py streams the
-      // output line-framed with a leading tag byte ('1'=stdout, '2'=stderr).
+      // console, and a stdout result rendered as markdown. #!cmd-interp names
+      // the rpc endpoint, which is posted {path, cmd} and streams output
+      // line-framed with a leading tag byte ('1'=stdout, '2'=stderr).
       function buildCmdWidget(w, interp) {
          var ph = $(w.id);
          if (!ph) return null;
@@ -46,8 +47,8 @@
          function run(done, fresh){
             outText = ''; logText = ''; buf = '';
             result.innerHTML = ''; log.textContent = ''; show(log);
-            var params = {interp: interp, path: getUrl(), cmd: w.cmd + (fresh ? ' _fresh_' : '')};
-            rpc_stream('/w/ext/shell/rpc/cmd.py', params,
+            var params = {v: 'script', path: getUrl(), cmd: w.cmd + (fresh ? ' _fresh_' : '')};
+            rpc_stream(interp, params,
                function(text){
                   buf += text; var i;
                   while ((i = buf.indexOf('\n')) >= 0) {
