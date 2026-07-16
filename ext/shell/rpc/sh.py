@@ -5,10 +5,15 @@
 # run `bash -c <cmd>` with the source file (if any) piped in on stdin. stderr
 # is merged into stdout so failures show inline; no content_len is set, so
 # wsgiserver falls back to HTTP/1.1 chunked transfer-encoding.
-def interp(store, cmd='sh', dir='', src=None, input=None, **kw):
+def interp(store, i='', cmd='', dir='', src=None, input=None, **kw):
     input = input or (src and store.read(src))
-    env = dict_updated(os.environ, http_root='/')
-    cmd_list = ['/bin/bash', '-c', cmd or 'sh']
+    env = dict_updated(os.environ, http_root='/', BASH_ENV=store.get_rpath('/w/ext/shell/sh.rc'), src=(src and store.get_rpath(src) or ''))
+    if i:
+        import shlex
+        full_cmd = f'{i} {shlex.quote(cmd)}'.strip()
+    else:
+        full_cmd = cmd or 'sh'
+    cmd_list = ['/bin/bash', '-c', full_cmd]
     def gen():
         p = Popen(cmd_list, cwd=os.path.realpath('./' + dir), env=env,
                   stdin=input and PIPE or NULLFD, stdout=PIPE, stderr=STDOUT)

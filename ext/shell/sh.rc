@@ -1,0 +1,7 @@
+shopt -s expand_aliases
+alias i=/data/yuanqi.xhf/workspace/ob_modelrouter/ido/ido.py
+for rc in "$(dirname "$BASH_ENV")/../"*/sh.rc; do
+    [ -f "$rc" ] || continue
+    [ "$rc" -ef "$BASH_ENV" ] && continue
+    . "$rc"
+done
