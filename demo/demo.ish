@@ -1,4 +1,4 @@
-# -*- type=ish -*-
 date #link: date
 pwd #link: current dir
-ls
+i __doc__
+echo hello
