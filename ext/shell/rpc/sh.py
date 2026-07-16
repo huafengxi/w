@@ -6,9 +6,8 @@
 # is merged into stdout so failures show inline; no content_len is set, so
 # wsgiserver falls back to HTTP/1.1 chunked transfer-encoding.
 def interp(store, cmd='sh', dir='', src=None, input=None, **kw):
-    term = kw.get('is_crawled_by_curl', False) and 'term' or 'html'
     input = input or (src and store.read(src))
-    env = dict_updated(os.environ, term=term, http_root='/')
+    env = dict_updated(os.environ, http_root='/')
     cmd_list = ['/bin/bash', '-c', cmd or 'sh']
     def gen():
         p = Popen(cmd_list, cwd=os.path.realpath('./' + dir), env=env,
