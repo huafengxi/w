@@ -2,5 +2,5 @@
 /nvr  Enc nvr
 /ARJ  Enc ARJ
 /dav  WebDav dav.env
-/R    Cmd w/ext/template/bin/template_serve.py /data/yuanqi.xhf/workspace/ob_modelrouter/R/cases/
+/R    Cmd w/ext/template/bin/template_serve.py templates
 /	Dir	.
