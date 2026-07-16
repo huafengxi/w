@@ -7,10 +7,9 @@
 # wsgiserver falls back to HTTP/1.1 chunked transfer-encoding.
 def interp(store, i='', cmd='', dir='', src=None, input=None, pipe_src=0, stream=1, **kw):
     if pipe_src: input = store.read(src)
-    env = dict_updated(os.environ, http_root='/', BASH_ENV=store.get_rpath('/w/ext/shell/sh.rc'), src=(src and store.get_rpath(src) or ''))
+    env = dict_updated(os.environ, http_root='/', BASH_ENV=store.get_rpath('/w/ext/shell/sh.rc'), src=(src and (store.get_rpath(src) or src) or ''))
     if i:
-        import shlex
-        full_cmd = f'{i} {shlex.quote(cmd)}'.strip()
+        full_cmd = f'{i} {cmd}'.strip()
     else:
         full_cmd = cmd or 'sh'
     cmd_list = ['/bin/bash', '-c', full_cmd]
