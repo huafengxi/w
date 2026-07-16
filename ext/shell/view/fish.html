@@ -7,8 +7,16 @@
     <script type="application/javascript" src="/w/view/my.js"></script>
     <script type="application/javascript" src="/w/ext/shell/view/fsh.js"></script>
     <script type="application/javascript">
-    var args = getQueryArgs();
-    var qarg = dict_merge({i: 'bash', dir: ''}, args);
+    // Resolve the interp endpoint: an explicit interp= query arg (server-injected
+    // via $QUERY_ARGS from the vmap route, like lish.html) wins; else a
+    // '#!interp: <endpoint>' directive in the buffer (mirroring markdown.html's
+    // #!cmd-interp) is used; else the sh.py bash streamer.
+    var qarg = dict_merge(dict_merge({dir: ''}, $QUERY_ARGS), getQueryArgs());
+    var __interp = '/w/ext/shell/rpc/sh.py';
+    function getInterp(content) {
+       var m = content.match(/^#!interp:\s*(.*)$/m);
+       return m ? m[1].trim() : '';
+    }
     var content = '';
     //var dir = dirname(getUrl());
     function safe_set(_content){
@@ -37,7 +45,7 @@
     }
 
     function hide_input() { hide($s($('fish'), 'input'));  }
-    function myinterp(cmd, on_chunk, on_done, on_error) { return rpc_stream('/w/ext/shell/rpc/sh.py', dict_merge(qarg, {cmd:cmd}), on_chunk, on_done, on_error); }
+    function myinterp(cmd, on_chunk, on_done, on_error) { return rpc_stream(__interp, dict_merge(qarg, {cmd:cmd}), on_chunk, on_done, on_error); }
     var fsh;
     function go_qlink(link) {
       fsh(unescape(link));
@@ -46,6 +54,7 @@
         var panel = $('fish');
         fsh = fish(myinterp, panel, text_filter2, 'Fsh');
         var content = read(getUrl());
+        __interp = qarg['interp'] || getInterp(content) || __interp;
         eval(filterLines(content, '#init:').join(';'));
         var code_on_load = filterLines(content, '#onload:').join(';');
         fsh(code_on_load, content);
