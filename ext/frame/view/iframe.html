@@ -12,7 +12,14 @@
       function setIframeSrc(iframe, src) {
          if (!iframe.src.endsWith(src)) { iframe.src = src; }
          iframe.style.display = 'block';
-         iframe.onload = function () { iframe.style.height = iframe.contentWindow.document.body.scrollHeight; }
+         iframe.onload = function () { iframe.style.height = frameHeight(iframe) + 'px'; }
+      }
+      function frameHeight(iframe) {
+         var doc = iframe.contentWindow && iframe.contentWindow.document;
+         if (!doc) return 0;
+         var body = doc.body ? doc.body.scrollHeight : 0;
+         var html = doc.documentElement ? doc.documentElement.scrollHeight : 0;
+         return Math.max(body, html);
       }
       function appendIndex(checklist, iframe, name, link) {
              var div = document.createElement('div');
@@ -22,7 +29,7 @@
              div.className = 'checkbox';
              checkbox.type = 'checkbox';
              checkbox.name = name;
-             checkbox.checked = false;;
+             checkbox.checked = true;
              checkbox.onclick = function () { if (checkbox.checked) { setIframeSrc(iframe, link); } else { iframe.style.display = 'none'; } }
              div.appendChild(document.createTextNode(name));
       }
@@ -31,7 +38,7 @@
              iframe.src = '';
              body.appendChild(iframe);
              iframe.class = 'ifr';
-             iframe.style.height = 16;
+             iframe.style.height = '64px';
              iframe.style.display = 'none';
              return iframe;
       }
@@ -44,15 +51,16 @@
              if (!s || s.startsWith('#')) continue;
              var name_and_link = s.split(' ');
              var name = name_and_link[0];
-             var link = name_and_link[1];
+             var link = name_and_link[1] || name;
              var iframe = appendIframe(body);
              appendIndex(checklist, iframe, name, link);
+             setIframeSrc(iframe, link);
          }
       }
       function resize_all() {
         for(var iframe of $('iframe-list').childNodes) {
              if (iframe.class == 'ifr') {
-             iframe.style.height = iframe.contentWindow.document.body.scrollHeight;
+             iframe.style.height = frameHeight(iframe) + 'px';
              }
         }
       }
