@@ -5,9 +5,9 @@
 # ('2' -> log console), so the dispatch line below is written to stderr.
 ido_report_cmd() {
     local sub=$1; shift
-    # .../report/output/prod_g/v1/release-regression.md -> prod_g.v1: drop the
+    # .../report/prod_g/v1/release-regression.md -> prod_g.v1: drop the
     # trailing .md filename, then keep the dir segments after the last
-    # 'output', joined with '.'.
+    # 'report', joined with '.'.
     local -a parts=() kept=()
     local p i idx=-1 IFS=/
     for p in $src; do [ -n "$p" ] && parts+=("$p"); done
@@ -15,7 +15,7 @@ ido_report_cmd() {
     if [ ${#parts[@]} -gt 0 ]; then
         case ${parts[${#parts[@]}-1]} in *.md) unset 'parts[${#parts[@]}-1]';; esac
     fi
-    for i in "${!parts[@]}"; do [ "${parts[i]}" = output ] && idx=$i; done
+    for i in "${!parts[@]}"; do [ "${parts[i]}" = report ] && idx=$i; done
     for i in "${!parts[@]}"; do
         if [ "$idx" -lt 0 ] || [ "$i" -gt "$idx" ]; then kept+=("${parts[i]}"); fi
     done
