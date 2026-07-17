@@ -1,0 +1,6 @@
+host.stat
+interp.py?cmd=hello
+interp.py?v=q&q=abc
+demo.ish
+a.tab
+a.tab?v=tab/curl

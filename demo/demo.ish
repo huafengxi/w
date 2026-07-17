@@ -1,4 +1,5 @@
 date #link: date
 pwd #link: current dir
+#onload: hostname -i
 i __doc__
 echo hello
