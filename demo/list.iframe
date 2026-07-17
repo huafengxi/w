@@ -1,6 +1,11 @@
+?v=read
+a.txt?v=upload&file=abc
+a.org
+a.org?v=org2md
 host.stat
 interp.py?cmd=hello
 interp.py?v=q&q=abc
 demo.ish
 a.tab
 a.tab?v=tab/curl
+
