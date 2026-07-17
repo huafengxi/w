@@ -1,6 +1,5 @@
 shopt -s expand_aliases
-for rc in "$(dirname "$BASH_ENV")/../"*/sh.rc; do
+for rc in "$(dirname "$BASH_ENV")/../"*/sh.rc.frag; do
     [ -f "$rc" ] || continue
-    [ "$rc" -ef "$BASH_ENV" ] && continue
     . "$rc"
 done
