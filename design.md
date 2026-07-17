@@ -91,6 +91,7 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 一个 ext 就是 `ext/<feature>/` 目录，可选包含：
 
 - `vmap.frag` / `mime.frag` — 会被自动合并进 `vmap/` 与 `mime/`。
+- `sh.rc.frag` — bash 片段 (alias / 函数)，被 `ext/shell/sh.rc` 自动 source。
 - `rpc/*.py` — script，供 vmap.frag 里的映射指向。
 - `view/*` — 模板 / JS / CSS 等静态资源。
 - `bin/` — 会被 `core/server.py:set_path()` 追加到 `PATH`，供 script/CmdStore 调用。
@@ -98,6 +99,13 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 
 没有 `register.py`、没有 `ext=` 环境变量预导入；扩展纯粹按目录约定被发现，
 不需要写注册代码。
+
+## shell rc
+
+`ext/shell/rpc/sh.py` 用 bash 流式执行命令，启动时把 `BASH_ENV` 指向
+`ext/shell/sh.rc`。这个基线 rc 会遍历并 source 所有 `ext/<name>/sh.rc.frag`，
+从而让各 ext 以约定的方式往 bash 环境里注入 alias / 函数 (如 `ext/sql` 提供
+表查询别名、`ext/template` 提供模板命令)，无需在 sh.py 里硬编码。
 
 ## playback state broadcast
 

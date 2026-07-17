@@ -12,9 +12,9 @@ log=debug w/core/server.py 8080
 ```
 
 The server is split into a feature-free `core/` plus per-feature `ext/<feature>/`
-extensions. vmap, mime, and `PATH` bin dirs are picked up by convention from
-`ext/<name>/{vmap,mime}.frag` and `ext/<name>/bin/` (composed by `w/vmap`,
-`w/mime`, and `core/server.py:set_path`).
+extensions. vmap, mime, bash rc, and `PATH` bin dirs are picked up by convention
+from `ext/<name>/{vmap,mime,sh.rc}.frag` and `ext/<name>/bin/` (composed by
+`w/vmap`, `w/mime`, `ext/shell/sh.rc`, and `core/server.py:set_path`).
 
 ## config ssl/basic auth
 
