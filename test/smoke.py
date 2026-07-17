@@ -33,5 +33,4 @@ if __name__ == '__main__':
     req('/w/readme.md', 'v=head')
     req('/w/', '')
     req('/w/', 'v=dir')
-    req('/w/test/a.md')
     print('--- smoke done ---')

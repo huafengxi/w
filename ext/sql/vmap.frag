@@ -2,4 +2,3 @@ db: /w/ext/shell/view/lish.html?interp=/w/ext/shell/rpc/sh.py&i=db_query&q=selec
 tab: /w/ext/shell/view/lish.html?interp=/w/ext/shell/rpc/sh.py&i=tab_query&q=select+*+from+t1+limit+1
 flame: /w/ext/sql/view/flame.html
 ts: /w/ext/sql/view/dygraph.html
-ts-sql: /w/ext/sql/rpc/ts-sql.py

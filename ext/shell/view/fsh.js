@@ -70,11 +70,6 @@ function _lish(interp, input) {
       return interp(input.value=expr? expr.trim(): ''); };
 }
 
-function lish(interp, panel) {
-    panel.innerHTML = '<input type="text" class="input"/><pre class="error"></pre><div class="output"></div>';
-    return _lish(mkDumper(interp, $s(panel,'output'), $s(panel, 'error')), $s(panel, 'input'));
-}
-
 // fish means `file shell'
 function fishHandle(interp, input){
   var content = input.value;

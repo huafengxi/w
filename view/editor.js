@@ -59,9 +59,6 @@ function makeEditor(panel, on_save) {
       var m = getMatch(w.value, /((#[+]begin(.|\n)*?^#[+]end.*?)|(^:.*$))$/gm, w.selectionStart);
       w.setSelectionRange(m[0], m[0] + m[1]);
     }
-    function emptySelection(w) {
-      w.getSelection.empty();
-    }
     toggle_editor();
     bindHotKey($("save_editor_button"), "button0", function(e){ return save(); });
     bindHotKey($("resize_editor_button"), "button0", function(e){ return change_editor_height(); });

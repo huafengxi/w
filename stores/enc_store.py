@@ -1,4 +1,3 @@
-import os
 from stores.store import _path_is_dir
 from stores.dir_store import DirStore, get_mime_type
 

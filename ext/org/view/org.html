@@ -29,7 +29,7 @@
          if (inIframe()){
              hide($('head-bar'));
          }
-         makeEditor($('editor'), function (content){ var doc = parse_org(content); setWindowTitle(doc.title); $("doc").innerHTML = render_org(doc); /*supressSectionNumber($("doc"));*/ /*MathJax.Hub.Queue(["Typeset",MathJax.Hub]);*/ });
+         makeEditor($('editor'), function (content){ var doc = parse_org(content); setWindowTitle(doc.title); $("doc").innerHTML = render_org(doc); /*MathJax.Hub.Queue(["Typeset",MathJax.Hub]);*/ });
      }
     </script>
     <script type="application/javascript">

@@ -76,7 +76,7 @@ class DirStore:
         def limit_read_size(start, end):
             return start, min(start + read_chunk_sz, end)
         def parse_range(range_seq, fsize):
-            _ = re.findall(r'\d+', range_req)
+            _ = re.findall(r'\d+', range_seq)
             if len(_) == 2:
                 return int(_[0]), int(_[1]) + 1
             elif len(_) == 1:

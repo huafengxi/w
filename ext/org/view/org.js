@@ -16,11 +16,3 @@ function render_org(orgDocument)
     });
     return orgHTMLDocument.toString();
 }
-
-function lastPartOfSectionNumber(sectionNum) {
-    return sectionNum.replace(/.*?([0-9]+)$/, '$1');
-}
-
-function supressSectionNumber(pannel) {
-    return map(function(node) {node.innerHTML = lastPartOfSectionNumber(node.innerHTML);}, pannel.getElementsByClassName("section-number"));
-}

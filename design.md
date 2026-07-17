@@ -79,7 +79,6 @@ store 实现：
 3. EncStore   — 在 DirStore 基础上对文件名与内容做混淆，实现简单的加密目录。
 4. WebDavStore — 通过 `webdav4` 把远端 WebDAV 挂载为 store，支持 range read。
 5. CmdStore   — 把 read/write/delete 委托给外部命令执行。
-6. SqlStore   — 用关系数据库实现的 store (见 `stores/sql_store.py`)。
 
 store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的类型 `T` 后，
 `import stores.<t>_store` 并取 `TStore` 类，然后 `cls(*args, **kw)` 实例化。
