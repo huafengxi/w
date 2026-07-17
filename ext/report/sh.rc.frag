@@ -1,6 +1,6 @@
 # Bridge markdown.html inline commands to the report tree's ido: turn the
 # doc's on-disk path ($src, set by sh.py) into ido dot-form and dispatch
-#   $model_router_dir/ido/ido.py <a.b.c>.<sub> <opts...>
+#   $ido_root/ido/ido.py <a.b.c>.<sub> <opts...>
 # sh.py's stream=2 framing tags stdout ('1' -> result pane) and stderr
 # ('2' -> log console), so the dispatch line below is written to stderr.
 ido_report_cmd() {
@@ -21,7 +21,11 @@ ido_report_cmd() {
     done
     local dotted IFS=.; dotted="${kept[*]}"; unset IFS
     local target=${dotted:+$dotted.}$sub
-    local root=${model_router_dir:-/data/yuanqi.xhf/workspace/ob_modelrouter}
+    if [ -z "${ido_root:-}" ]; then
+        echo "ido_report_cmd: ido_root not set; cannot dispatch '$target'" >&2
+        return 1
+    fi
+    local root=$ido_root
     echo "dispatching '$target' $* via $root/ido/ido.py" >&2
     # ido's markdown result goes to stdout (tag 1 -> result pane); force it
     # unbuffered so it streams live instead of flushing only at exit, matching

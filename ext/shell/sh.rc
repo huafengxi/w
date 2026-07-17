@@ -3,3 +3,5 @@ for rc in "$(dirname "$BASH_ENV")/../"*/sh.rc.frag; do
     [ -f "$rc" ] || continue
     . "$rc"
 done
+local_rc="$(dirname "$BASH_ENV")/.sh.rc"
+[ -f "$local_rc" ] && . "$local_rc"

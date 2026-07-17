@@ -105,7 +105,10 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 `ext/shell/rpc/sh.py` 用 bash 流式执行命令，启动时把 `BASH_ENV` 指向
 `ext/shell/sh.rc`。这个基线 rc 会遍历并 source 所有 `ext/<name>/sh.rc.frag`，
 从而让各 ext 以约定的方式往 bash 环境里注入 alias / 函数 (如 `ext/sql` 提供
-表查询别名、`ext/report` 提供模板命令)，无需在 sh.py 里硬编码。
+表查询别名、`ext/report` 提供 ido 调度命令)，无需在 sh.py 里硬编码。frag
+加载完后 `sh.rc` 还会 source 同目录下的 `.sh.rc` (已被 `.gitignore` 忽略)
+作为本地覆盖；例如 `ext/report` 的 `ido_report_cmd` 需要 `ido_root` 环境
+变量指向 ido 根目录，未设置时会向 stderr 报错并返回 1，没有默认值。
 
 ## playback state broadcast
 
