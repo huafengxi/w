@@ -1,0 +1,75 @@
+<html>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <head>
+    <title>file operation</title>
+    <style type="text/css">
+    body {
+    font-size: 16px;
+    align: center
+    margin:0px 5px 0px 5px;
+    }
+    a { text-decoration: none; }
+    </style>
+
+    <script type="application/javascript">
+      function inIframe () { try { return window.self !== window.top; } catch (e) { return true; } }
+      if (!inIframe() && window.location.pathname.endsWith(".org")) {
+        window.location.href = '?v=code';
+      }
+      function $(id) {return document.getElementById(id); }
+      function dirname(path) { return path.match(/.*\//);  }
+      var paste_file = null;
+      function submitForm(file) {
+        var file = paste_file? paste_file: $("file").files[0];
+        var formData = new FormData();
+        formData.append('file', file);
+        var http = new XMLHttpRequest();
+        http.open('POST', '?v=upload', true);
+        http.onload = function (e) {
+        if (http.readyState === 4) {
+          if (http.status === 200) {
+            console.log(http.responseText);
+            window.location.href = '?v=head';
+          } else {
+            alert(http.statusText);
+          }
+        }
+      };
+      http.onerror = function (e) {  alert(http.statusText);  };
+        http.send(formData);
+      }
+      document.onpaste = function (event) {
+        var items = (event.clipboardData  || event.originalEvent.clipboardData).items;
+        for (var i = 0; i < items.length; i++) {
+             if (items[i].kind == 'file') {
+                 paste_file = items[i].getAsFile();
+                 $("msg").innerHTML = "clipboard file set";
+             } else if (items[i].kind == 'string') {
+                            $("msg").innerHTML = "clipboard string set";
+                            }
+
+        }
+     }
+
+      function init() {
+        var url = window.location.pathname;
+        $("up").href = dirname(url);
+      }
+    </script>
+  </head>
+  <body onload="init()" >
+    <nav>
+    <a id="home" href="/">Home</a>
+    <a id="up" href="#">Up</a>
+    <a id="edit" href="?v=code">Edit</a>
+      <a href="/w/view/auth.html">auth</a>
+      <a href="/sitemap.xml">sitemap</a>
+      <a href="/site.tar">site.tar</a>
+    </nav>
+    <hr/>
+    <input type="submit" value="upload" onclick="submitForm()"/>
+    <input type="file" class="inputfile" id="file" name="file">
+    <p>
+    <label id="msg"></label>
+  </body>
+</html>
