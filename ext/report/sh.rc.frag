@@ -1,11 +1,11 @@
-# Bridge markdown.html inline commands to the template tree's ido: turn the
+# Bridge markdown.html inline commands to the report tree's ido: turn the
 # doc's on-disk path ($src, set by sh.py) into ido dot-form and dispatch
 #   $model_router_dir/ido/ido.py <a.b.c>.<sub> <opts...>
 # sh.py's stream=2 framing tags stdout ('1' -> result pane) and stderr
 # ('2' -> log console), so the dispatch line below is written to stderr.
-ido_template_cmd() {
+ido_report_cmd() {
     local sub=$1; shift
-    # .../R/output/prod_g/v1/release-regression.md -> prod_g.v1: drop the
+    # .../report/output/prod_g/v1/release-regression.md -> prod_g.v1: drop the
     # trailing .md filename, then keep the dir segments after the last
     # 'output', joined with '.'.
     local -a parts=() kept=()

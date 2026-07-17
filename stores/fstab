@@ -2,5 +2,5 @@
 /nvr  Enc nvr
 /ARJ  Enc ARJ
 /dav  WebDav dav.env
-/R    Cmd w/ext/template/bin/template_serve.py templates
+/report    Cmd w/ext/report/bin/lookup.py templates
 /	Dir	.
