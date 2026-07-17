@@ -4,6 +4,9 @@
 # sh.py's stream=2 framing tags stdout ('1' -> result pane) and stderr
 # ('2' -> log console), so the dispatch line below is written to stderr.
 ido_report_cmd() {
+    # sh.py passes the whole cmd as one shlex-quoted arg ($1); re-split it
+    # honoring quotes/globs so $1 is the sub and $2.. are its args.
+    eval "set -- $1"
     local sub=$1; shift
     # .../report/prod_g/v1/release-regression.md -> prod_g.v1: drop the
     # trailing .md filename, then keep the dir segments after the last
