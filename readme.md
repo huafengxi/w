@@ -31,6 +31,9 @@ git clone git@github.com:huafengxi/tsql.git tsql # query text using sql
 git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 ```
 
+## iframe show many doc
+- [/w/demo/list.iframe?v=iframe](/w/demo/list.iframe?v=iframe)
+
 ## .org file
 
 - [/w/demo/a.org](/w/demo/a.org), ctrl-alt-e to edit, ctrl-alt-s to save and refresh.
@@ -43,11 +46,6 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 - [/w/demo/interp.py?cmd=hello](/w/demo/interp.py?cmd=hello) call remote function `interp()` defined in python file.
 - [/w/demo/interp.py?v=q](/w/demo/interp.py?v=q) interactive `interp()` defined in python file.
 - [/w/demo/demo.ish](/w/demo/demo.ish) ctrl+click to execute cmd.
-
-## more on shell
-
-- [/w/demo/a.ish](/w/demo/a.ish) for a more complex example.
-- [/w/demo/a.ish?_log_=3](/w/demo/a.ish?_log_=3) for verbose log.
 
 ## table
 
