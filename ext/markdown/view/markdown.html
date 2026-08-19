@@ -6,7 +6,8 @@
     <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
     <script type="application/javascript" src="/w/view/my.js"></script>
     <script type="application/javascript" src="/w/view/editor.js"></script>
-    <script type="application/javascript" src="/w/ext/markdown/deps/showdown.js"></script>
+    <script type="application/javascript" src="/w/ext/markdown/deps/marked.min.js"></script>
+    <style>#doc li > p { margin: 0.2em 0; }</style>
     <script type="application/javascript">
       function split() { window.location.assign(getUrl() + "?type=split"); }
       function toggle_editor() { toggleVisible($('editor')); }
@@ -20,8 +21,8 @@
          return content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|_/g, function(m, code){ return code ? code : '\\_'; });
       }
       function renderMarkdown(text) {
-         var converter = new showdown.Converter({tables: true});
-         return converter.makeHtml(underscore_escape_filter(text));
+         // marked (GFM: tables, nested lists, tight lists)
+         return window.marked.parse(underscore_escape_filter(text));
       }
       function getInterp(content) {
          var m = content.match(/^#!cmd-interp (.*)$/m);
