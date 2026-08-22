@@ -63,9 +63,66 @@ function create_text(path) {
 }
 
 function is_img(line) { return line.match(/.(jpg|jpeg|png|gif)$/i); }
+
+// ---- lazy image loading ----
+// Images are rendered as <img data-src=...> placeholders (fixed aspect-ratio
+// grey block with filename label) and only loaded when entering the viewport.
+// Falls back to native loading="lazy" when IntersectionObserver is missing.
+(function ensureLazyImgStyle() {
+    if (document.getElementById('lazy-img-style')) return;
+    var style = document.createElement('style');
+    style.id = 'lazy-img-style';
+    style.textContent =
+        '.lazy-img-ph{position:relative;width:100%;max-width:600px;' +
+        'aspect-ratio:3/2;background:#e8e8e8;border-radius:4px;overflow:hidden;' +
+        'margin-bottom:4px}' +
+        '.lazy-img-ph img{display:block;width:100%;height:100%;object-fit:contain;' +
+        'opacity:0;transition:opacity .3s ease;cursor:pointer}' +
+        '.lazy-img-ph img.lazy-loaded{opacity:1}' +
+        '.lazy-img-ph .lazy-img-label{position:absolute;left:6px;bottom:2px;' +
+        'font-size:12px;color:#888;font-family:monospace;pointer-events:none;' +
+        'max-width:95%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+        '.lazy-img-ph img.lazy-loaded~.lazy-img-label{display:none}';
+    document.head.appendChild(style);
+})();
+
+var lazyImgObserver = ('IntersectionObserver' in window) ? new IntersectionObserver(
+    function (entries) {
+        entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+                loadLazyImg(entry.target);
+                lazyImgObserver.unobserve(entry.target);
+            }
+        });
+    }, {rootMargin: '200px 0px'}) : null;
+
+function loadLazyImg(img) {
+    if (img.dataset.loaded) return;
+    var src = img.dataset.src;
+    if (!src) return;
+    img.dataset.loaded = '1';
+    img.addEventListener('load', function () { img.classList.add('lazy-loaded'); }, {once: true});
+    img.addEventListener('error', function () { img.classList.add('lazy-loaded'); }, {once: true});
+    img.src = src;
+}
+
 function create_img(path) {
     var ctrl = document.createElement('div');
-    ctrl.innerHTML = '<img src="{path}">'.format({path: path})
+    var name = basename(path);
+    ctrl.innerHTML = ('<div class="lazy-img-ph"><img data-src="{path}" alt="{name}">' +
+        '<span class="lazy-img-label">{name}</span></div>')
+        .format({path: path, name: name});
+    var img = ctrl.querySelector('img');
+    // clicking an unloaded image triggers immediate load (and keeps any
+    // future click-to-view behaviour usable)
+    img.addEventListener('click', function () { loadLazyImg(img); }, false);
+    if (lazyImgObserver) {
+        lazyImgObserver.observe(img);
+    } else {
+        // fallback: native lazy loading
+        img.setAttribute('loading', 'lazy');
+        loadLazyImg(img);
+    }
     return ctrl;
 }
 
