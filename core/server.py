@@ -20,7 +20,7 @@ if _repo_root not in sys.path:
 
 def locate_web_path(path):
     p = os.path.realpath(path)
-    while p != '/' and not os.path.exists(os.path.join(p, 'index.org')):
+    while p != '/' and not os.path.exists(os.path.join(p, 'index.md')):
         p = os.path.dirname(p)
     return p
 _web_path_ = locate_web_path(_repo_root)
