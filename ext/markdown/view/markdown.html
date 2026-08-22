@@ -21,8 +21,11 @@
          return content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|_/g, function(m, code){ return code ? code : '\\_'; });
       }
       function renderMarkdown(text) {
-         // marked (GFM: tables, nested lists, tight lists)
-         return window.marked.parse(underscore_escape_filter(text));
+         // marked (GFM: tables, nested lists); then force tight lists by
+         // stripping paragraph wrappers from list items (loose lists add
+         // unwanted vertical spacing).
+         var html = window.marked.parse(underscore_escape_filter(text));
+         return html.replace(/<li>\s*<p>/g, '<li>').replace(/<\/p>\s*<\/li>/g, '</li>');
       }
       function getInterp(content) {
          var m = content.match(/^#!cmd-interp (.*)$/m);

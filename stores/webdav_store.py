@@ -3,6 +3,7 @@ import re
 import logging
 import mimetypes
 import io
+import json
 from urllib.parse import urlsplit, unquote
 from webdav4.client import Client
 from stores.store import _path_is_dir
@@ -56,11 +57,113 @@ def _creds_from_env(env):
 def _str_bool(s):
     return str(s).lower() in ('1', 'true', 'yes', 'on')
 
+class AlistClient:
+    """Thin wrapper around alist HTTP API for cached read operations."""
+    def __init__(self, base_url, username='admin', password='admin'):
+        self.base_url = base_url.rstrip('/')
+        self.username = username
+        self.password = password
+        self._token = None
+        import urllib.request
+        # Bypass proxy for localhost
+        proxy_handler = urllib.request.ProxyHandler({})
+        self._opener = urllib.request.build_opener(proxy_handler)
+
+    def _ensure_token(self):
+        if self._token:
+            return self._token
+        try:
+            import urllib.request
+            data = json.dumps({'username': self.username, 'password': self.password}).encode()
+            req = urllib.request.Request(
+                f'{self.base_url}/api/auth/login',
+                data=data,
+                headers={'Content-Type': 'application/json'}
+            )
+            resp = self._opener.open(req, timeout=10)
+            result = json.loads(resp.read())
+            self._token = result['data']['token']
+        except Exception as e:
+            logging.warning(f'alist login failed: {e}')
+        return self._token
+
+    def _api(self, method, path, body=None):
+        import urllib.request
+        token = self._ensure_token()
+        if not token:
+            return None
+        url = f'{self.base_url}{path}'
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(
+            url, data=data,
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': token,
+            }
+        )
+        req.get_method = lambda: method
+        try:
+            resp = self._opener.open(req, timeout=30)
+            return json.loads(resp.read())
+        except Exception as e:
+            logging.warning(f'alist api {method} {path} failed: {e}')
+            return None
+
+    def list_dir(self, alist_path, per_page=200):
+        """List a directory via alist API. Returns list of items with name, size, is_dir."""
+        result = self._api('POST', '/api/fs/list', {
+            'path': alist_path,
+            'password': '',
+            'page': 1,
+            'per_page': per_page,
+            'refresh': False,
+        })
+        if result and result.get('code') == 200:
+            return result['data']['content']
+        return None
+
+    def get_info(self, alist_path):
+        """Get file/dir info via alist API."""
+        result = self._api('POST', '/api/fs/get', {
+            'path': alist_path,
+            'password': '',
+        })
+        if result and result.get('code') == 200:
+            return result['data']
+        return None
+
+    def raw_download(self, alist_path, range_header=None):
+        """Download raw file via alist /d/ endpoint."""
+        import urllib.request
+        token = self._ensure_token()
+        if not token:
+            return None
+        url = f'{self.base_url}/d{"" if alist_path.startswith("/") else "/"}{alist_path}'
+        headers = {'Authorization': token}
+        if range_header:
+            headers['Range'] = range_header
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            resp = self._opener.open(req, timeout=60)
+            return resp
+        except Exception as e:
+            logging.warning(f'alist download {alist_path} failed: {e}')
+            return None
+
+
 class WebDavStore:
-    def __init__(self, hostname, username=None, password=None, root='/', verify=False):
+    def __init__(self, hostname, username=None, password=None, root='/', verify=False,
+                 alist_base_url=None, alist_mount_path=None):
+        # Parse env file if hostname is a .env file
+        env = {}
         if username is None and isinstance(hostname, str) and hostname.endswith('.env'):
             env = _parse_env_file(_resolve_env_path(hostname))
             hostname, username, password, root, verify = _creds_from_env(env)
+            if not alist_base_url:
+                alist_base_url = env.get('ALIST_BASE_URL')
+            if not alist_mount_path:
+                alist_mount_path = env.get('ALIST_MOUNT_PATH')
+
         self.hostname = hostname.rstrip('/')
         self.root = '/' + root.strip('/')
         
@@ -70,13 +173,29 @@ class WebDavStore:
         self.client = Client(
             base_url, 
             auth=(username, password), 
-            verify=verify,  # False replaces 'disable_check'
-	    follow_redirects=True,
-	    timeout=60.0 
+            verify=verify,
+            follow_redirects=True,
+            timeout=60.0 
         )
 
+        # Alist proxy for faster reads
+        self.alist = None
+        self.alist_mount_path = alist_mount_path
+        if alist_base_url:
+            alist_user = env.get('ALIST_USERNAME', 'admin')
+            alist_pass = env.get('ALIST_PASSWORD', 'admin')
+            self.alist = AlistClient(alist_base_url, alist_user, alist_pass)
+            logging.info(f'alist proxy enabled: {alist_base_url} mount={alist_mount_path}')
+
+    def _alist_path(self, path):
+        """Convert a store path to an alist path."""
+        if not self.alist_mount_path:
+            return path
+        p = path.lstrip('/')
+        mp = self.alist_mount_path.rstrip('/')
+        return f'{mp}/{p}' if p else mp
+
     def get_real_path(self, path):
-        # webdav4 handles paths relative to base_url provided in __init__
         return path.lstrip('/')
 
     def mv(self, src, dest):
@@ -96,24 +215,54 @@ class WebDavStore:
         self.client.mkdir(real_path)
         logging.info(f"Mkdir {real_path}")
 
+    def _alist_type_to_mime(self, type_val, path):
+        """Convert alist numeric type to MIME string."""
+        if isinstance(type_val, str):
+            return type_val
+        # alist PikPak driver returns numeric type: 1=folder, 2=video, 3=image, 4=audio, 5=doc, 6=archive
+        if isinstance(type_val, int):
+            if type_val == 1:
+                return 'dir'
+            # Try mimetypes first, fall back to generic
+            mime = mimetypes.guess_type(path)[0]
+            if mime:
+                return mime
+            type_map = {2: 'video/mp4', 3: 'image/jpeg', 4: 'audio/mpeg', 5: 'application/octet-stream', 6: 'application/zip'}
+            return type_map.get(type_val, 'application/octet-stream')
+        return mimetypes.guess_type(path)[0] or 'application/octet-stream'
+
     def head(self, path):
         real_path = self.get_real_path(path)
+
+        # Try alist first for fast cached metadata
+        if self.alist:
+            info = self.alist.get_info(self._alist_path(path))
+            if info:
+                meta = {
+                    'rpath': real_path,
+                    'size': info.get('size', 0),
+                    'modified': info.get('modified'),
+                    'created': info.get('created'),
+                }
+                if info.get('is_dir') or _path_is_dir(path):
+                    meta['type'] = 'dir'
+                else:
+                    meta['type'] = self._alist_type_to_mime(info.get('type'), path)
+                return meta
+
+        # Fallback to direct WebDAV
         try:
             info = self.client.info(real_path)
-            # info keys: 'name', 'size', 'created', 'modified', 'content_type', 'etag', 'isdir'
-            
             meta = {
                 'rpath': real_path,
                 'size': info.get('content_length', 0),
                 'modified': info.get('modified'),
                 'created': info.get('created'),
             }
-
             if info.get('isdir') or _path_is_dir(path):
                 meta['type'] = 'dir'
             else:
                 meta['type'] = info.get('content_type') or mimetypes.guess_type(path)[0] or 'application/octet-stream'
-
             return meta
         except Exception as e:
             logging.warning(f'dav head failed: {real_path} {e}')
@@ -122,8 +271,19 @@ class WebDavStore:
     def read_dir(self, path):
         real_path = self.get_real_path(path)
 
-        # detail=True returns a list of dicts with 'name', 'isdir', etc.
-        # These names are already relative to the 'real_path' (basenames).
+        # Try alist first for fast cached listing
+        if self.alist:
+            items = self.alist.list_dir(self._alist_path(path))
+            if items is not None:
+                relative_items = []
+                for item in items:
+                    name = item['name']
+                    if item.get('is_dir'):
+                        name += '/'
+                    relative_items.append(name)
+                return '\n'.join(['../'] + sorted(relative_items))
+
+        # Fallback to direct WebDAV
         try:
             items = self.client.ls(real_path, detail=True)
         except Exception as e:
@@ -133,7 +293,6 @@ class WebDavStore:
         relative_items = []
         for item in items:
             name = item['name']
-            # Append '/' if the item is a directory
             is_collection = (
                 item.get('isdir') or
                 item.get('href', '').endswith('/') or
@@ -144,7 +303,6 @@ class WebDavStore:
                 name += '/'
             relative_items.append(name)
 
-        # Return sorted list with '../' prepended as per original script logic
         return '\n'.join(['../'] + sorted(relative_items))
 
     def lazy_read(self, path, range_req=''):
@@ -153,6 +311,13 @@ class WebDavStore:
         if _path_is_dir(path):
             d = self.read_dir(path)
             return len(d), 0, len(d), [d.encode('utf-8')]
+
+        # Try alist for fast cached download
+        if self.alist and not range_req:
+            resp = self.alist.raw_download(self._alist_path(path))
+            if resp:
+                data = resp.read()
+                return len(data), 0, len(data), [data]
 
         try:
             info = self.client.info(real_path)
@@ -180,11 +345,7 @@ class WebDavStore:
 
         def download_chunk_generator(start, end):
             try:
-                # webdav4 uses httpx internally. We use the internal http client
-                # to perform a range request while keeping auth/session info.
                 headers = {'Range': f'bytes={start}-{end-1}'}
-                
-                # Note: path in httpx.get needs to be relative to base_url
                 with self.client.http.stream("GET", real_path, headers=headers) as r:
                     r.raise_for_status()
                     for chunk in r.iter_bytes(chunk_size=4096):
@@ -199,9 +360,15 @@ class WebDavStore:
         real_path = self.get_real_path(path)
         if _path_is_dir(path):
             return self.read_dir(path).encode('utf-8')
+
+        # Try alist for fast cached download
+        if self.alist:
+            resp = self.alist.raw_download(self._alist_path(path))
+            if resp:
+                return resp.read()
+
         try:
             buffer = io.BytesIO()
-            # upload_fileobj/download_fileobj are the standard for buffer ops in webdav4
             self.client.download_fileobj(real_path, buffer)
             return buffer.getvalue()
         except Exception as e:
@@ -222,4 +389,7 @@ class WebDavStore:
             raise IOError from e
 
     def __repr__(self):
-        return f'WebDavStore({self.hostname}{self.root})'
+        s = f'WebDavStore({self.hostname}{self.root})'
+        if self.alist:
+            s += f' [alist: {self.alist.base_url}/{self.alist_mount_path}]'
+        return s
