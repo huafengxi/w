@@ -34,21 +34,6 @@ class TarHandler:
         tarinfo.mtime = self.time
         self.tar.addfile(tarinfo, fileobj)
 
-def gen_sitemap(store, base='/'):
-    unfetched, fetched = [base], {}
-    while unfetched:
-        path = unfetched.pop()
-        if fetched.get(path):
-            continue
-        if need_ignore(path):
-            continue
-        if path.endswith('/'):
-            content = store.read(path)
-            if isinstance(content, bytes):
-                content = content.decode()
-            unfetched.extend(join_path(path, line) for line in content.split('\n') if not line.startswith('..') and not line.startswith('.git'))
-        fetched[path] = True
-        yield path
 
 def archive(store, base='/'):
     for path in gen_sitemap(store, base):

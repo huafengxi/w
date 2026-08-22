@@ -1,5 +1,5 @@
 # -*- type=script -*-
-# File-mutation + archive rpc (ext/fileops): write/upload/append/del/mv/tar/sitemap.
+# File-mutation + archive rpc (ext/fileops): write/upload/append/del/mv/tar.
 from ext.fileops import archive
 
 def interp(store, v='write', src=None, **kw):
@@ -22,8 +22,3 @@ def interp(store, v='write', src=None, **kw):
         return store.mv(src, kw.get('target'))
     elif v == 'tar':
         return dict(type='application/tar'), archive.archive_to_tar(store, src)
-    elif v == 'sitemap':
-        real_host = 'https://www.lockfree.top'
-        path_list = archive.gen_sitemap(store, src)
-        xml_template = '''<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n%s\n</urlset>'''
-        return dict(type='text/xml'), xml_template %('\n'.join('<url><loc>%s%s</loc></url>'%(real_host, path) for path in path_list))
