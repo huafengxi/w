@@ -22,6 +22,7 @@ header b { color: var(--acc); }
 .dot.on { background: var(--ok); } .dot.err { background: var(--err); }
 #connInfo { color: var(--dim); font-size: 12px; flex: 1;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#connInfo.flash { color: var(--warn); font-weight: 600; }
 button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
 button:hover { border-color: var(--acc); }
@@ -51,7 +52,15 @@ aside h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
 .md code { background: var(--panel); padding: 1px 4px; border-radius: 4px;
   font-size: 12px; }
 .md pre code { background: none; padding: 0; }
+/* 极简内嵌语法高亮（0829-1609-8dwt 打磨项；不引外部库，取舍见 PROTOCOL §6.4） */
+.md pre code .tok-k { color: #cf222e; }
+.md pre code .tok-s { color: #0a3069; }
+.md pre code .tok-c { color: #6e7781; font-style: italic; }
+.md pre code .tok-n { color: #953800; }
 .thinking { color: var(--dim); font-style: italic; }
+.thinking-block summary { color: var(--dim); font-size: 12px; cursor: pointer; }
+.thinking-block pre { white-space: pre-wrap; word-break: break-word; color: var(--dim);
+  font-style: italic; font-size: 12px; margin: 4px 0; }
 .sys { color: var(--dim); font-size: 12px; }
 .sys.warn { color: var(--warn); } .sys.err { color: var(--err); }
 .tool { color: var(--dim); font-size: 12px; background: var(--panel);
@@ -127,13 +136,26 @@ let statusTimer = null;
 let uidSeq = 0;
 const uid = () => "web-" + (++uidSeq) + "-" + Date.now().toString(36);
 let pendingDialogs = {};      // id -> request
-let curAssistantEl = null;    // 当前 assistant 消息渲染节点
+let curAssistantEl = null;    // 当前 assistant 消息渲染节点（实时流式）
 let curAssistantBuf = "";     // 累积文本（用于 message_end 时 markdown 渲染）
-// 流状态
+// 流状态（两层锚定：entries 基线 + 事件 ID 游标，任务 0829-1609-8dwt）
 let streamCtrl = null;        // AbortController
-let lastSeq = 0;              // SSE id 游标（重连补齐用）
+let streamCursor = "";        // 最后收到的事件 ID（e<n>），续流游标
+let lastEidNum = 0;           // 事件 ID 数字部分（本地连续性检查用）
 let streamAlive = false;
 let reconnectTimer = null;
+// 基线锚定状态
+let curEpoch = null;          // 守护世代（展示/调试）
+let lastGen = null;           // 会话进程世代（hello/gen 变化检测）
+let curLeafId = null;         // 活跃分支叶
+let entryCursor = null;       // 最后 entry id（增量游标）
+let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
+let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
+let healBusy = false;
+let healFails = 0;
+// dialog 倒计时
+let dialogTimer = null;
+let dialogDeadline = 0;
 
 // ---------------- 基础请求 ----------------
 async function api(op, extra) {
@@ -173,33 +195,157 @@ async function refreshStatus() {
 }
 function nz(x) { return (x === null || x === undefined) ? "?" : x; }
 
-// ---------------- 挂接与事件流 ----------------
+// ---------------- 挂接（基线 → 记水位 → 续流） ----------------
 async function attach(name) {
   if (attached === name && streamAlive) return;
   stopStream();
   clearPendingDialogs();
   $("stream").innerHTML = "";
   curAssistantEl = null; curAssistantBuf = "";
-  try { await api("attach", {session: name}); }
+  seenEntryIds = new Set(); seenToolIds = new Set();
+  sysLine("挂接 " + name + "：拉取历史基线（get_entries）…");
+  let doc;
+  try { doc = await api("attach", {session: name}); }
   catch (e) { sysLine("挂接失败: " + e.message, "err"); return; }
   attached = name;
-  lastSeq = 0;
-  openStream();
+  applyBaseline(doc, true);
   refreshStatus();
+}
+
+// 基线落盘：渲染活跃分支、记游标/水位、开流
+function applyBaseline(doc, initial) {
+  curEpoch = doc.epoch !== undefined ? doc.epoch : curEpoch;
+  lastGen = doc.gen !== undefined ? doc.gen : lastGen;
+  curLeafId = doc.leafId || null;
+  entryCursor = doc.entryCursor || null;
+  const branch = activeBranch(doc.entries || [], curLeafId);
+  if (!initial) {
+    $("stream").innerHTML = "";
+    curAssistantEl = null; curAssistantBuf = "";
+    seenEntryIds = new Set(); seenToolIds = new Set();
+  }
+  for (const e of branch) renderEntry(e);
+  streamCursor = doc.watermark || "";
+  lastEidNum = eidNum(streamCursor);
+  openStream();
+  sysLine("基线 " + (doc.entries || []).length + " entries（活跃分支 "
+    + branch.length + " 条" + (doc.gap ? "，缺口后全量重拉" : "") + "）"
+    + (curEpoch !== null ? " · epoch=" + curEpoch : "")
+    + (lastGen !== null ? " · gen=" + lastGen : ""));
+}
+
+// 活跃分支：从 leafId 沿 parentId 走回根（含 pre-compaction 链）
+function activeBranch(entries, leafId) {
+  if (!leafId) return [];
+  const byId = {};
+  for (const e of entries) if (e && e.id) byId[e.id] = e;
+  const out = [];
+  let cur = leafId, guard = entries.length + 1;
+  while (cur && guard-- > 0) {
+    const e = byId[cur];
+    if (!e) break;
+    out.push(e);
+    cur = e.parentId;
+  }
+  return out.reverse();
+}
+
+// entry → 渲染（基线的持久体视图）
+function renderEntry(e) {
+  if (!e || !e.id || seenEntryIds.has(e.id)) return;   // 幂等
+  seenEntryIds.add(e.id);
+  const t = e.type;
+  if (t === "message" && e.message) { renderEntryMessage(e.message); return; }
+  if (t === "session_info") return;                     // 噪音，跳过
+  if (t === "model_change") { sysLine("◆ model → " + (e.provider || "?") + "/" + (e.modelId || "?")); return; }
+  if (t === "thinking_level_change") { sysLine("◆ thinking → " + (e.thinkingLevel || "?")); return; }
+  sysLine("◆ " + (t || "?"));
+}
+function renderEntryMessage(m) {
+  const role = m.role;
+  if (role === "user") {
+    const txt = msgText(m);
+    if (txt) addDiv("role-user", txt);
+    return;
+  }
+  if (role === "toolResult") {
+    const key = "r:" + m.toolCallId;
+    if (seenToolIds.has(key)) return;                   // 与实时事件互斥
+    seenToolIds.add(key);
+    let txt = "";
+    for (const c of m.content || []) if (c && c.type === "text") txt += c.text;
+    toolLine((m.isError ? "✗ " : "✓ ") + (m.toolName || "?") + " done",
+             null, trunc(txt.trim(), 300), m.isError ? "fail" : "done");
+    return;
+  }
+  if (role === "assistant") {
+    const el = addDiv("role-assistant md", "");
+    let text = "";
+    for (const p of m.content || []) {
+      if (!p) continue;
+      if (p.type === "thinking" && p.thinking) {
+        const d = document.createElement("details");
+        d.className = "thinking-block";
+        d.innerHTML = "<summary>thinking</summary>";
+        const pre = document.createElement("pre");
+        pre.textContent = p.thinking;
+        d.appendChild(pre);
+        el.appendChild(d);
+      } else if (p.type === "text") {
+        text += (text ? "\n" : "") + (p.text || "");
+      } else if (p.type === "toolCall") {
+        if (p.id && !seenToolIds.has(p.id)) {
+          seenToolIds.add(p.id);
+          toolLine("⇢ " + (p.name || "?"), p.arguments, "");
+        }
+      }
+    }
+    renderMarkdownInto(el, text);
+    return;
+  }
+  sysLine("◆ message role=" + role);
+}
+
+// ---------------- 自愈闭环（缺口/epoch/gen 变化 → 全量基线重拉 → 新水位续流） ----------------
+// 页面级策略 = 全量重渲染（清屏 + 活跃分支重建）：消息对象无稳定 id，增量
+// entries 与已实时渲染的消息无法按 id 互斥，全量重渲染是无重的构造性保证；
+// op=entries 增量通道（含 success:false→全量回退）由 API 层提供并验证，供其它
+// 客户端与未来优化使用（见 PROTOCOL §6）。
+async function heal(reason) {
+  if (healBusy || !attached) return;
+  healBusy = true;
+  stopStream();
+  flash("历史刷新中…（" + reason + "）");
+  try {
+    const doc = await api("attach", {session: attached});   // 全量基线（含 gap 语义）
+    applyBaseline(doc, false);
+    healFails = 0;
+    flash("历史已刷新 ✓（" + reason + "）");
+    sysLine("自愈完成（" + reason + "，全量基线重拉）");
+    scrollStream();
+  } catch (e) {
+    healFails++;
+    sysLine("自愈失败（" + reason + "）: " + e.message, "err");
+    if (healFails < 5) setTimeout(() => { healBusy = false; heal(reason); }, 2000);
+    else { sysLine("自愈重试超限，请手动刷新/重新挂接", "err"); healBusy = false; return; }
+  }
+  healBusy = false;
 }
 
 function stopStream() {
   streamAlive = false;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (streamCtrl) { try { streamCtrl.abort(); } catch (e) {} streamCtrl = null; }
-  setConn(false, "未挂接");
+  setConn(false, attached ? attached + "（流已停）" : "未挂接");
 }
 
 function openStream() {
+  if (!attached) return;
   streamAlive = true;
   setConn(false, "连接中… " + attached);
   streamCtrl = new AbortController();
-  const url = STREAM + "?session=" + encodeURIComponent(attached) + "&since=" + lastSeq;
+  const url = STREAM + "?session=" + encodeURIComponent(attached)
+    + "&since=" + encodeURIComponent(streamCursor || "");
   fetch(url, {credentials: "same-origin", signal: streamCtrl.signal})
     .then(resp => {
       if (!resp.ok) throw new Error("stream " + resp.status);
@@ -223,6 +369,14 @@ function openStream() {
     });
 }
 
+function eidNum(eid) {
+  // eid 形如 "<bridge-ns>:<seq>"；取末段序号做本地连续性检查
+  if (typeof eid !== "string") return 0;
+  const i = eid.lastIndexOf(":");
+  const n = parseInt(i >= 0 ? eid.slice(i + 1) : eid.replace(/^e/, ""), 10);
+  return isNaN(n) ? 0 : n;
+}
+
 // 解析 SSE 帧（id:/data:），返回未消费完的剩余缓冲
 function drainFrames(buf) {
   let idx;
@@ -231,11 +385,21 @@ function drainFrames(buf) {
     buf = buf.slice(idx + 2);
     let id = null, data = null;
     for (const line of frame.split("\n")) {
-      if (line.startsWith("id:")) id = parseInt(line.slice(3).trim(), 10);
+      if (line.startsWith("id:")) id = line.slice(3).trim();
       else if (line.startsWith("data:")) data = line.slice(5).trim();
     }
     if (data === null) continue;          // 注释/keep-alive
-    if (id !== null && !isNaN(id)) lastSeq = id;
+    if (id !== null) {
+      const n = eidNum(id);
+      // 本地连续性检查（服务端之外的第二道缺口探测）
+      if (n > 0 && lastEidNum > 0 && n > lastEidNum + 1) {
+        // 同桥内跳号（跨桥时服务端会先发 webgw.gap 帧，此处为第二道探测）
+        streamCursor = id; lastEidNum = n;
+        let obj; try { obj = JSON.parse(data); } catch (e) { obj = null; }
+        if (obj && obj.type !== "webgw.gap") { heal("seq 跳号 " + lastEidNum + "→" + n); return ""; }
+      }
+      streamCursor = id; lastEidNum = n;
+    }
     let obj; try { obj = JSON.parse(data); } catch (e) { continue; }
     handleEvent(obj);
   }
@@ -244,7 +408,16 @@ function drainFrames(buf) {
 
 function setConn(on, info) {
   $("connDot").className = "dot" + (on ? " on" : " err");
+  $("connInfo").classList.remove("flash");
   $("connInfo").textContent = info;
+}
+function flash(info) {
+  $("connInfo").textContent = info;
+  $("connInfo").classList.add("flash");
+  setTimeout(() => {
+    $("connInfo").classList.remove("flash");
+    if (attached) setConn(streamAlive, attached);
+  }, 2500);
 }
 
 async function detach() {
@@ -252,31 +425,51 @@ async function detach() {
   stopStream();
   try { await api("detach", {session: attached}); } catch (e) {}
   attached = null;
+  entryCursor = null; streamCursor = ""; lastEidNum = 0;
+  curEpoch = null; lastGen = null; curLeafId = null;
   $("stream").innerHTML = "";
   refreshStatus();
 }
 
-// ---------------- 事件渲染 ----------------
+// ---------------- 事件渲染（实时流） ----------------
 function handleEvent(o) {
   const t = o.type;
   if (t === "sessiond.hello") {
+    if (curEpoch !== null && o.epoch !== undefined && o.epoch !== curEpoch) {
+      curEpoch = o.epoch;
+      heal("守护重启 epoch→" + o.epoch);     // 守护世代变化 → 基线自愈
+      return;
+    }
+    if (o.epoch !== undefined) curEpoch = o.epoch;
+    if (o.gen !== undefined) lastGen = o.gen;
     setConn(true, o.session + " · state=" + o.state + " · gen=" + o.gen
-      + " · pid=" + o.pid + (o.replay_count ? " · replay=" + o.replay_count : ""));
+      + " · pid=" + o.pid + (o.epoch !== undefined ? " · epoch=" + o.epoch : ""));
     sysLine("挂接 " + o.session + "（state=" + o.state + ", gen=" + o.gen
       + ", 回放 " + (o.replay_count || 0) + " 行）");
     return;
   }
   if (t === "sessiond.replay") {
+    // 实时流视角的回放：消息类事件照常渲染（与基线按游标/工具 id 去重）
     if (o.line && typeof o.line === "object") renderEvent(o.line);
     return;
   }
-  if (t === "sessiond.replay_end") { sysLine("回放结束"); return; }
+  if (t === "sessiond.replay_end") { return; }
+  if (t === "webgw.gap") {
+    sysLine("事件流缺口（since=" + o.since + "，最旧=" + o.oldest + "）→ 基线自愈", "warn");
+    heal("事件环淘汰");
+    return;
+  }
   if (t === "sessiond.error") { sysLine("sessiond: " + o.message, "err"); return; }
   if (t === "sessiond.session_restarting") {
     sysLine("会话进程死亡，" + (o.delay || 0) + "s 后重启", "warn"); return;
   }
   if (t === "sessiond.session_restarted") {
-    sysLine("会话已重启（gen=" + o.gen + ", pid=" + o.pid + "）", "warn"); return;
+    sysLine("会话已重启（gen=" + o.gen + ", pid=" + o.pid + "）", "warn");
+    if (lastGen !== null && o.gen !== undefined && o.gen !== lastGen) {
+      lastGen = o.gen;
+      heal("会话进程重启 gen→" + o.gen);   // 会话重启 → 以 entries 为准校准
+    } else if (o.gen !== undefined) lastGen = o.gen;
+    return;
   }
   if (t === "sessiond.session_disabled") { sysLine("会话崩溃熔断", "err"); return; }
   if (t === "sessiond.dialog_resolved") {
@@ -285,7 +478,7 @@ function handleEvent(o) {
   }
   if (t === "sessiond.pong") return;
   if (t === "webgw.bridge_lost") {
-    sysLine("网关与会话后端断开（守护重启？）— 自动重连后将回放补齐", "warn");
+    sysLine("网关与会话后端断开（守护重启？）— 重连后经缺口自愈补齐", "warn");
     return;
   }
   renderEvent(o);
@@ -318,6 +511,10 @@ function renderEvent(o) {
       th.textContent += ev.delta || "";
     } else if (ev.type === "toolcall_end") {
       const tc = ev.toolCall || {};
+      if (tc.id) {
+        if (seenToolIds.has(tc.id)) return;   // 基线已渲染（幂等）
+        seenToolIds.add(tc.id);
+      }
       toolLine("⇢ " + (tc.name || "?"), tc.arguments, "");
     }
     scrollStream();
@@ -329,11 +526,25 @@ function renderEvent(o) {
       const txt = curAssistantBuf || msgText(m);
       renderMarkdownInto(curAssistantEl, txt);
     }
+    if (m.role === "assistant") {
+      for (const p of m.content || [])
+        if (p && p.type === "toolCall" && p.id) seenToolIds.add(p.id);
+    }
+    if (m.role === "toolResult" && m.toolCallId)
+      seenToolIds.add("r:" + m.toolCallId);
     curAssistantEl = null; curAssistantBuf = "";
     return;
   }
-  if (t === "tool_execution_start") { toolLine("🔧 " + (o.toolName || "?"), o.args, "…"); return; }
+  if (t === "tool_execution_start") {
+    if (o.toolCallId && seenToolIds.has(o.toolCallId)) return;
+    toolLine("🔧 " + (o.toolName || "?"), o.args, "…"); return;
+  }
   if (t === "tool_execution_end") {
+    if (o.toolCallId) {
+      const key = "r:" + o.toolCallId;
+      if (seenToolIds.has(key)) return;       // 基线已渲染（幂等）
+      seenToolIds.add(key);
+    }
     const res = o.result || {};
     let txt = "";
     for (const c of res.content || []) if (c && c.type === "text") txt += c.text;
@@ -364,7 +575,7 @@ function renderEvent(o) {
   scrollStream();
 }
 
-// ---------------- markdown 渲染（复用 w 已内置的 marked） ----------------
+// ---------------- markdown 渲染 + 极简语法高亮 ----------------
 function liveText(el, text) {
   // 流式期间先纯文本渲染，避免每帧跑 markdown；message_end 再整段 markdown
   if (!el._plain) { el._plain = document.createElement("div"); el.appendChild(el._plain); }
@@ -373,12 +584,33 @@ function liveText(el, text) {
 function renderMarkdownInto(el, text) {
   if (!text) return;
   if (window.marked && window.marked.parse) {
-    try { el.innerHTML = window.marked.parse(text); return; } catch (e) {}
+    try {
+      el.innerHTML = window.marked.parse(text);
+      el.querySelectorAll("pre code").forEach(highlightCode);
+      return;
+    } catch (e) {}
   }
   el.textContent = text;
 }
+// 极简内嵌高亮：注释/字符串/数字/关键字，单一正则扫描。不引外部库（取舍：
+// 无精确语法树，跨语言通用词表，满足可读性即可）。
+const HL_RE = /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\b(\d+(?:\.\d+)?)\b|\b(const|let|var|function|return|if|elif|else|for|while|class|import|from|export|async|await|try|catch|except|finally|def|pass|raise|with|as|in|of|new|typeof|instanceof|switch|case|break|continue|lambda|yield|None|True|False|null|undefined|true|false|then|do|done|fi|esac|echo|exit|local|select|struct|fn|mut|impl|use|public|private|static|void|int|str|string|bool)\b/g;
+function highlightCode(codeEl) {
+  const src = codeEl.textContent;
+  if (!src || src.length > 200000) return;   // 超大块跳过，防卡顿
+  let out = "", last = 0, m;
+  HL_RE.lastIndex = 0;
+  while ((m = HL_RE.exec(src)) !== null) {
+    out += esc(src.slice(last, m.index));
+    const cls = m[1] ? "tok-c" : m[2] ? "tok-s" : m[3] ? "tok-n" : "tok-k";
+    out += '<span class="' + cls + '">' + esc(m[0]) + "</span>";
+    last = m.index + m[0].length;
+  }
+  out += esc(src.slice(last));
+  codeEl.innerHTML = out;
+}
 
-// ---------------- dialog 组件 ----------------
+// ---------------- dialog 组件（倒计时实时递减，打磨项①） ----------------
 function showDialog(o) {
   const id = o.id;
   pendingDialogs[id] = o;
@@ -429,8 +661,24 @@ function showDialogNow(o) {
     b.onclick = () => replyDialog({value: input.value});
     opts.appendChild(b);
   }
-  $("dialogTimeout").textContent = o.timeout ? ("超时 " + Math.round(o.timeout / 1000) + "s 自动结算") : "";
+  startDialogCountdown(o.timeout);
   sysLine("⚠ dialog [" + m + "] id=" + id + " — " + trunc(o.title || "", 80), "warn");
+}
+function startDialogCountdown(timeoutMs) {
+  stopDialogCountdown();
+  const el = $("dialogTimeout");
+  if (!timeoutMs) { el.textContent = ""; return; }
+  dialogDeadline = Date.now() + timeoutMs;
+  const tick = () => {
+    const remain = Math.max(0, Math.ceil((dialogDeadline - Date.now()) / 1000));
+    el.textContent = "剩余 " + remain + "s 自动结算";
+    if (remain <= 0) stopDialogCountdown();
+  };
+  tick();
+  dialogTimer = setInterval(tick, 250);
+}
+function stopDialogCountdown() {
+  if (dialogTimer) { clearInterval(dialogTimer); dialogTimer = null; }
 }
 async function replyDialog(fields) {
   const box = $("dialogBox");
@@ -445,12 +693,21 @@ async function replyDialog(fields) {
 function castId(id) { const o = pendingDialogs[id]; return o ? o.id : id; }
 function closeDialog(id, note) {
   delete pendingDialogs[id];
-  if ($("dialogBox").dataset.did === String(id)) $("dialogBox").style.display = "none";
+  if ($("dialogBox").dataset.did === String(id)) {
+    $("dialogBox").style.display = "none";
+    stopDialogCountdown();
+    $("dialogTimeout").textContent = "";
+  }
   sysLine("dialog " + id + " " + note);
   const next = Object.keys(pendingDialogs)[0];
   if (next) showDialogNow(pendingDialogs[next]);
 }
-function clearPendingDialogs() { pendingDialogs = {}; $("dialogBox").style.display = "none"; }
+function clearPendingDialogs() {
+  pendingDialogs = {};
+  $("dialogBox").style.display = "none";
+  stopDialogCountdown();
+  $("dialogTimeout").textContent = "";
+}
 
 // ---------------- 上行 ----------------
 async function sendCmd(cmd) {
