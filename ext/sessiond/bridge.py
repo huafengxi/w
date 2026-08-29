@@ -344,6 +344,28 @@ def ctl_reload_session(name, timeout=30.0):
                         timeout=timeout)
 
 
+# ---- 管理面（任务 0829-1803-2umc）：经 ctl.sock 下发守护管理命令 ----
+
+def ctl_add_session(name, cwd=None, timeout=10.0):
+    """新增会话（注册表条目 + 立即拉起）。"""
+    req = {"cmd": "add-session", "name": name}
+    if cwd:
+        req["cwd"] = cwd
+    return _ctl_request(req, timeout=timeout)
+
+
+def ctl_set_cwd(name, cwd, timeout=30.0):
+    """切工作目录（注册表更新 + 进程级 reload 重启生效）。"""
+    return _ctl_request({"cmd": "set-cwd", "name": name, "cwd": cwd},
+                        timeout=timeout)
+
+
+def ctl_rename_session(name, new_name, timeout=30.0):
+    """改名（注册表 + socket 文件改名 + 带新 --name respawn）。"""
+    return _ctl_request({"cmd": "rename-session", "name": name,
+                         "new_name": new_name}, timeout=timeout)
+
+
 def gc_idle_bridges():
     """由 stream/api 调用时顺带清理久未活动的桥（无常驻线程）。"""
     now = time.time()

@@ -1052,9 +1052,10 @@ function sendAbort() { sendCmd({type: "abort", id: uid()}); }
 // ---------------- 斜杠命令拦截（inform2/inform3，0829-1733-1hjh） ----------------
 // 以 / 开头的输入不进 prompt：可映射 pi rpc 命令的做真实现，其余内联提示。
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-const SLASH_HELP = "支持：/abort · /compact · /model <provider>/<modelId> · "
+const SLASH_HELP = "会话面：/abort · /compact · /model <provider>/<modelId> · "
   + "/thinking <" + THINKING_LEVELS.join("|") + "> · /export · /fork [<entryId>]"
-  + (typeof doReload === "function" ? " · /reload" : "");
+  + (typeof doReload === "function" ? " · /reload" : "")
+  + " │ 管理面：/ls · /attach <name> · /new <name> [cwd] · /cd <dir> · /set-name <name>";
 let noticeTimer = null;
 function showNotice(text, cls, sticky) {
   const n = $("slashNotice");
@@ -1115,9 +1116,88 @@ function handleSlash(msg) {
       if (typeof doReload === "function") doReload();
       else showNotice("未知命令 /reload —— " + SLASH_HELP, "err");
       return;
+    // ---------------- 管理面斜杠命令（任务 0829-1803-2umc） ----------------
+    // 针对 sessiond 会话注册表/守护，不是当前会话的 prompt；前端拦截 → 桥接层 →
+    // 守护 ctl（add-session/set-cwd/rename-session），响应/错误走提示条+侧栏。
+    case "/ls":
+      doLs(); return;
+    case "/attach": {
+      if (!arg) { showNotice("用法：/attach <会话名>（/ls 查看清单）", "err"); return; }
+      doAttachByName(arg.split(/\s+/)[0]); return;
+    }
+    case "/new": {
+      const parts = arg.split(/\s+/).filter(Boolean);
+      if (!parts.length) { showNotice("用法：/new <name> [cwd]（cwd 缺省 ~/m）", "err"); return; }
+      doNewSession(parts[0], parts.slice(1).join(" ")); return;
+    }
+    case "/cd":
+      if (!arg) { showNotice("用法：/cd <dir>（当前会话切工作目录，重启生效）", "err"); return; }
+      doSetCwd(arg); return;
+    case "/set-name":
+      if (!arg) { showNotice("用法：/set-name <新名>（当前会话改名，重启生效）", "err"); return; }
+      doSetName(arg.split(/\s+/)[0]); return;
     default:
       showNotice("未知命令 " + cmd + " —— " + SLASH_HELP, "err"); return;
   }
+}
+
+// ---------------- 管理命令实现（任务 0829-1803-2umc） ----------------
+async function doLs() {
+  let st;
+  try { st = await api("status"); }
+  catch (e) { showNotice("/ls 失败：" + e.message, "err"); return; }
+  const rows = (st.sessions || []).map(s =>
+    (s.name === attached ? "▶ " : "   ") + s.name
+    + " · " + (s.disabled ? "熔断" : (s.state || "?"))
+    + " · gen=" + nz(s.gen)
+    + (s.cwd ? " · cwd=" + abbrevCwd(s.cwd) : "")
+    + (s.enabled ? "" : " · disabled"));
+  showNotice("会话清单（" + (st.sessions || []).length + " 个）\n"
+    + (rows.join("\n") || "（空）"), "", true);
+  for (const r of rows) sysLine("/ls: " + r.trim());   // 侧栏留痕（含 state/gen/cwd/enabled）
+}
+async function doAttachByName(name) {
+  // 复用会话列表「挂接」的既有 attach 流程（基线重拉+续流）；不存在则提示。
+  try {
+    const st = await api("status");
+    if (!(st.sessions || []).some(s => s.name === name)) {
+      showNotice("会话 " + name + " 不存在（/ls 查看清单）", "err", true);
+      return;
+    }
+  } catch (e) { /* status 不可达不拦挂接尝试，错误由 attach() 自报 */ }
+  showNotice("挂接 " + name + "…（基线重拉+续流）");
+  attach(name);
+}
+async function doNewSession(name, cwd) {
+  try {
+    const r = await api("new", Object.assign({name: name}, cwd ? {cwd: cwd} : {}));
+    showNotice("已创建会话 " + r.name + (r.cwd ? "（cwd=" + abbrevCwd(r.cwd) + "）" : "")
+      + "，拉起中；/ls 确认 running，/attach " + r.name + " 挂接", "", true);
+    sysLine("/new " + r.name + " ok" + (r.cwd ? " cwd=" + r.cwd : ""));
+    refreshStatus();
+  } catch (e) { showNotice("/new 拒绝：" + e.message, "err", true); }
+}
+async function doSetCwd(dir) {
+  if (!attached) { showNotice("尚未挂接会话（/attach <name> 后再 /cd）", "err"); return; }
+  showNotice("更新 " + attached + " 的 cwd → " + dir + "（重启生效）…");
+  try {
+    const r = await api("set-cwd", {session: attached, cwd: dir});
+    sysLine("/cd ok: cwd=" + (r.cwd || dir) + (r.gen !== undefined ? " gen→" + r.gen : "（未拉起，仅登记）"));
+    showNotice("cwd 已更新 → " + abbrevCwd(r.cwd || dir)
+      + (r.gen !== undefined ? "，会话已重启（gen=" + r.gen + "），等待自愈续流…" : "（会话未拉起，下次拉起生效）"), "", true);
+    refreshStatus();
+  } catch (e) { showNotice("/cd 拒绝：" + e.message, "err", true); }
+}
+async function doSetName(name) {
+  if (!attached) { showNotice("尚未挂接会话（/attach <name> 后再 /set-name）", "err"); return; }
+  showNotice("改名 " + attached + " → " + name + "（socket 改名 + 重启生效）…");
+  try {
+    const r = await api("rename", {session: attached, name: name});
+    sysLine("/set-name ok: " + (r.old || attached) + " → " + r.session + " gen→" + nz(r.gen));
+    showNotice("已改名 → " + r.session + "，重新挂接新名…");
+    await attach(r.session);      // 新名挂接（基线重拉+续流）；旧名 socket 已失效
+    refreshStatus();
+  } catch (e) { showNotice("/set-name 拒绝：" + e.message, "err", true); }
 }
 
 // IME 组合保护（inform2，0829-1721-56qb）：组合期间 Enter 只确认候选字，不发送；

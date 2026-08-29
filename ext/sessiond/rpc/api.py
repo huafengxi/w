@@ -2,7 +2,10 @@
 # sessiond 控制面 + 上行命令端点（w/ext/sessiond，任务 0829-1510-w25l；
 # 基线 get_entries / 增量补发：任务 0829-1609-8dwt）。
 # op=status 透传 ctl.sock status（含守护 epoch）；op=reload 经 ctl.sock 下发
-# reload-session（杀会话进程+立即从 jsonl resume 重拉，0829-1740-u7tb）；op=attach 建/复用 Bridge 并经守护
+# reload-session（杀会话进程+立即从 jsonl resume 重拉，0829-1740-u7tb）；
+# 管理面（0829-1803-2umc）：op=new/set-cwd/rename 经 ctl.sock 下发
+# add-session/set-cwd/rename-session（前端管理斜杠命令 /new /cd /set-name 承接）；
+# op=attach 建/复用 Bridge 并经守护
 # 透传 pi rpc get_entries 返回消息基线（全量）；op=entries 增量补发（since=entry id
 # 游标，success:false 自动回退全量并置 gap）；op=cmd 透传单条 pi 命令。
 # （op=detach 已移除：前端「断开挂接」按钮下线，断开 = 关页签，桥由空闲回收，
@@ -53,7 +56,18 @@ def _check_session(session):
     return None
 
 
-def interp(store, op='', session='', cmd='', since='', **kw):
+def _mgmt_err(r, default='502 Bad Gateway'):
+    """管理命令拒绝响应（任务 0829-1803-2umc）：按守护 reason 映射 HTTP 状态。"""
+    reason = (r or {}).get("reason")
+    status = {"dup": '409 Conflict', "gate": '409 Conflict',
+              "bad-name": '400 Bad Request', "bad-cwd": '400 Bad Request',
+              "unknown": '404 Not Found'}.get(reason, default)
+    return _j({"ok": False,
+               "error": (r or {}).get("error") or "unknown daemon error",
+               "reason": reason or "unknown"}, status)
+
+
+def interp(store, op='', session='', cmd='', since='', name='', cwd='', **kw):
     _b.gc_idle_bridges()
     if op == 'status':
         try:
@@ -67,6 +81,20 @@ def interp(store, op='', session='', cmd='', since='', **kw):
             if isinstance(s, dict) and cwds.get(s.get("name")):
                 s["cwd"] = cwds[s["name"]]
         return _j(st)
+    if op == 'new':
+        # 管理命令（0829-1803-2umc）：新建会话 = 注册表新增条目 + 立即拉起。
+        # 目标是尚不存在的会话 → 不过 _check_session 白名单；重名/门控名占用
+        # 由守护拒绝（透传错误）。
+        r = None
+        try:
+            r = _b.ctl_add_session(name.strip(), cwd.strip() or None)
+        except Exception as e:
+            return _j({"ok": False, "error": "ctl.sock unavailable: %s" % e},
+                      '502 Bad Gateway')
+        if not r or not r.get("ok"):
+            return _mgmt_err(r)
+        return _j({"ok": True, "name": r.get("name"), "cwd": r.get("cwd"),
+                   "session_file": r.get("session_file")})
     deny = _check_session(session)
     if deny:
         return deny
@@ -133,6 +161,33 @@ def interp(store, op='', session='', cmd='', since='', **kw):
                                 % ((r or {}).get("error") or "unknown")},
                       '502 Bad Gateway')
         return _j({"ok": True, "session": session,
+                   "gen": r.get("gen"), "pid": r.get("pid")})
+    if op == 'set-cwd':
+        # 管理命令（0829-1803-2umc）：当前会话切工作目录 = 注册表更新 +
+        # 进程级 reload 重启生效（守护同步完成，响应带新 gen）。
+        try:
+            r = _b.ctl_set_cwd(session, cwd.strip())
+        except Exception as e:
+            return _j({"ok": False, "error": "ctl.sock unavailable: %s" % e},
+                      '502 Bad Gateway')
+        if not r or not r.get("ok"):
+            return _mgmt_err(r)
+        return _j({"ok": True, "session": session, "cwd": r.get("cwd"),
+                   "gen": r.get("gen"), "pid": r.get("pid"),
+                   "respawn": r.get("respawn", True)})
+    if op == 'rename':
+        # 管理命令（0829-1803-2umc）：当前会话改名 = 注册表 + socket 改名 +
+        # 新 --name respawn；重名/门控名占用由守护拒绝。旧名挂接失效（预期）。
+        try:
+            r = _b.ctl_rename_session(session, name.strip())
+        except Exception as e:
+            return _j({"ok": False, "error": "ctl.sock unavailable: %s" % e},
+                      '502 Bad Gateway')
+        if not r or not r.get("ok"):
+            return _mgmt_err(r)
+        # 旧名的桥回收（其 socket 已由守护关闭）
+        _b.drop_bridge(session)
+        return _j({"ok": True, "old": session, "session": r.get("name"),
                    "gen": r.get("gen"), "pid": r.get("pid")})
     if op == 'cmd':
         try:
