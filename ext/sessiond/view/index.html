@@ -144,7 +144,6 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
     <div id="inputbar">
       <textarea id="promptInput" rows="1" placeholder="输入 prompt，Enter 发送（Shift+Enter 换行）"></textarea>
       <button onclick="sendAbort()">中止</button>
-      <button onclick="sendGetState()">get_state</button>
       <button class="primary" onclick="sendPrompt()">发送</button>
     </div>
   </main>
@@ -963,10 +962,20 @@ function sendPrompt() {
   sendCmd({type: "prompt", message: msg, id: uid()});
 }
 function sendAbort() { sendCmd({type: "abort", id: uid()}); }
-function sendGetState() { sendCmd({type: "get_state", id: uid()}); }
 
+// IME 组合保护（inform2，0829-1721-56qb）：组合期间 Enter 只确认候选字，不发送；
+// 部分浏览器（Chrome）compositionend 后仍会再派发一次 Enter keydown → 用标志位
+// 延迟一拍清除吞掉它。
+let composing = false;
+$("promptInput").addEventListener("compositionstart", () => { composing = true; });
+$("promptInput").addEventListener("compositionend", () => {
+  setTimeout(() => { composing = false; }, 0);
+});
 $("promptInput").addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+  if (e.key === "Enter" && !e.shiftKey) {
+    if (e.isComposing || e.keyCode === 229 || composing) return;
+    e.preventDefault(); sendPrompt();
+  }
 });
 $("promptInput").addEventListener("input", function () {
   this.style.height = "auto";
