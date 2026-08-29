@@ -43,8 +43,11 @@ aside h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .08em; }
 #stream { flex: 1; overflow-y: auto; padding: 12px 16px; }
 .ev { margin-bottom: 8px; }
-.role-user { background: var(--panel2); border-left: 3px solid var(--acc);
-  padding: 6px 10px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
+/* 用户消息靠右（聊天惯例，inform3，0829-1640-har3）：浅蓝底区分，白底主题对比度 =
+   #ddf4ff 底 × #1a1f26 正文（GitHub accent 浅色系）；块右对齐、块内文本仍左起 */
+.role-user { background: #ddf4ff; border: 1px solid #b6e3ff;
+  border-right: 3px solid var(--acc); padding: 6px 10px; border-radius: 8px;
+  white-space: pre-wrap; word-break: break-word; max-width: 80%; margin-left: auto; }
 .md { word-break: break-word; }
 .md p { margin: 4px 0; }
 .md pre { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
@@ -57,17 +60,28 @@ aside h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
 .md pre code .tok-s { color: #0a3069; }
 .md pre code .tok-c { color: #6e7781; font-style: italic; }
 .md pre code .tok-n { color: #953800; }
-.thinking { color: var(--dim); font-style: italic; }
-.thinking-block summary { color: var(--dim); font-size: 12px; cursor: pointer; }
+/* thinking / 工具调用块默认折叠（inform4，0829-1640-har3）；状态色在 summary 可见 */
+.thinking-block { margin: 2px 0; }
+.thinking-block summary { color: var(--dim); font-size: 12px; cursor: pointer;
+  font-style: italic; }
 .thinking-block pre { white-space: pre-wrap; word-break: break-word; color: var(--dim);
   font-style: italic; font-size: 12px; margin: 4px 0; }
 .sys { color: var(--dim); font-size: 12px; }
 .sys.warn { color: var(--warn); } .sys.err { color: var(--err); }
-.tool { color: var(--dim); font-size: 12px; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px;
-  margin: 2px 0; word-break: break-all; }
-.tool .tname { color: var(--warn); }
-.tool.done .tname { color: var(--ok); } .tool.fail .tname { color: var(--err); }
+.tool-block { background: var(--panel); border: 1px solid var(--line);
+  border-radius: 4px; margin: 2px 0; font-size: 12px; color: var(--dim); }
+.tool-block summary { cursor: pointer; padding: 4px 8px; word-break: break-all; }
+.tool-block .tst { font-weight: 600; }
+.tool-block.run .tst { color: var(--warn); }
+.tool-block.done .tst { color: var(--ok); }
+.tool-block.err .tst { color: var(--err); }
+.tool-block .tbody { padding: 0 8px 6px; }
+.tool-block pre { font-size: 11px; margin: 4px 0; white-space: pre-wrap;
+  word-break: break-all; }
+.tool-block .targs { color: var(--dim); }
+.tool-block .tout { color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px;
+  max-height: 300px; overflow-y: auto; }
 details.raw summary { color: var(--dim); font-size: 12px; cursor: pointer; }
 details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   word-break: break-all; margin: 2px 0; }
@@ -151,6 +165,7 @@ let curLeafId = null;         // 活跃分支叶
 let entryCursor = null;       // 最后 entry id（增量游标）
 let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
 let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
+let toolBlocks = {};          // toolCallId -> 折叠块引用（0829-1640-har3）
 let healBusy = false;
 let healFails = 0;
 // dialog 倒计时
@@ -202,7 +217,7 @@ async function attach(name) {
   clearPendingDialogs();
   $("stream").innerHTML = "";
   curAssistantEl = null; curAssistantBuf = "";
-  seenEntryIds = new Set(); seenToolIds = new Set();
+  seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
   sysLine("挂接 " + name + "：拉取历史基线（get_entries）…");
   let doc;
   try { doc = await api("attach", {session: name}); }
@@ -222,7 +237,7 @@ function applyBaseline(doc, initial) {
   if (!initial) {
     $("stream").innerHTML = "";
     curAssistantEl = null; curAssistantBuf = "";
-    seenEntryIds = new Set(); seenToolIds = new Set();
+    seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
   }
   for (const e of branch) renderEntry(e);
   streamCursor = doc.watermark || "";
@@ -272,10 +287,10 @@ function renderEntryMessage(m) {
     const key = "r:" + m.toolCallId;
     if (seenToolIds.has(key)) return;                   // 与实时事件互斥
     seenToolIds.add(key);
-    let txt = "";
-    for (const c of m.content || []) if (c && c.type === "text") txt += c.text;
-    toolLine((m.isError ? "✗ " : "✓ ") + (m.toolName || "?") + " done",
-             null, trunc(txt.trim(), 300), m.isError ? "fail" : "done");
+    let blk = m.toolCallId ? toolBlocks[m.toolCallId] : null;
+    if (!blk) blk = toolBlock(m.toolCallId, m.toolName);
+    blk.outPre.textContent = resultText(m);             // 并入所属工具块
+    setToolStatus(blk, m.isError ? "err" : "done");
     return;
   }
   if (role === "assistant") {
@@ -284,23 +299,18 @@ function renderEntryMessage(m) {
     for (const p of m.content || []) {
       if (!p) continue;
       if (p.type === "thinking" && p.thinking) {
-        const d = document.createElement("details");
-        d.className = "thinking-block";
-        d.innerHTML = "<summary>thinking</summary>";
-        const pre = document.createElement("pre");
-        pre.textContent = p.thinking;
-        d.appendChild(pre);
-        el.appendChild(d);
+        el.appendChild(thinkingDetails(p.thinking));    // 默认折叠，summary 带字数
       } else if (p.type === "text") {
         text += (text ? "\n" : "") + (p.text || "");
       } else if (p.type === "toolCall") {
         if (p.id && !seenToolIds.has(p.id)) {
           seenToolIds.add(p.id);
-          toolLine("⇢ " + (p.name || "?"), p.arguments, "");
+          const blk = toolBlock(p.id, p.name);          // 折叠块；结果由 toolResult 条目并入
+          blk.argsPre.textContent = fmtArgs(p.arguments);
         }
       }
     }
-    renderMarkdownInto(el, text);
+    renderMarkdownInto(mdDiv(el), text);                // 不擦除 thinking/工具子节点
     return;
   }
   sysLine("◆ message role=" + role);
@@ -503,19 +513,30 @@ function renderEvent(o) {
     if (!curAssistantEl) { curAssistantEl = addDiv("role-assistant md", ""); curAssistantBuf = ""; }
     if (ev.type === "text_delta") {
       curAssistantBuf += ev.delta || "";
-      liveText(curAssistantEl, curAssistantBuf);
+      liveText(mdDiv(curAssistantEl), curAssistantBuf);
     } else if (ev.type === "thinking_delta") {
-      let th = curAssistantEl.querySelector(".thinking");
-      if (!th) { th = document.createElement("div"); th.className = "thinking";
-        curAssistantEl.appendChild(th); }
-      th.textContent += ev.delta || "";
+      // thinking 实时流：并入默认折叠块，summary 实时显示字数（inform4）
+      let th = curAssistantEl._think;
+      if (!th) {
+        const d = document.createElement("details");    // 无 open = 默认折叠
+        d.className = "thinking-block";
+        const s = document.createElement("summary");
+        const pre = document.createElement("pre");
+        d.appendChild(s); d.appendChild(pre);
+        curAssistantEl.insertBefore(d, curAssistantEl.firstChild);
+        th = curAssistantEl._think = {sum: s, pre: pre, buf: ""};
+      }
+      th.buf += ev.delta || "";
+      th.pre.textContent = th.buf;
+      th.sum.textContent = "💭 thinking（" + th.buf.length + " 字）";
     } else if (ev.type === "toolcall_end") {
       const tc = ev.toolCall || {};
       if (tc.id) {
         if (seenToolIds.has(tc.id)) return;   // 基线已渲染（幂等）
         seenToolIds.add(tc.id);
+        const blk = toolBlock(tc.id, tc.name);          // 建折叠块；start/update/end 并入
+        blk.argsPre.textContent = fmtArgs(tc.arguments);
       }
-      toolLine("⇢ " + (tc.name || "?"), tc.arguments, "");
     }
     scrollStream();
     return;
@@ -524,7 +545,13 @@ function renderEvent(o) {
     const m = o.message || {};
     if (m.role === "assistant" && curAssistantEl) {
       const txt = curAssistantBuf || msgText(m);
-      renderMarkdownInto(curAssistantEl, txt);
+      renderMarkdownInto(mdDiv(curAssistantEl), txt);   // 不擦除 thinking 折叠块
+      if (!curAssistantEl._think) {                     // 无流式 delta 的 thinking 兜底补入
+        for (const p of m.content || [])
+          if (p && p.type === "thinking" && p.thinking)
+            curAssistantEl.insertBefore(thinkingDetails(p.thinking),
+                                        curAssistantEl.firstChild);
+      }
     }
     if (m.role === "assistant") {
       for (const p of m.content || [])
@@ -536,8 +563,25 @@ function renderEvent(o) {
     return;
   }
   if (t === "tool_execution_start") {
-    if (o.toolCallId && seenToolIds.has(o.toolCallId)) return;
-    toolLine("🔧 " + (o.toolName || "?"), o.args, "…"); return;
+    const id = o.toolCallId;
+    let blk = id ? toolBlocks[id] : null;               // toolcall_end 先建过 → 复用
+    if (!blk) {
+      if (id && seenToolIds.has(id)) return;  // 基线已渲染（幂等）
+      blk = toolBlock(id, o.toolName);
+    }
+    if (id) seenToolIds.add(id);
+    if (!blk.argsPre.textContent) blk.argsPre.textContent = fmtArgs(o.args);
+    setToolStatus(blk, "running");
+    scrollStream(); return;
+  }
+  if (t === "tool_execution_update") {
+    // 流式行并入所属工具块，不单独占行（inform4）；partialResult 是累积值 → 整段替换（pi rpc.md）
+    const id = o.toolCallId;
+    if (id && seenToolIds.has("r:" + id)) return;       // 基线已收尾（幂等）
+    let blk = id ? toolBlocks[id] : null;
+    if (!blk) blk = toolBlock(id, o.toolName);
+    blk.outPre.textContent = resultText(o.partialResult);
+    scrollStream(); return;
   }
   if (t === "tool_execution_end") {
     if (o.toolCallId) {
@@ -545,12 +589,11 @@ function renderEvent(o) {
       if (seenToolIds.has(key)) return;       // 基线已渲染（幂等）
       seenToolIds.add(key);
     }
-    const res = o.result || {};
-    let txt = "";
-    for (const c of res.content || []) if (c && c.type === "text") txt += c.text;
-    toolLine((o.isError ? "✗ " : "✓ ") + (o.toolName || "?") + " done",
-             null, trunc(txt.trim(), 300), o.isError ? "fail" : "done");
-    return;
+    let blk = o.toolCallId ? toolBlocks[o.toolCallId] : null;
+    if (!blk) blk = toolBlock(o.toolCallId, o.toolName);
+    blk.outPre.textContent = resultText(o.result);
+    setToolStatus(blk, o.isError ? "err" : "done");
+    scrollStream(); return;
   }
   if (t === "extension_ui_request") { showDialog(o); return; }
   if (t === "response") {
@@ -575,7 +618,68 @@ function renderEvent(o) {
   scrollStream();
 }
 
+// ---------------- thinking/工具调用折叠块（inform4，0829-1640-har3） ----------------
+function thinkingDetails(text) {
+  const d = document.createElement("details");          // 无 open = 默认折叠
+  d.className = "thinking-block";
+  const s = document.createElement("summary");
+  s.textContent = "💭 thinking（" + text.length + " 字）";
+  const pre = document.createElement("pre");
+  pre.textContent = text;
+  d.appendChild(s); d.appendChild(pre);
+  return d;
+}
+// 工具调用整段（tool_execution_start→result，含其间 update 流式行）折叠为一块，
+// summary 「🔧 <工具名> · running/done/err」，状态在 summary 可见。
+function toolBlock(id, name) {
+  if (id && toolBlocks[id]) return toolBlocks[id];
+  const det = document.createElement("details");        // 默认折叠
+  det.className = "ev tool-block run";
+  const sum = document.createElement("summary");
+  const head = document.createElement("span");
+  head.textContent = "🔧 " + (name || "?") + " · ";
+  const st = document.createElement("span");
+  st.className = "tst"; st.textContent = "running";
+  sum.appendChild(head); sum.appendChild(st);
+  const body = document.createElement("div");
+  body.className = "tbody";
+  const argsPre = document.createElement("pre"); argsPre.className = "targs";
+  const outPre = document.createElement("pre"); outPre.className = "tout";
+  body.appendChild(argsPre); body.appendChild(outPre);
+  det.appendChild(sum); det.appendChild(body);
+  $("stream").appendChild(det);
+  const blk = {det: det, st: st, argsPre: argsPre, outPre: outPre};
+  if (id) toolBlocks[id] = blk;
+  return blk;
+}
+function setToolStatus(blk, status) {
+  blk.st.textContent = status;                          // running/done/err 在 summary 上
+  blk.det.className = "ev tool-block "
+    + (status === "done" ? "done" : status === "err" ? "err" : "run");
+}
+function fmtArgs(args) {
+  if (args == null) return "";
+  const s = typeof args === "string" ? args : JSON.stringify(args, null, 2);
+  return trunc(s, 20000);
+}
+function resultText(res) {
+  let txt = "";
+  for (const c of (res && res.content) || [])
+    if (c && c.type === "text") txt += c.text;
+  return trunc(txt.trim(), 50000);                      // 展示截断，防巨型输出卡顿
+}
+
 // ---------------- markdown 渲染 + 极简语法高亮 ----------------
+function mdDiv(el) {
+  // assistant 块内的 markdown 专用子容器：innerHTML 替换不会擦除 thinking/工具子节点
+  if (!el._md) {
+    const d = document.createElement("div");
+    d.className = "mdtext";
+    el.appendChild(d);
+    el._md = d;
+  }
+  return el._md;
+}
 function liveText(el, text) {
   // 流式期间先纯文本渲染，避免每帧跑 markdown；message_end 再整段 markdown
   if (!el._plain) { el._plain = document.createElement("div"); el.appendChild(el._plain); }
@@ -585,12 +689,62 @@ function renderMarkdownInto(el, text) {
   if (!text) return;
   if (window.marked && window.marked.parse) {
     try {
-      el.innerHTML = window.marked.parse(text);
+      el.innerHTML = sanitizeHtml(window.marked.parse(text));   // S2：消毒后再 innerHTML
       el.querySelectorAll("pre code").forEach(highlightCode);
       return;
     } catch (e) {}
   }
   el.textContent = text;
+}
+
+// ---------------- 极简白名单消毒（S2，0829-1640-har3） ----------------
+// 取舍：w 无内置 sanitizer 且不引外部依赖（单文件零构建约束）→ 原生 DOM 解析 +
+// 标签/属性/URL 三重白名单。危险容器（script/style/iframe/svg/form 控件等）连子树整体移除；
+// 白名单外普通标签解包保留文本；属性只留 a[href]、img[src|alt] 且 URL 协议白名单。
+// 局限：非专业消毒库（如 DOMPurify），mutation XSS 等边角面不承诺——会话内容同源可信 +
+// BasicAuth 门禁下的纵深防御定位，见 PROTOCOL §6.5。
+const SANITIZE_TAGS = new Set(["p", "br", "b", "i", "u", "em", "strong", "code", "pre",
+  "blockquote", "ul", "ol", "li", "a", "h1", "h2", "h3", "h4", "h5", "h6",
+  "table", "thead", "tbody", "tfoot", "tr", "td", "th", "img", "span", "hr",
+  "del", "s", "sup", "sub", "dl", "dt", "dd", "figure", "figcaption"]);
+const SANITIZE_DROP = new Set(["script", "style", "iframe", "object", "embed", "form",
+  "input", "button", "textarea", "select", "option", "link", "meta", "base",
+  "svg", "math", "template", "video", "audio", "source", "track", "frame",
+  "frameset", "applet", "dialog"]);
+function safeUrl(u) {
+  if (typeof u !== "string") return false;
+  const v = u.replace(/[\u0000-\u0020]+/g, "").toLowerCase();
+  return /^(https?:|mailto:|#|\/|\.\/|\.\.\/)/.test(v);
+}
+function sanitizeWalk(parent) {
+  const nodes = Array.from(parent.childNodes);
+  for (const n of nodes) {
+    if (n.nodeType === 8) { parent.removeChild(n); continue; }   // 注释移除（条件注释面）
+    if (n.nodeType !== 1) continue;                              // 文本保留（已转义序列化）
+    const tag = n.tagName.toLowerCase();
+    if (SANITIZE_DROP.has(tag)) { parent.removeChild(n); continue; }
+    if (!SANITIZE_TAGS.has(tag)) {
+      sanitizeWalk(n);                                           // 解包：递归消毒后提升子节点
+      while (n.firstChild) parent.insertBefore(n.firstChild, n);
+      parent.removeChild(n);
+      continue;
+    }
+    const attrs = Array.from(n.attributes).map(a => a.name);
+    for (const a of attrs) {
+      const al = a.toLowerCase();
+      if (tag === "a" && al === "href" && safeUrl(n.getAttribute(a))) continue;
+      if (tag === "img" && al === "src" && safeUrl(n.getAttribute(a))) continue;
+      if (tag === "img" && al === "alt") continue;
+      n.removeAttribute(a);                                      // 其余全删（含 on* 事件属性）
+    }
+    sanitizeWalk(n);
+  }
+}
+function sanitizeHtml(html) {
+  const tpl = document.createElement("template");                // 惰性文档，不执行脚本/加载资源
+  tpl.innerHTML = html;
+  sanitizeWalk(tpl.content);
+  return tpl.innerHTML;
 }
 // 极简内嵌高亮：注释/字符串/数字/关键字，单一正则扫描。不引外部库（取舍：
 // 无精确语法树，跨语言通用词表，满足可读性即可）。
@@ -746,16 +900,6 @@ function sysLine(text, cls) {
   const d = document.createElement("div");
   d.className = "ev sys" + (cls ? " " + cls : "");
   d.appendChild(document.createTextNode(new Date().toLocaleTimeString() + " " + text));
-  $("stream").appendChild(d);
-  scrollStream();
-}
-function toolLine(head, args, tail, cls) {
-  const d = document.createElement("div");
-  d.className = "ev tool" + (cls ? " " + cls : "");
-  let s = head;
-  if (args != null) s += " " + trunc(typeof args === "string" ? args : JSON.stringify(args), 160);
-  if (tail) s += " " + tail;
-  d.appendChild(document.createTextNode(s));
   $("stream").appendChild(d);
   scrollStream();
 }

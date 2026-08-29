@@ -18,15 +18,37 @@ def _j(obj, status='200 OK'):
 
 def interp(store, session='', since='', **kw):
     _b.gc_idle_bridges()
+    # S1（0829-1640-har3）：同 api.py，注册表白名单（拒保留名 ctl/野 socket）
     if not session or '/' in session or session.startswith('.'):
         return _j({"ok": False, "error": "missing/bad session"}, '400 Bad Request')
+    try:
+        names = _b.registry_names()
+    except Exception as e:
+        return _j({"ok": False,
+                   "error": "registry unavailable, refusing: %s" % e},
+                  '502 Bad Gateway')
+    if session not in names:
+        return _j({"ok": False,
+                   "error": "session %r not in registry (refused)" % session},
+                  '403 Forbidden')
     try:
         b = _b.get_bridge(session, create=True)
     except FileNotFoundError as e:
         return _j({"ok": False, "error": str(e)}, '404 Not Found')
+    except PermissionError as e:
+        return _j({"ok": False, "error": str(e)}, '403 Forbidden')
     except OSError as e:
         return _j({"ok": False, "error": "attach failed: %s" % e},
                   '502 Bad Gateway')
+    # S3（0829-1640-har3）：per-bridge 订阅上限，超限 429——防多页签/忘关页签耗尽
+    # wsgiserver 线程池（numthreads=30）波及 8080 其它服务。查上限+占位同锁原子。
+    with b.cond:
+        if b.subscribers >= _b.MAX_STREAMS_PER_BRIDGE:
+            return _j({"ok": False,
+                       "error": "stream limit (%d) reached for session %r"
+                                % (_b.MAX_STREAMS_PER_BRIDGE, session)},
+                      '429 Too Many Requests')
+        b.subscribers += 1
     start_seq, gap = b.resolve_since(since)
     with b.cond:
         oldest_eid = b.ring[0][1] if b.ring else None
@@ -49,5 +71,8 @@ def interp(store, session='', since='', **kw):
                            ).encode("utf-8")
         except GeneratorExit:
             return
+        finally:
+            with b.cond:
+                b.subscribers -= 1
 
     return dict(type='text/event-stream'), gen()

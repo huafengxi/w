@@ -28,6 +28,28 @@ def _baseline_doc(b, r, gap=False):
             "watermark": r.get("watermark")}
 
 
+def _check_session(session):
+    """S1（0829-1640-har3）：格式校验 + 注册表白名单。返回错误响应或 None。
+
+    白名单源 = ctl.sock status 的注册表名单（拒保留名 `ctl` 与野 socket，
+    防经 ctl.sock 越权下发控制命令）；注册表不可达时 fail-closed。
+    """
+    if not session or '/' in session or session.startswith('.'):
+        return _j({"ok": False, "error": "missing/bad session"},
+                  '400 Bad Request')
+    try:
+        names = _b.registry_names()
+    except Exception as e:
+        return _j({"ok": False,
+                   "error": "registry unavailable, refusing: %s" % e},
+                  '502 Bad Gateway')
+    if session not in names:
+        return _j({"ok": False,
+                   "error": "session %r not in registry (refused)" % session},
+                  '403 Forbidden')
+    return None
+
+
 def interp(store, op='', session='', cmd='', since='', **kw):
     _b.gc_idle_bridges()
     if op == 'status':
@@ -36,13 +58,16 @@ def interp(store, op='', session='', cmd='', since='', **kw):
         except Exception as e:
             return _j({"ok": False, "error": "ctl.sock unavailable: %s" % e},
                       '502 Bad Gateway')
-    if not session or '/' in session or session.startswith('.'):
-        return _j({"ok": False, "error": "missing/bad session"}, '400 Bad Request')
+    deny = _check_session(session)
+    if deny:
+        return deny
     if op == 'attach':
         try:
             b = _b.get_bridge(session, create=True)
         except FileNotFoundError as e:
             return _j({"ok": False, "error": str(e)}, '404 Not Found')
+        except PermissionError as e:
+            return _j({"ok": False, "error": str(e)}, '403 Forbidden')
         except OSError as e:
             return _j({"ok": False, "error": "attach failed: %s" % e},
                       '502 Bad Gateway')
@@ -62,6 +87,8 @@ def interp(store, op='', session='', cmd='', since='', **kw):
             b = _b.get_bridge(session, create=True)
         except FileNotFoundError as e:
             return _j({"ok": False, "error": str(e)}, '404 Not Found')
+        except PermissionError as e:
+            return _j({"ok": False, "error": str(e)}, '403 Forbidden')
         except OSError as e:
             return _j({"ok": False, "error": "attach failed: %s" % e},
                       '502 Bad Gateway')

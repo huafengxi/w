@@ -33,6 +33,7 @@ from collections import deque
 SOCK_DIR = os.environ.get("SESSIOND_SOCK_DIR",
                           os.path.expanduser("~/m/sessiond/sock"))
 RING_MAX = int(os.environ.get("SESSIOND_BRIDGE_RING", "2000"))
+MAX_STREAMS_PER_BRIDGE = int(os.environ.get("SESSIOND_BRIDGE_MAXSTREAMS", "5"))
 BRIDGE_IDLE_SECS = 600      # 无 SSE 订阅且无活动的 Bridge 回收时限
 ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
 HELLO_TIMEOUT = 5.0         # 建桥后等待 sessiond.hello 的超时（秒）
@@ -94,9 +95,11 @@ class Bridge:
         if self.dead:
             raise ConnectionError("bridge dead")
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n"
+        # S4（0829-1640-har3）：sendall 整体入锁串行化，防并发上行时字节交错，
+        # 守护侧按行 JSON 解析，交错即坏行。
         with self.lock:
             self.last_active = time.time()
-        self.sock.sendall(data)
+            self.sock.sendall(data)
 
     def _append(self, obj):
         """入环（锁内调用）。返回 (seq, eid)。"""
@@ -215,33 +218,31 @@ class Bridge:
             return oldest, True
 
     def iter_events(self, start_seq):
-        """流订阅生成器：先补发 start_seq 之后的缓冲，再实时跟随。锁外 yield。"""
+        """流订阅生成器：先补发 start_seq 之后的缓冲，再实时跟随。锁外 yield。
+
+        订阅计数（subscribers）由调用方（rpc/stream.py）在锁内原子预约/释放，
+        以便「查上限 + 占位」是同一步（S3，0829-1640-har3）。
+        """
         sent = start_seq
-        with self.cond:
-            self.subscribers += 1
-        try:
-            while True:
-                batch = []
-                with self.cond:
-                    while True:
-                        batch = [e for e in self.ring if e[0] > sent]
-                        if batch:
-                            break
-                        if self.dead:
-                            return
-                        if not self.cond.wait(timeout=15):
-                            break           # 超时 → keep-alive
-                if not batch:
-                    yield None              # keep-alive
-                    continue
-                for seq, eid, obj in batch:
-                    sent = seq
-                    yield (eid, obj)
-                    if obj.get("type") == "webgw.bridge_lost":
-                        return
-        finally:
+        while True:
+            batch = []
             with self.cond:
-                self.subscribers -= 1
+                while True:
+                    batch = [e for e in self.ring if e[0] > sent]
+                    if batch:
+                        break
+                    if self.dead:
+                        return
+                    if not self.cond.wait(timeout=15):
+                        break           # 超时 → keep-alive
+            if not batch:
+                yield None              # keep-alive
+                continue
+            for seq, eid, obj in batch:
+                sent = seq
+                yield (eid, obj)
+                if obj.get("type") == "webgw.bridge_lost":
+                    return
 
 
 BRIDGES = {}            # session -> Bridge
@@ -250,6 +251,18 @@ BRIDGES_LOCK = threading.Lock()
 
 def session_socket_exists(session):
     return os.path.exists(os.path.join(SOCK_DIR, session + ".sock"))
+
+
+def registry_names():
+    """S1（0829-1640-har3）：经 ctl.sock status 取注册表会话名集合（白名单源）。
+
+    拒绝依据从「文件存在」升级为「注册表在名单中」：既挡保留名 `ctl`
+    （sock/ctl.sock 存在 → 旧逻辑可挂接控制面），也挡任何手工放置的野 socket。
+    ctl.sock 不可用时向上抛异常，调用方按 502 拒绝（fail-closed）。
+    """
+    st = ctl_status()
+    return {s.get("name") for s in st.get("sessions") or []
+            if isinstance(s, dict) and s.get("name")}
 
 
 def get_bridge(session, create=True):
@@ -261,6 +274,9 @@ def get_bridge(session, create=True):
             return None
         if not session_socket_exists(session):
             raise FileNotFoundError("no such session socket: %s" % session)
+        # 双保险：建桥前再确认在注册表（正常路径调用方已校验，防绕过）
+        if session not in registry_names():
+            raise PermissionError("session not in registry: %s" % session)
         b = Bridge(session)
         b.connect()
         BRIDGES[session] = b
