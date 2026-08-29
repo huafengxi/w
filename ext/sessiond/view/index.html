@@ -85,6 +85,26 @@ aside h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
 details.raw summary { color: var(--dim); font-size: 12px; cursor: pointer; }
 details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   word-break: break-all; margin: 2px 0; }
+/* 系统事件侧栏（0829-1721-56qb）：右侧可折叠，默认折叠；折叠时按钮角标计未读；
+   窄屏（≤800px）改为底部叠层面板 */
+#sidebar { width: 340px; min-width: 260px; border-left: 1px solid var(--line);
+  overflow-y: auto; background: var(--panel); }
+#sidebar h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .08em; }
+#evtList { padding: 4px 10px 12px; }
+#evtList details.raw { margin: 3px 0; padding-bottom: 3px;
+  border-bottom: 1px dashed var(--line); }
+#evtList details.raw.warn summary { color: var(--warn); }
+#evtList details.raw.err summary { color: var(--err); }
+#evtBadge { display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 5px;
+  border-radius: 8px; background: var(--err); color: #ffffff; font-size: 11px;
+  text-align: center; vertical-align: middle; }
+#evtBadge.hidden { display: none; }
+@media (max-width: 800px) {
+  #sidebar { position: fixed; left: 0; right: 0; bottom: 0; width: auto;
+    min-width: 0; max-height: 45vh; z-index: 9; border-left: none;
+    border-top: 1px solid var(--line); box-shadow: 0 -6px 18px rgba(0,0,0,.12); }
+}
 #inputbar { display: flex; gap: 8px; padding: 10px 16px;
   border-top: 1px solid var(--line); background: var(--panel); }
 #promptInput { flex: 1; background: var(--panel2); color: var(--fg);
@@ -110,6 +130,7 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   <b>sessiond</b>
   <span class="dot" id="connDot"></span>
   <span id="connInfo">未挂接</span>
+  <button id="evtToggle" onclick="toggleSide()" aria-expanded="false">系统事件 <span id="evtBadge" class="hidden">0</span></button>
   <button onclick="refreshStatus()">刷新</button>
   <button onclick="detach()">断开挂接</button>
 </header>
@@ -127,6 +148,10 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
       <button class="primary" onclick="sendPrompt()">发送</button>
     </div>
   </main>
+  <aside id="sidebar" class="hidden">
+    <h3>系统事件</h3>
+    <div id="evtList"></div>
+  </aside>
 </div>
 
 <div id="dialogBox">
@@ -172,6 +197,9 @@ let healFails = 0;
 // 每次渲染都过 S2 消毒；message_end 最终收尾渲染一次。
 let mdRenderTimer = null;
 const MD_RENDER_MS = 150;
+// 系统事件侧栏（0829-1721-56qb）：系统/控制面帧分流右侧可折叠面板，主流只留对话
+let sideCollapsed = true;     // 默认折叠
+let sideUnread = 0;           // 折叠期间新增条数（角标）
 // dialog 倒计时
 let dialogTimer = null;
 let dialogDeadline = 0;
@@ -222,6 +250,7 @@ async function attach(name) {
   $("stream").innerHTML = "";
   curAssistantEl = null; curAssistantBuf = "";
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
+  $("evtList").innerHTML = ""; sideUnread = 0; updateBadge();   // 侧栏随挂接重置
   sysLine("挂接 " + name + "：拉取历史基线（get_entries）…");
   let doc;
   try { doc = await api("attach", {session: name}); }
@@ -442,6 +471,7 @@ async function detach() {
   entryCursor = null; streamCursor = ""; lastEidNum = 0;
   curEpoch = null; lastGen = null; curLeafId = null;
   $("stream").innerHTML = "";
+  $("evtList").innerHTML = ""; sideUnread = 0; updateBadge();
   refreshStatus();
 }
 
@@ -452,13 +482,14 @@ function handleEvent(o) {
     if (curEpoch !== null && o.epoch !== undefined && o.epoch !== curEpoch) {
       curEpoch = o.epoch;
       heal("守护重启 epoch→" + o.epoch);     // 守护世代变化 → 基线自愈
+      addSideEvent(o, "hello epoch→" + o.epoch + " → 基线自愈", "warn");
       return;
     }
     if (o.epoch !== undefined) curEpoch = o.epoch;
     if (o.gen !== undefined) lastGen = o.gen;
     setConn(true, o.session + " · state=" + o.state + " · gen=" + o.gen
       + " · pid=" + o.pid + (o.epoch !== undefined ? " · epoch=" + o.epoch : ""));
-    sysLine("挂接 " + o.session + "（state=" + o.state + ", gen=" + o.gen
+    addSideEvent(o, "挂接 " + o.session + "（state=" + o.state + ", gen=" + o.gen
       + ", 回放 " + (o.replay_count || 0) + " 行）");
     return;
   }
@@ -467,32 +498,33 @@ function handleEvent(o) {
     if (o.line && typeof o.line === "object") renderEvent(o.line);
     return;
   }
-  if (t === "sessiond.replay_end") { return; }
+  if (t === "sessiond.replay_end") { addSideEvent(o, "回放结束"); return; }
   if (t === "webgw.gap") {
-    sysLine("事件流缺口（since=" + o.since + "，最旧=" + o.oldest + "）→ 基线自愈", "warn");
+    addSideEvent(o, "事件流缺口（since=" + o.since + "，最旧=" + o.oldest
+      + "）→ 基线自愈", "warn");
     heal("事件环淘汰");
     return;
   }
-  if (t === "sessiond.error") { sysLine("sessiond: " + o.message, "err"); return; }
+  if (t === "sessiond.error") { addSideEvent(o, "sessiond: " + o.message, "err"); return; }
   if (t === "sessiond.session_restarting") {
-    sysLine("会话进程死亡，" + (o.delay || 0) + "s 后重启", "warn"); return;
+    addSideEvent(o, "会话进程死亡，" + (o.delay || 0) + "s 后重启", "warn"); return;
   }
   if (t === "sessiond.session_restarted") {
-    sysLine("会话已重启（gen=" + o.gen + ", pid=" + o.pid + "）", "warn");
+    addSideEvent(o, "会话已重启（gen=" + o.gen + ", pid=" + o.pid + "）", "warn");
     if (lastGen !== null && o.gen !== undefined && o.gen !== lastGen) {
       lastGen = o.gen;
       heal("会话进程重启 gen→" + o.gen);   // 会话重启 → 以 entries 为准校准
     } else if (o.gen !== undefined) lastGen = o.gen;
     return;
   }
-  if (t === "sessiond.session_disabled") { sysLine("会话崩溃熔断", "err"); return; }
+  if (t === "sessiond.session_disabled") { addSideEvent(o, "会话崩溃熔断", "err"); return; }
   if (t === "sessiond.dialog_resolved") {
     if (pendingDialogs[o.id]) closeDialog(o.id, "已由 " + o.by + " 应答");
     return;
   }
-  if (t === "sessiond.pong") return;
+  if (t === "sessiond.pong") { addSideEvent(o, "pong"); return; }
   if (t === "webgw.bridge_lost") {
-    sysLine("网关与会话后端断开（守护重启？）— 重连后经缺口自愈补齐", "warn");
+    addSideEvent(o, "网关与会话后端断开（守护重启？）— 重连后经缺口自愈补齐", "warn");
     return;
   }
   renderEvent(o);
@@ -500,6 +532,7 @@ function handleEvent(o) {
 
 function renderEvent(o) {
   const t = o.type;
+  if (classifyEvent(o) === "side") { addSideEvent(o); return; }   // 系统/控制面 → 侧栏
   if (t === "message_start") {
     const m = o.message || {};
     if (m.role === "user") {
@@ -601,26 +634,64 @@ function renderEvent(o) {
     scrollStream(); return;
   }
   if (t === "extension_ui_request") { showDialog(o); return; }
-  if (t === "response") {
-    sysLine("← " + (o.command || "?") + (o.success ? " ok" : " FAIL"
-      + (o.error ? " — " + trunc(o.error, 200) : "")), o.success ? "" : "err");
-    return;
+}
+
+// ---------------- 系统事件侧栏（0829-1721-56qb） ----------------
+// 分类规则：主流 = 对话（用户/助手消息、thinking、工具调用、dialog）；
+// 侧栏 = 其余一切（生命周期/控制面帧、response 帧、连接提示、未知类型）。
+const MAIN_EVENT_TYPES = new Set(["message_start", "message_update", "message_end",
+  "tool_execution_start", "tool_execution_update", "tool_execution_end",
+  "extension_ui_request"]);                                   // thinking 随 message_update 走主流
+function classifyEvent(o) {
+  return (o && MAIN_EVENT_TYPES.has(o.type)) ? "main" : "side";
+}
+// 侧栏条目一行摘要（时间戳+类型+摘要；默认只到类型名，需要时补摘要）
+function sideSummary(o) {
+  const t = o.type;
+  if (t === "response") return "← " + (o.command || "?") + (o.success ? " ok"
+    : " FAIL" + (o.error ? " — " + trunc(o.error, 200) : ""));
+  if (t === "agent_end") return "agent end (willRetry=" + o.willRetry + ")";
+  if (t === "queue_update") return "queue: steer=" + JSON.stringify(o.steering)
+    + " followUp=" + JSON.stringify(o.followUp);
+  return "";   // turn_start/turn_end/agent_start/agent_settled 等只列类型名
+}
+function addSideEvent(o, summaryOverride, cls) {
+  const sum = (summaryOverride !== undefined) ? summaryOverride : sideSummary(o);
+  addSideEntry((o.type || "?") + (sum ? " · " + sum : ""), o, cls);
+}
+// 通用侧栏条目：一行摘要，点击展开原始 JSON（复用 details.raw 样式）
+function addSideEntry(label, rawObj, cls) {
+  const d = document.createElement("details");        // 无 open = 默认折叠，点击展开
+  d.className = "raw" + (cls ? " " + cls : "");
+  const s = document.createElement("summary");
+  s.textContent = new Date().toLocaleTimeString() + " " + label;
+  const pre = document.createElement("pre");
+  pre.textContent = JSON.stringify(rawObj, null, 1);
+  d.appendChild(s); d.appendChild(pre);
+  const list = $("evtList");
+  list.appendChild(d);
+  while (list.childElementCount > 1000) list.removeChild(list.firstElementChild);
+  if (sideCollapsed) { sideUnread++; updateBadge(); }
+  else {
+    const sb = $("sidebar");
+    sb.scrollTop = sb.scrollHeight;                   // 展开态自动跟随最新
   }
-  if (t === "agent_start") { sysLine("── agent start ──"); return; }
-  if (t === "agent_end") { sysLine("── agent end (willRetry=" + o.willRetry + ") ──"); return; }
-  if (t === "agent_settled") { sysLine("── settled ──"); return; }
-  if (t === "turn_start" || t === "turn_end") { sysLine("── " + t + " ──"); return; }
-  if (t === "queue_update") {
-    sysLine("queue: steer=" + JSON.stringify(o.steering)
-      + " followUp=" + JSON.stringify(o.followUp));
-    return;
+}
+function toggleSide() {
+  sideCollapsed = !sideCollapsed;
+  $("sidebar").classList.toggle("hidden", sideCollapsed);
+  $("evtToggle").setAttribute("aria-expanded", String(!sideCollapsed));
+  if (!sideCollapsed) {
+    sideUnread = 0; updateBadge();
+    const sb = $("sidebar"); sb.scrollTop = sb.scrollHeight;
   }
-  const d = document.createElement("details");
-  d.className = "raw";
-  d.innerHTML = "<summary>" + esc(t || "?") + "</summary><pre>"
-    + esc(JSON.stringify(o)) + "</pre>";
-  $("stream").appendChild(d);
-  scrollStream();
+}
+function updateBadge() {
+  const b = $("evtBadge");
+  if (sideCollapsed && sideUnread > 0) {
+    b.textContent = sideUnread > 99 ? "99+" : String(sideUnread);
+    b.classList.remove("hidden");
+  } else b.classList.add("hidden");
 }
 
 // ---------------- thinking/工具调用折叠块（inform4，0829-1640-har3） ----------------
@@ -912,11 +983,8 @@ function addDiv(cls, text) {
   return d;
 }
 function sysLine(text, cls) {
-  const d = document.createElement("div");
-  d.className = "ev sys" + (cls ? " " + cls : "");
-  d.appendChild(document.createTextNode(new Date().toLocaleTimeString() + " " + text));
-  $("stream").appendChild(d);
-  scrollStream();
+  // 前端自生成的系统/控制面提示（挂接/自愈/重连/epoch 等）同样分流侧栏（0829-1721-56qb）
+  addSideEntry(text, {type: "ui.note", text: text}, cls);
 }
 function esc(s) {
   return String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;",
