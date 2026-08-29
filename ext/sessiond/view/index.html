@@ -7,9 +7,9 @@
 <script type="application/javascript" src="/w/ext/markdown/deps/marked.min.js"></script>
 <style>
 :root {
-  --bg: #0f1216; --panel: #171c23; --panel2: #1e2530; --fg: #d7dee8;
-  --dim: #7d8a9c; --acc: #4da3ff; --ok: #3fbf6f; --warn: #e0b13f;
-  --err: #e35d5d; --line: #2a3340;
+  --bg: #ffffff; --panel: #f4f6f8; --panel2: #e9edf2; --fg: #1a1f26;
+  --dim: #5a6472; --acc: #0969da; --ok: #1a7f37; --warn: #9a6700;
+  --err: #cf222e; --line: #d0d7de;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
@@ -25,7 +25,7 @@ header b { color: var(--acc); }
 button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
 button:hover { border-color: var(--acc); }
-button.primary { background: var(--acc); border-color: var(--acc); color: #08111d; }
+button.primary { background: var(--acc); border-color: var(--acc); color: #ffffff; }
 .layout { display: flex; height: calc(100vh - 41px); }
 aside { width: 300px; min-width: 220px; border-right: 1px solid var(--line);
   overflow-y: auto; background: var(--panel); }
@@ -70,7 +70,7 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 #promptInput:focus { outline: none; border-color: var(--acc); }
 #dialogBox { position: fixed; right: 18px; bottom: 80px; width: 380px;
   max-width: 90vw; background: var(--panel2); border: 1px solid var(--warn);
-  border-radius: 10px; padding: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+  border-radius: 10px; padding: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.15);
   display: none; z-index: 10; }
 #dialogBox h4 { margin: 0 0 6px; color: var(--warn); }
 #dialogTitle { white-space: pre-wrap; word-break: break-word; margin-bottom: 10px; }
