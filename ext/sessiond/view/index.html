@@ -70,7 +70,14 @@ aside h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
 .sys.warn { color: var(--warn); } .sys.err { color: var(--err); }
 .tool-block { background: var(--panel); border: 1px solid var(--line);
   border-radius: 4px; margin: 2px 0; font-size: 12px; color: var(--dim); }
-.tool-block summary { cursor: pointer; padding: 4px 8px; word-break: break-all; }
+/* summary = 🔧 工具名 · 状态 + 关键参数预览 + 耗时（inform3，0829-1733-1hjh）；
+   flex 单行布局：预览居中弹性省略，耗时右对齐（pi-web 形态 `read /path  16s`） */
+.tool-block summary { cursor: pointer; padding: 4px 8px; display: flex; gap: 6px;
+  align-items: baseline; }
+.tool-block summary .tprev { flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.tool-block summary .tdur { flex: none; margin-left: auto; color: var(--dim);
+  font-variant-numeric: tabular-nums; }
 .tool-block .tst { font-weight: 600; }
 .tool-block.run .tst { color: var(--warn); }
 .tool-block.done .tst { color: var(--ok); }
@@ -107,6 +114,12 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 }
 #inputbar { display: flex; gap: 8px; padding: 10px 16px;
   border-top: 1px solid var(--line); background: var(--panel); }
+/* 斜杠命令内联提示条（inform2，0829-1733-1hjh）：输入框上方，默认隐藏 */
+.notice { padding: 4px 16px; font-size: 12px; color: var(--warn);
+  background: var(--panel); border-top: 1px dashed var(--line);
+  white-space: pre-wrap; word-break: break-word; }
+.notice.err { color: var(--err); }
+.notice.hidden { display: none; }
 #promptInput { flex: 1; background: var(--panel2); color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
   font: inherit; resize: none; max-height: 120px; }
@@ -132,7 +145,6 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   <span id="connInfo">未挂接</span>
   <button id="evtToggle" onclick="toggleSide()" aria-expanded="false">系统事件 <span id="evtBadge" class="hidden">0</span></button>
   <button onclick="refreshStatus()">刷新</button>
-  <button onclick="detach()">断开挂接</button>
 </header>
 <div class="layout">
   <aside>
@@ -141,8 +153,9 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   </aside>
   <main>
     <div id="stream"></div>
+    <div id="slashNotice" class="notice hidden"></div>
     <div id="inputbar">
-      <textarea id="promptInput" rows="1" placeholder="输入 prompt，Enter 发送（Shift+Enter 换行）"></textarea>
+      <textarea id="promptInput" rows="1" placeholder="输入 prompt 或 /命令，Enter 发送（Shift+Enter 换行）"></textarea>
       <button onclick="sendAbort()">中止</button>
       <button class="primary" onclick="sendPrompt()">发送</button>
     </div>
@@ -186,6 +199,8 @@ let reconnectTimer = null;
 let curEpoch = null;          // 守护世代（展示/调试）
 let lastGen = null;           // 会话进程世代（hello/gen 变化检测）
 let curLeafId = null;         // 活跃分支叶
+let curProvider = null;       // 当前模型 provider/modelId（model_change 跟踪，/model 用，inform2）
+let curModelId = null;
 let entryCursor = null;       // 最后 entry id（增量游标）
 let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
 let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
@@ -214,6 +229,18 @@ async function api(op, extra) {
   return j;
 }
 
+// 会话 cwd 展示（inform4，0829-1733-1hjh）：注册表 cwd 经 op=status 补齐；
+// ~ 缩写（/home/<user> → ~），列表条目与头部当前会话信息共用。
+let cwdByName = {};
+function abbrevCwd(p) {
+  if (!p) return "";
+  return String(p).replace(/^\/home\/[^/]+/, "~");
+}
+function withCwd(name) {
+  const c = cwdByName[name];
+  return name + (c ? " · " + abbrevCwd(c) : "");
+}
+
 // ---------------- 会话列表 ----------------
 async function refreshStatus() {
   let st;
@@ -223,6 +250,8 @@ async function refreshStatus() {
   }
   const el = $("sessList");
   el.innerHTML = "";
+  cwdByName = {};
+  for (const s of (st.sessions || [])) if (s && s.name) cwdByName[s.name] = s.cwd || "";
   for (const s of (st.sessions || [])) {
     const d = document.createElement("div");
     d.className = "sess" + (s.name === attached ? " cur" : "");
@@ -232,7 +261,8 @@ async function refreshStatus() {
     const en = s.enabled ? "" : '<span class="badge off">disabled</span>';
     d.innerHTML = '<div class="name">' + esc(s.name) + badge + en + "</div>"
       + '<div class="meta">gen=' + nz(s.gen) + " · restarts=" + nz(s.restarts)
-      + " · clients=" + nz(s.clients) + (s.pid ? " · pid=" + s.pid : "") + "</div>";
+      + " · clients=" + nz(s.clients) + (s.pid ? " · pid=" + s.pid : "")
+      + (s.cwd ? '<br>cwd=' + esc(abbrevCwd(s.cwd)) : "") + "</div>";
     d.onclick = () => attach(s.name);
     el.appendChild(d);
   }
@@ -304,7 +334,9 @@ function renderEntry(e) {
   const t = e.type;
   if (t === "message" && e.message) { renderEntryMessage(e.message); return; }
   if (t === "session_info") return;                     // 噪音，跳过
-  if (t === "model_change") { sysLine("◆ model → " + (e.provider || "?") + "/" + (e.modelId || "?")); return; }
+  if (t === "model_change") { curProvider = e.provider || curProvider;
+    curModelId = e.modelId || curModelId;
+    sysLine("◆ model → " + (e.provider || "?") + "/" + (e.modelId || "?")); return; }
   if (t === "thinking_level_change") { sysLine("◆ thinking → " + (e.thinkingLevel || "?")); return; }
   sysLine("◆ " + (t || "?"));
 }
@@ -322,6 +354,9 @@ function renderEntryMessage(m) {
     let blk = m.toolCallId ? toolBlocks[m.toolCallId] : null;
     if (!blk) blk = toolBlock(m.toolCallId, m.toolName);
     blk.outPre.textContent = resultText(m);             // 并入所属工具块
+    // 耗时（inform3）：基线无 exec 事件 → 用消息时间戳近似（assistant→result）
+    if (blk.t0 != null && m.timestamp != null)
+      setToolDur(blk, m.timestamp - blk.t0);
     setToolStatus(blk, m.isError ? "err" : "done");
     return;
   }
@@ -339,6 +374,8 @@ function renderEntryMessage(m) {
           seenToolIds.add(p.id);
           const blk = toolBlock(p.id, p.name);          // 折叠块；结果由 toolResult 条目并入
           blk.argsPre.textContent = fmtArgs(p.arguments);
+          setToolPreview(blk, p.name, p.arguments);     // summary 参数预览（inform3）
+          if (m.timestamp != null) blk.t0 = m.timestamp;
         }
       }
     }
@@ -378,20 +415,20 @@ function stopStream() {
   streamAlive = false;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (streamCtrl) { try { streamCtrl.abort(); } catch (e) {} streamCtrl = null; }
-  setConn(false, attached ? attached + "（流已停）" : "未挂接");
+  setConn(false, attached ? withCwd(attached) + "（流已停）" : "未挂接");
 }
 
 function openStream() {
   if (!attached) return;
   streamAlive = true;
-  setConn(false, "连接中… " + attached);
+  setConn(false, "连接中… " + withCwd(attached));
   streamCtrl = new AbortController();
   const url = STREAM + "?session=" + encodeURIComponent(attached)
     + "&since=" + encodeURIComponent(streamCursor || "");
   fetch(url, {credentials: "same-origin", signal: streamCtrl.signal})
     .then(resp => {
       if (!resp.ok) throw new Error("stream " + resp.status);
-      setConn(true, attached);
+      setConn(true, withCwd(attached));
       const reader = resp.body.getReader();
       const dec = new TextDecoder("utf-8");
       let buf = "";
@@ -406,7 +443,7 @@ function openStream() {
     })
     .catch(e => {
       if (!streamAlive) return;           // 主动断开，不重连
-      setConn(false, attached + "（重连中）");
+      setConn(false, withCwd(attached) + "（重连中）");
       reconnectTimer = setTimeout(openStream, 1500);
     });
 }
@@ -458,20 +495,8 @@ function flash(info) {
   $("connInfo").classList.add("flash");
   setTimeout(() => {
     $("connInfo").classList.remove("flash");
-    if (attached) setConn(streamAlive, attached);
+    if (attached) setConn(streamAlive, withCwd(attached));
   }, 2500);
-}
-
-async function detach() {
-  if (!attached) return;
-  stopStream();
-  try { await api("detach", {session: attached}); } catch (e) {}
-  attached = null;
-  entryCursor = null; streamCursor = ""; lastEidNum = 0;
-  curEpoch = null; lastGen = null; curLeafId = null;
-  $("stream").innerHTML = "";
-  $("evtList").innerHTML = ""; sideUnread = 0; updateBadge();
-  refreshStatus();
 }
 
 // ---------------- 事件渲染（实时流） ----------------
@@ -486,7 +511,7 @@ function handleEvent(o) {
     }
     if (o.epoch !== undefined) curEpoch = o.epoch;
     if (o.gen !== undefined) lastGen = o.gen;
-    setConn(true, o.session + " · state=" + o.state + " · gen=" + o.gen
+    setConn(true, withCwd(o.session) + " · state=" + o.state + " · gen=" + o.gen
       + " · pid=" + o.pid + (o.epoch !== undefined ? " · epoch=" + o.epoch : ""));
     addSideEvent(o, "挂接 " + o.session + "（state=" + o.state + ", gen=" + o.gen
       + ", 回放 " + (o.replay_count || 0) + " 行）");
@@ -506,7 +531,13 @@ function handleEvent(o) {
   }
   if (t === "sessiond.error") { addSideEvent(o, "sessiond: " + o.message, "err"); return; }
   if (t === "sessiond.session_restarting") {
-    addSideEvent(o, "会话进程死亡，" + (o.delay || 0) + "s 后重启", "warn"); return;
+    if (o.reload) {
+      // 进程级 reload（0829-1740-u7tb）：主动重启，立即重拉（无退避）；
+      // 后续 sessiond.session_restarted 的 gen 变化触发现有基线自愈，无新增机制。
+      flash("会话重载中…");
+      addSideEvent(o, "进程级 reload：杀进程后立即从 jsonl resume 重拉", "warn");
+    } else addSideEvent(o, "会话进程死亡，" + (o.delay || 0) + "s 后重启", "warn");
+    return;
   }
   if (t === "sessiond.session_restarted") {
     addSideEvent(o, "会话已重启（gen=" + o.gen + ", pid=" + o.pid + "）", "warn");
@@ -572,6 +603,7 @@ function renderEvent(o) {
         seenToolIds.add(tc.id);
         const blk = toolBlock(tc.id, tc.name);          // 建折叠块；start/update/end 并入
         blk.argsPre.textContent = fmtArgs(tc.arguments);
+        setToolPreview(blk, tc.name, tc.arguments);     // summary 参数预览（inform3）
       }
     }
     scrollStream();
@@ -608,6 +640,8 @@ function renderEvent(o) {
     }
     if (id) seenToolIds.add(id);
     if (!blk.argsPre.textContent) blk.argsPre.textContent = fmtArgs(o.args);
+    if (!blk.prev.textContent) setToolPreview(blk, o.toolName, o.args);
+    if (blk.t0 == null) blk.t0 = Date.now();            // 计时起点（pi 事件无时间戳，inform3）
     setToolStatus(blk, "running");
     scrollStream(); return;
   }
@@ -629,6 +663,7 @@ function renderEvent(o) {
     let blk = o.toolCallId ? toolBlocks[o.toolCallId] : null;
     if (!blk) blk = toolBlock(o.toolCallId, o.toolName);
     blk.outPre.textContent = resultText(o.result);
+    if (blk.t0 != null) setToolDur(blk, Date.now() - blk.t0);   // 耗时（inform3）；running 时省略
     setToolStatus(blk, o.isError ? "err" : "done");
     scrollStream(); return;
   }
@@ -715,7 +750,9 @@ function toolBlock(id, name) {
   head.textContent = "🔧 " + (name || "?") + " · ";
   const st = document.createElement("span");
   st.className = "tst"; st.textContent = "running";
-  sum.appendChild(head); sum.appendChild(st);
+  const prev = document.createElement("span"); prev.className = "tprev";  // 参数预览（inform3）
+  const dur = document.createElement("span"); dur.className = "tdur";     // 耗时，右对齐（inform3）
+  sum.appendChild(head); sum.appendChild(st); sum.appendChild(prev); sum.appendChild(dur);
   const body = document.createElement("div");
   body.className = "tbody";
   const argsPre = document.createElement("pre"); argsPre.className = "targs";
@@ -723,7 +760,7 @@ function toolBlock(id, name) {
   body.appendChild(argsPre); body.appendChild(outPre);
   det.appendChild(sum); det.appendChild(body);
   $("stream").appendChild(det);
-  const blk = {det: det, st: st, argsPre: argsPre, outPre: outPre};
+  const blk = {det: det, st: st, prev: prev, dur: dur, argsPre: argsPre, outPre: outPre, t0: null};
   if (id) toolBlocks[id] = blk;
   return blk;
 }
@@ -737,6 +774,30 @@ function fmtArgs(args) {
   const s = typeof args === "string" ? args : JSON.stringify(args, null, 2);
   return trunc(s, 20000);
 }
+// summary 参数预览（inform3，0829-1733-1hjh）：按工具类型取关键参数——
+// bash→command、read/write/edit→path、grep/find→pattern、dispatch→name、
+// web_search→query、其余→首参数 JSON 串；单行化、~100 字符截断溢出省略号。
+// 基线（entries）与流式（实时事件）两路共用。
+const ARG_KEY = { bash: "command", read: "path", write: "path", edit: "path",
+  grep: "pattern", find: "pattern", dispatch: "name", web_search: "query" };
+function argPreview(name, args) {
+  if (!args || typeof args !== "object") return "";
+  let v = ARG_KEY[name] != null ? args[ARG_KEY[name]] : undefined;
+  if (v == null) {                                      // 兜底 = 首参数 JSON 串
+    const ks = Object.keys(args);
+    if (!ks.length) return "";
+    v = args[ks[0]];
+  }
+  if (typeof v !== "string") v = JSON.stringify(v);
+  v = v.replace(/\s+/g, " ").trim();                    // 单行化（命令/路径多行压平）
+  return v.length > 100 ? v.slice(0, 100) + "…" : v;
+}
+function setToolPreview(blk, name, args) { blk.prev.textContent = argPreview(name, args); }
+function fmtDur(ms) {
+  const s = ms / 1000;
+  return (s < 10 ? Math.round(s * 10) / 10 : Math.round(s)) + "s";
+}
+function setToolDur(blk, ms) { if (ms >= 0) blk.dur.textContent = fmtDur(ms); }
 function resultText(res) {
   let txt = "";
   for (const c of (res && res.content) || [])
@@ -959,9 +1020,105 @@ function sendPrompt() {
   const msg = el.value.trim();
   if (!msg) return;
   el.value = ""; el.style.height = "auto";
+  // 斜杠命令拦截（inform2，0829-1733-1hjh）：/ 开头不进 prompt；
+  // /reload → doReload（op=reload，0829-1740-u7tb）也经 handleSlash 分发。
+  if (msg.startsWith("/")) { handleSlash(msg); return; }
+  hideNotice();
   sendCmd({type: "prompt", message: msg, id: uid()});
 }
+// 进程级 reload（0829-1740-u7tb）：确认后经 op=reload 杀会话进程并从 session.jsonl
+// resume 重拉（干净进程 = extension 全新加载）。重连/回放由现有缺口/自愈机器承接：
+// 守护广播 session_restarting(reload)/session_restarted(gen+1) → gen 变化 → 基线自愈。
+async function doReload() {
+  if (!attached) { sysLine("尚未挂接会话，无法 reload", "err"); return; }
+  const ok = window.confirm("重载会话 " + attached + "？\n"
+    + "会话进程将被杀死并从 session.jsonl 重启（extension 改动生效）；\n"
+    + "进行中的 turn 会丢失，对话历史保留。");
+  if (!ok) return;
+  flash("会话重载中…");
+  sysLine("reload 会话 " + attached + "：杀进程 + resume 重拉…");
+  try {
+    const r = await api("reload", {session: attached});
+    sysLine("reload 已下发（gen→" + nz(r.gen) + ", pid=" + nz(r.pid)
+      + "），等待重启自愈…");
+    refreshStatus();
+  } catch (e) {
+    sysLine("reload 失败: " + e.message, "err");
+    if (attached) setConn(streamAlive, attached);
+  }
+}
 function sendAbort() { sendCmd({type: "abort", id: uid()}); }
+
+// ---------------- 斜杠命令拦截（inform2/inform3，0829-1733-1hjh） ----------------
+// 以 / 开头的输入不进 prompt：可映射 pi rpc 命令的做真实现，其余内联提示。
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const SLASH_HELP = "支持：/abort · /compact · /model <provider>/<modelId> · "
+  + "/thinking <" + THINKING_LEVELS.join("|") + "> · /export · /fork [<entryId>]"
+  + (typeof doReload === "function" ? " · /reload" : "");
+let noticeTimer = null;
+function showNotice(text, cls, sticky) {
+  const n = $("slashNotice");
+  n.textContent = text;
+  n.className = "notice" + (cls ? " " + cls : "");   // 清掉 hidden，可附 err 色
+  if (noticeTimer) { clearTimeout(noticeTimer); noticeTimer = null; }
+  if (!sticky) noticeTimer = setTimeout(hideNotice, 6000);
+}
+function hideNotice() {
+  if (noticeTimer) { clearTimeout(noticeTimer); noticeTimer = null; }
+  $("slashNotice").classList.add("hidden");
+}
+function handleSlash(msg) {
+  const sp = msg.indexOf(" ");
+  const cmd = (sp < 0 ? msg : msg.slice(0, sp)).toLowerCase();
+  const arg = sp < 0 ? "" : msg.slice(sp + 1).trim();
+  switch (cmd) {
+    case "/abort":
+      sendCmd({type: "abort", id: uid()});
+      showNotice("已发送 abort（等当前生成/工具停下）"); return;
+    case "/compact":
+      sendCmd({type: "compact", id: uid(), ...(arg ? {customInstructions: arg} : {})});
+      showNotice("已请求压缩（compact）…"); return;
+    case "/model": {
+      if (!arg) { showNotice("用法：/model <provider>/<modelId>", "err"); return; }
+      const i = arg.indexOf("/");
+      const provider = i > 0 ? arg.slice(0, i) : curProvider;
+      const modelId = i > 0 ? arg.slice(i + 1) : arg;
+      if (!provider || !modelId) {
+        showNotice("用法：/model <provider>/<modelId>（当前 provider 未知，请写全）", "err");
+        return;
+      }
+      sendCmd({type: "set_model", provider: provider, modelId: modelId, id: uid()});
+      showNotice("已请求切换模型 → " + provider + "/" + modelId); return;
+    }
+    case "/thinking":
+      if (THINKING_LEVELS.indexOf(arg) < 0) {
+        showNotice("用法：/thinking <" + THINKING_LEVELS.join("|") + ">", "err"); return;
+      }
+      sendCmd({type: "set_thinking_level", level: arg, id: uid()});
+      showNotice("已请求 thinking → " + arg); return;
+    case "/export":
+      sendCmd({type: "export_html", id: uid(), ...(arg ? {outputPath: arg} : {})});
+      showNotice("已请求导出 HTML（默认落在会话工作目录）…"); return;
+    case "/name":
+      showNotice("会话名由注册表管理，不可改（守护拦截 set_session_name）", "err"); return;
+    case "/fork": {
+      const entryId = arg || curLeafId;
+      if (!entryId) {
+        showNotice("用法：/fork <entryId>（无可用叶条目）", "err"); return;
+      }
+      sendCmd({type: "fork", entryId: entryId, id: uid()});
+      showNotice("已请求 fork @ " + entryId); return;
+    }
+    case "/reload":
+      // 进程级 reload = 0829-1740-u7tb 的 op=reload；若该改动未落地（doReload 缺失）
+      // 则按 inform3 口径落未知命令提示，不实现也不提示 TUI 专属
+      if (typeof doReload === "function") doReload();
+      else showNotice("未知命令 /reload —— " + SLASH_HELP, "err");
+      return;
+    default:
+      showNotice("未知命令 " + cmd + " —— " + SLASH_HELP, "err"); return;
+  }
+}
 
 // IME 组合保护（inform2，0829-1721-56qb）：组合期间 Enter 只确认候选字，不发送；
 // 部分浏览器（Chrome）compositionend 后仍会再派发一次 Enter keydown → 用标志位
@@ -980,6 +1137,9 @@ $("promptInput").addEventListener("keydown", e => {
 $("promptInput").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 120) + "px";
+  // / 补全提示（inform2，简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
+  if (this.value.trimStart().startsWith("/")) showNotice(SLASH_HELP, "", true);
+  else hideNotice();
 });
 
 // ---------------- 小工具 ----------------

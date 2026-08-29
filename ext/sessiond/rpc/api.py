@@ -1,9 +1,12 @@
 # -*- type=script -*-
 # sessiond 控制面 + 上行命令端点（w/ext/sessiond，任务 0829-1510-w25l；
 # 基线 get_entries / 增量补发：任务 0829-1609-8dwt）。
-# op=status 透传 ctl.sock status（含守护 epoch）；op=attach 建/复用 Bridge 并经守护
+# op=status 透传 ctl.sock status（含守护 epoch）；op=reload 经 ctl.sock 下发
+# reload-session（杀会话进程+立即从 jsonl resume 重拉，0829-1740-u7tb）；op=attach 建/复用 Bridge 并经守护
 # 透传 pi rpc get_entries 返回消息基线（全量）；op=entries 增量补发（since=entry id
-# 游标，success:false 自动回退全量并置 gap）；op=cmd 透传单条 pi 命令；op=detach 关桥。
+# 游标，success:false 自动回退全量并置 gap）；op=cmd 透传单条 pi 命令。
+# （op=detach 已移除：前端「断开挂接」按钮下线，断开 = 关页签，桥由空闲回收，
+# inform1，0829-1733-1hjh）
 # 鉴权由 w 全局 BasicAuth 承担。协议见 PROTOCOL.md §6。
 import json as _json
 from ext.sessiond import bridge as _b
@@ -54,10 +57,16 @@ def interp(store, op='', session='', cmd='', since='', **kw):
     _b.gc_idle_bridges()
     if op == 'status':
         try:
-            return _j(_b.ctl_status())
+            st = _b.ctl_status()
         except Exception as e:
             return _j({"ok": False, "error": "ctl.sock unavailable: %s" % e},
                       '502 Bad Gateway')
+        # inform4（0829-1733-1hjh）：守护 status_doc 不含 cwd → 经声明式注册表补齐
+        cwds = _b.registry_cwd_map()
+        for s in st.get("sessions") or []:
+            if isinstance(s, dict) and cwds.get(s.get("name")):
+                s["cwd"] = cwds[s["name"]]
+        return _j(st)
     deny = _check_session(session)
     if deny:
         return deny
@@ -108,9 +117,23 @@ def interp(store, op='', session='', cmd='', since='', **kw):
                        "error": "get_entries rejected: %s"
                        % (r["resp"].get("error") or "?")}, '502 Bad Gateway')
         return _j(doc)
-    if op == 'detach':
-        _b.close_bridge(session)
-        return _j({"ok": True})
+    if op == 'reload':
+        # 进程级 reload（0829-1740-u7tb）：服务端路径 桥接→ctl.sock reload-session，
+        # 不经会话面透传（S1 白名单已在上方 _check_session 过）。既有 Bridge 连接不受影响：
+        # 会话 socket 由守护持有，进程杀/拉只换进程不换挂接；守护广播的
+        # session_restarting/restarted 帧沿现有 SSE 流达前端，触发 gen 自愈。
+        try:
+            r = _b.ctl_reload_session(session)
+        except Exception as e:
+            return _j({"ok": False, "error": "ctl.sock unavailable: %s" % e},
+                      '502 Bad Gateway')
+        if not r or not r.get("ok"):
+            return _j({"ok": False,
+                       "error": "reload failed: %s"
+                                % ((r or {}).get("error") or "unknown")},
+                      '502 Bad Gateway')
+        return _j({"ok": True, "session": session,
+                   "gen": r.get("gen"), "pid": r.get("pid")})
     if op == 'cmd':
         try:
             cmd_obj = _json.loads(cmd) if cmd else None

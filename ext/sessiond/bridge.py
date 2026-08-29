@@ -32,6 +32,10 @@ from collections import deque
 
 SOCK_DIR = os.environ.get("SESSIOND_SOCK_DIR",
                           os.path.expanduser("~/m/sessiond/sock"))
+# 声明式注册表（inform4，0829-1733-1hjh）：status 补 cwd 用（守护 status_doc 不含 cwd）
+REGISTRY = os.environ.get(
+    "SESSIOND_REGISTRY",
+    os.path.join(os.path.dirname(SOCK_DIR.rstrip("/")), "sessions.json"))
 RING_MAX = int(os.environ.get("SESSIOND_BRIDGE_RING", "2000"))
 MAX_STREAMS_PER_BRIDGE = int(os.environ.get("SESSIOND_BRIDGE_MAXSTREAMS", "5"))
 BRIDGE_IDLE_SECS = 600      # 无 SSE 订阅且无活动的 Bridge 回收时限
@@ -296,22 +300,48 @@ def close_bridge(session):
         b.close()
 
 
-def ctl_status():
+def _ctl_request(req, timeout=5.0):
+    """向 ctl.sock 发一条请求并读单行响应（socket 用完即关）。"""
     path = os.path.join(SOCK_DIR, "ctl.sock")
     sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        sk.settimeout(5)
+        sk.settimeout(timeout)
         sk.connect(path)
-        sk.sendall(b'{"cmd":"status"}\n')
+        sk.sendall((json.dumps(req) + "\n").encode("utf-8"))
         buf = b""
         while b"\n" not in buf:
             chunk = sk.recv(1 << 20)
             if not chunk:
                 break
             buf += chunk
-        return json.loads(buf.split(b"\n", 1)[0])
+        return json.loads(buf.split(b"\n", 1)[0]) if buf.strip() else None
     finally:
         sk.close()
+
+
+def ctl_status():
+    return _ctl_request({"cmd": "status"}, timeout=5.0)
+
+
+def registry_cwd_map():
+    """inform4（0829-1733-1hjh）：读声明式注册表 sessions.json 的 {name: cwd}，
+    供 op=status 补 cwd（守护不动）。读失败尽力而为 → 空映射。"""
+    try:
+        with open(REGISTRY) as f:
+            doc = json.load(f)
+        return {s.get("name"): s.get("cwd")
+                for s in (doc.get("sessions") or [])
+                if isinstance(s, dict) and s.get("name")}
+    except Exception:
+        return {}
+
+
+def ctl_reload_session(name, timeout=30.0):
+    """进程级 reload（0829-1740-u7tb）：经 ctl.sock 下发 reload-session。
+    守护同步完成「优雅停 → 立即 respawn（resume from jsonl）」后响应；
+    宽限超时覆盖 SIGTERM 宽限期（守护侧最长 ~3s）+ 拉起耗时。"""
+    return _ctl_request({"cmd": "reload-session", "name": name},
+                        timeout=timeout)
 
 
 def gc_idle_bridges():
