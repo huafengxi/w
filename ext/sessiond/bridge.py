@@ -166,7 +166,10 @@ class Bridge:
             # 的 dialog 是裸 Promise（仅 response/signal/timeout 可解），ask_user
             # 不传 signal，session.abort() 触不到它。这里把所有悬空 dialog 以
             # cancelled 代答（pi 端按取消结算 → 工具返回后回合解锁，abort 状态
-            # 随即收尾），pi 端不悬空。先发 abort 再发代答，顺序串行入 stdin。
+            # 随即收尾），pi 端不悬空。顺序：先发代答再发 abort（下方循环逐个发
+            # 代答，之后才 self.sup.send(cmd_obj) 发 abort；0830-0956-pnqp 评审建议修①：
+            # 原注释「先发 abort 再发代答」与代码不符，改描述防误读；功能不受顺序影响）。
+            # 两者串行入 stdin。
             with self.lock:
                 expired = self._sweep_expired_dialogs_locked()
                 stale = list(self.pending_dialogs.keys())
