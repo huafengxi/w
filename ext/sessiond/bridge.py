@@ -1,217 +1,157 @@
 #!/usr/bin/env python3
-"""bridge.py — sessiond <-> browser 桥接（w/ext/sessiond，任务 0829-1510-w25l；
-完整历史/事件 ID 游标/缺口自愈：任务 0829-1609-8dwt）。
+"""bridge.py — web ↔ 按路径多会话桥接（任务 0829-1958-od0t；R1：路径路由）。
 
-把浏览器的命令/事件流桥接到 sessiond 的本机 unix socket（协议见
-~/m/sessiond/PROTOCOL.md）。本模块是 w HTTP 服务器内的常驻状态层：每个被挂接的
-会话在进程内维持一条持久 `sock/<session>.sock` 连接（Bridge），上行命令与下行流
-共用该连接——这样守护侧的响应 id 路由（`c<clientId>x<origId>`）命中同一挂接。
+web 进程内的常驻状态层：每会话路径一个 `Bridge`（持有事件环）+ 各自的
+`proc.Supervisor`（直接监督一个 `pi --mode rpc` 会话，进程内直连，无 unix
+socket）。首次访问某路径时创建并拉起会话进程，之后复用；不同路径（含不同
+目录的同名文件）互不干扰。本模块为同目录 `rpc/api.py`（命令/控制面）与
+`rpc/stream.py`（SSE 事件流）提供统一接口。
 
-命令拦截面、dialog 仲裁、响应路由全部沿用 sessiond 守护侧实现，本模块不重复实现；
-对守护只做透传。模块级注册表跨请求常驻（同一 w 进程），供同目录的
-`rpc/api.py`（命令/控制面）与 `rpc/stream.py`（SSE 事件流）共享。
-
-鉴权不在这里做——由 w 服务的全局 BasicAuth（~/.auth/passwd）承担。
-
-游标与基线（0829-1609-8dwt，口径见 PROTOCOL.md §6）：
-  - 实时流游标 = 桥接分配的不透明事件 ID `e<seq>`（环内稳定；桥重建即失效，
-    失效后由 gap 标记 + entries 基线自愈，不依赖跨重启稳定性）。
-  - 完整历史基线 = 经守护透传 pi rpc `get_entries`（since=entry id 游标）；
-    `Bridge.get_entries()` 发命令并等待配对响应（守护 id 路由保证只回本桥）。
+事件 ID 游标与基线口径沿用（0829-1609-8dwt，原见 sessiond/PROTOCOL.md §6）：
+  - 实时流游标 = 桥接分配的不透明事件 ID `<ns>:<seq>`（环内稳定）。
+  - 完整历史基线 = 经 pi rpc `get_entries`（since=entry id 游标）；
+    `get_entries()` 发命令并等待配对响应（监督员单写者，id 原样往返）。
     响应行照常入环但瘦身（entries 列表替换为条数），避免巨型 SSE 负载。
 
-仅 python3 标准库。
+鉴权不在这里做——由 w 服务的全局 BasicAuth（~/.auth/passwd）承担。
+命令拦截面沿用：`switch_session`/`set_session_name` 不透传（评审 S3）。
+会话路径校验与解析见 `proc.resolve_session_path`（站内任意 `.jsonl`，
+锁定 ~/m 内；注册表键 = 解析后绝对路径）。仅 python3 标准库。
 """
 import json
 import os
-import socket
 import threading
 import time
 import uuid
 from collections import deque
 
-SOCK_DIR = os.environ.get("SESSIOND_SOCK_DIR",
-                          os.path.expanduser("~/m/sessiond/sock"))
-# 声明式注册表（inform4，0829-1733-1hjh）：status 补 cwd 用（守护 status_doc 不含 cwd）
-REGISTRY = os.environ.get(
-    "SESSIOND_REGISTRY",
-    os.path.join(os.path.dirname(SOCK_DIR.rstrip("/")), "sessions.json"))
+from ext.sessiond import proc as _proc
+
 RING_MAX = int(os.environ.get("SESSIOND_BRIDGE_RING", "2000"))
 MAX_STREAMS_PER_BRIDGE = int(os.environ.get("SESSIOND_BRIDGE_MAXSTREAMS", "5"))
-BRIDGE_IDLE_SECS = 600      # 无 SSE 订阅且无活动的 Bridge 回收时限
 ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
-HELLO_TIMEOUT = 5.0         # 建桥后等待 sessiond.hello 的超时（秒）
 
-_log_lock = threading.Lock()
-
-
-def log(fmt, *args):
-    import logging
-    try:
-        logging.info("sessiond-bridge: " + (fmt % args if args else fmt))
-    except Exception:
-        pass
+# 会话面命令拦截（评审 0829-1327-7ca3 S3）：这些命令会改绑 session_file/会话名，
+# 使监督登记失准（会话名是 agentd 通知门控依据，铁律 0828-1618-zru9）。
+BLOCKED_COMMANDS = {"switch_session", "set_session_name"}
+DIALOG_METHODS = {"select", "confirm", "input", "editor"}
 
 
 class Bridge:
-    """一个会话的持久挂接连接（进程内常驻）。"""
+    """单个会话路径的进程内事件环 + 命令通道（按路径注册，见 get_bridge）。"""
 
-    def __init__(self, session):
-        self.session = session
-        self.path = os.path.join(SOCK_DIR, session + ".sock")
+    def __init__(self, session_path):
+        # 站内路径（如 /assistant/foo.jsonl）；解析/校验在 Supervisor 内。
+        self._site_path = session_path
+        self.session = None      # 展示名，待监督员解析后回填
         self.lock = threading.Lock()
         self.cond = threading.Condition(self.lock)
         self.ring = deque(maxlen=RING_MAX)   # (seq, eid, obj)
         self.seq = 0
-        # 事件 ID 命名空间 = 桥实例随机前缀（0829-1609-8dwt）：eid 只在单个 Bridge
-        # 生命周期内有效；守护重启后新桥的 eid 前缀不同 → 旧游标必然查不到 →
-        # gap 帧 → 前端基线自愈，不会被同序号的新桥事件误命中。
         self.ns = uuid.uuid4().hex[:8]
-        self.epoch = None                    # sessiond.hello 报告的守护世代
-        self.gen = None                      # sessiond.hello 报告的会话进程世代
-        self.hello_evt = threading.Event()
-        self.pending = {}                    # req id -> waiter dict（get_entries 等）
+        self.pending = {}                    # req id -> waiter dict（get_entries）
         self._req_seq = 0
-        self.subscribers = 0                 # 当前流订阅数
-        self.last_active = time.time()
-        self.dead = False
-        self.sock = None
+        self.pending_dialogs = set()         # 挂起 dialog id（应答校验用）
+        self.subscribers = 0                 # 当前 SSE 流订阅数
+        self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest)
+        self.session = self.sup.name         # 展示名以监督员解析为准
 
-    def connect(self):
-        sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sk.connect(self.path)
-        self.sock = sk
-        threading.Thread(target=self._reader, daemon=True).start()
+    # ---- 监督侧事件入口 ----
 
-    def close(self):
-        self.dead = True
-        with self.cond:
-            for w in self.pending.values():
-                w["event"].set()
-            self.cond.notify_all()
-        if self.sock:
-            try:
-                self.sock.close()
-            except OSError:
-                pass
-
-    def send(self, obj):
-        if self.dead:
-            raise ConnectionError("bridge dead")
-        data = json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n"
-        # S4（0829-1640-har3）：sendall 整体入锁串行化，防并发上行时字节交错，
-        # 守护侧按行 JSON 解析，交错即坏行。
-        with self.lock:
-            self.last_active = time.time()
-            self.sock.sendall(data)
+    def _ingest(self, obj):
+        """监督员回调：生命周期帧与 pi 原始输出行统一入环。"""
+        if isinstance(obj, dict):
+            t = obj.get("type")
+            if t == "extension_ui_request" and obj.get("method") in DIALOG_METHODS:
+                with self.lock:
+                    self.pending_dialogs.add(obj.get("id"))
+            elif t == "response" and isinstance(obj.get("id"), str):
+                waiter = None
+                with self.lock:
+                    waiter = self.pending.pop(obj["id"], None)
+                if waiter is not None and obj.get("command") == "get_entries":
+                    # 环内瘦身：巨型 entries 列表不进 SSE 环（完整响应只交给等待者）
+                    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+                    slim = dict(obj)
+                    slim["data"] = {"entries": "<%d entries omitted>"
+                                    % len(data.get("entries") or []),
+                                    "leafId": data.get("leafId")}
+                    _, eid = self._append(slim)
+                    waiter["resp"] = obj      # 完整响应交给等待者
+                    waiter["eid"] = eid       # 响应行的事件 ID = 水位
+                    waiter["event"].set()
+                    return
+        self._append(obj)
 
     def _append(self, obj):
-        """入环（锁内调用）。返回 (seq, eid)。"""
-        self.seq += 1
-        eid = "%s:%d" % (self.ns, self.seq)
-        self.ring.append((self.seq, eid, obj))
-        self.last_active = time.time()
-        return self.seq, eid
-
-    def _reader(self):
-        buf = b""
-        while not self.dead:
-            try:
-                chunk = self.sock.recv(1 << 20)
-            except OSError:
-                break
-            if not chunk:
-                break
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                if not line.strip():
-                    continue
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                with self.cond:
-                    t = obj.get("type") if isinstance(obj, dict) else None
-                    if t == "sessiond.hello":
-                        self.epoch = obj.get("epoch")
-                        self.gen = obj.get("gen")
-                        self.hello_evt.set()
-                    slim = obj
-                    waiter = None
-                    if t == "response" and isinstance(obj.get("id"), str):
-                        waiter = self.pending.pop(obj["id"], None)
-                        if waiter is not None and obj.get("command") == "get_entries":
-                            # 环内瘦身：巨型 entries 列表不进 SSE 环（完整响应只交给等待者）
-                            data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
-                            slim = dict(obj)
-                            slim["data"] = {"entries": "<%d entries omitted>"
-                                            % len(data.get("entries") or []),
-                                            "leafId": data.get("leafId")}
-                    seq, eid = self._append(slim)
-                    if waiter is not None:
-                        waiter["resp"] = obj          # 完整响应交给等待者
-                        waiter["eid"] = eid           # 响应行的事件 ID = 水位
-                        waiter["event"].set()
-                    self.cond.notify_all()
-        # socket 断开（如 sessiond 重启）：给订阅者一个标记后销毁本桥；
-        # 前端重连后重建新桥（由 sessiond 回放 + entries 基线补齐）。
         with self.cond:
-            self._append({"type": "webgw.bridge_lost", "session": self.session})
-            self.dead = True
-            for w in self.pending.values():
-                w["event"].set()
+            self.seq += 1
+            eid = "%s:%d" % (self.ns, self.seq)
+            self.ring.append((self.seq, eid, obj))
             self.cond.notify_all()
-        log("bridge [%s] socket closed; dropped", self.session)
-        drop_bridge(self.session)
+            return self.seq, eid
 
-    # ---- 基线：get_entries 透传（0829-1609-8dwt） ----
+    # ---- 上行 ----
+
+    def send(self, cmd_obj):
+        """向会话发一条命令。返回错误串或 None。"""
+        t = cmd_obj.get("type")
+        if t in BLOCKED_COMMANDS:
+            return ("command %r is blocked: it would desync the session "
+                    "registry (session_file/name)" % (t,))
+        if t == "extension_ui_response":
+            rid = cmd_obj.get("id")
+            with self.lock:
+                if rid not in self.pending_dialogs:
+                    return "no pending dialog with id %r" % (rid,)
+                self.pending_dialogs.discard(rid)
+        if not self.sup.send(cmd_obj):
+            return "session process stdin unavailable (state=%s)" \
+                   % self.sup.state
+        return None
+
+    # ---- 基线：get_entries ----
 
     def get_entries(self, since=None, timeout=ENTRIES_TIMEOUT):
         """发 pi rpc get_entries 并等待配对响应。
 
-        返回 dict：{"ok": True, "resp": <pi response>, "watermark": <响应行 eid>,
-        "epoch": <守护世代>}；超时/桥死返回 {"ok": False, "error": ...}。
-        watermark = 响应行入环时的事件 ID——快照时刻的精确分界：eid <= watermark
-        的事件先于或等于快照，eid > watermark 的事件晚于快照。
+        返回 {"ok": True, "resp": <pi response>, "watermark": <响应行 eid>,
+        "gen": <会话进程世代>}；失败返回 {"ok": False, "error": ...}。
         """
-        if self.dead:
-            return {"ok": False, "error": "bridge dead"}
-        self.hello_evt.wait(HELLO_TIMEOUT)     # 拿到 epoch；命令本身不依赖 hello
+        self.sup.ensure_started()
+        if not self.sup.wait_ready():
+            return {"ok": False,
+                    "error": "session process not ready in time (state=%s)"
+                             % self.sup.state}
         with self.lock:
             self._req_seq += 1
             rid = "wbge-%d-%d" % (os.getpid(), self._req_seq)
-            waiter = {"event": threading.Event(), "resp": None, "eid": None}
+            waiter = {"event": threading.Event(), "resp": None}
             self.pending[rid] = waiter
         cmd = {"type": "get_entries", "id": rid}
         if since:
             cmd["since"] = since
-        try:
-            self.send(cmd)
-        except (ConnectionError, OSError) as e:
+        if not self.sup.send(cmd):
             with self.lock:
                 self.pending.pop(rid, None)
-            return {"ok": False, "error": "send failed: %s" % e}
+            return {"ok": False,
+                    "error": "session process unavailable (state=%s)"
+                             % self.sup.state}
         if not waiter["event"].wait(timeout):
             with self.lock:
                 self.pending.pop(rid, None)
-            return {"ok": False, "error": "get_entries timed out after %.0fs"
-                    % timeout}
-        if waiter["resp"] is None:              # 等待期间桥被关闭
-            return {"ok": False, "error": "bridge closed while waiting"}
-        with self.lock:
-            epoch = self.epoch
-        return {"ok": True, "resp": waiter["resp"], "watermark": waiter["eid"],
-                "epoch": epoch}
+            return {"ok": False,
+                    "error": "get_entries timed out after %.0fs" % timeout}
+        if waiter["resp"] is None:
+            return {"ok": False, "error": "no response received"}
+        return {"ok": True, "resp": waiter["resp"],
+                "watermark": waiter.get("eid") or "",
+                "gen": self.sup.gen}
 
     # ---- 游标解析与流订阅 ----
 
     def resolve_since(self, since_eid):
-        """事件 ID → 环内位置。返回 (start_seq, gap)。
-
-        since 为空 → 从头（无 gap）；命中 → 该事件之后续流；未命中（未知/已淘汰/
-        来自旧桥）→ 从最旧可用位续流并置 gap，由调用方发缺口标记让前端走基线自愈。
-        """
+        """事件 ID → 环内位置。返回 (start_seq, gap)。"""
         with self.lock:
             if not since_eid:
                 return 0, False
@@ -222,11 +162,7 @@ class Bridge:
             return oldest, True
 
     def iter_events(self, start_seq):
-        """流订阅生成器：先补发 start_seq 之后的缓冲，再实时跟随。锁外 yield。
-
-        订阅计数（subscribers）由调用方（rpc/stream.py）在锁内原子预约/释放，
-        以便「查上限 + 占位」是同一步（S3，0829-1640-har3）。
-        """
+        """流订阅生成器：先补发 start_seq 之后的缓冲，再实时跟随。锁外 yield。"""
         sent = start_seq
         while True:
             batch = []
@@ -235,8 +171,6 @@ class Bridge:
                     batch = [e for e in self.ring if e[0] > sent]
                     if batch:
                         break
-                    if self.dead:
-                        return
                     if not self.cond.wait(timeout=15):
                         break           # 超时 → keep-alive
             if not batch:
@@ -245,134 +179,21 @@ class Bridge:
             for seq, eid, obj in batch:
                 sent = seq
                 yield (eid, obj)
-                if obj.get("type") == "webgw.bridge_lost":
-                    return
 
 
-BRIDGES = {}            # session -> Bridge
-BRIDGES_LOCK = threading.Lock()
+_BRIDGES = {}                     # resolved path -> Bridge（按需多会话）
+_BRIDGES_LOCK = threading.Lock()
 
 
-def session_socket_exists(session):
-    return os.path.exists(os.path.join(SOCK_DIR, session + ".sock"))
-
-
-def registry_names():
-    """S1（0829-1640-har3）：经 ctl.sock status 取注册表会话名集合（白名单源）。
-
-    拒绝依据从「文件存在」升级为「注册表在名单中」：既挡保留名 `ctl`
-    （sock/ctl.sock 存在 → 旧逻辑可挂接控制面），也挡任何手工放置的野 socket。
-    ctl.sock 不可用时向上抛异常，调用方按 502 拒绝（fail-closed）。
-    """
-    st = ctl_status()
-    return {s.get("name") for s in st.get("sessions") or []
-            if isinstance(s, dict) and s.get("name")}
-
-
-def get_bridge(session, create=True):
-    with BRIDGES_LOCK:
-        b = BRIDGES.get(session)
-        if b and not b.dead:
-            return b
-        if not create:
-            return None
-        if not session_socket_exists(session):
-            raise FileNotFoundError("no such session socket: %s" % session)
-        # 双保险：建桥前再确认在注册表（正常路径调用方已校验，防绕过）
-        if session not in registry_names():
-            raise PermissionError("session not in registry: %s" % session)
-        b = Bridge(session)
-        b.connect()
-        BRIDGES[session] = b
-        log("bridge [%s] attached (ring=%d)", session, RING_MAX)
+def get_bridge(session_path):
+    """按路径取桥接；首次访问创建并拉起该会话的监督员（懒拉起）。
+    注册表键 = 解析后的绝对路径（`/./x` 等变体归一）。
+    非法路径抛 ValueError（调用方回 400）。"""
+    key = _proc.resolve_session_path(session_path)
+    with _BRIDGES_LOCK:
+        b = _BRIDGES.get(key)
+        if b is None:
+            b = Bridge(session_path)
+            _BRIDGES[key] = b
+            b.sup.ensure_started()
         return b
-
-
-def drop_bridge(session):
-    with BRIDGES_LOCK:
-        BRIDGES.pop(session, None)
-
-
-def close_bridge(session):
-    with BRIDGES_LOCK:
-        b = BRIDGES.pop(session, None)
-    if b:
-        b.close()
-
-
-def _ctl_request(req, timeout=5.0):
-    """向 ctl.sock 发一条请求并读单行响应（socket 用完即关）。"""
-    path = os.path.join(SOCK_DIR, "ctl.sock")
-    sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        sk.settimeout(timeout)
-        sk.connect(path)
-        sk.sendall((json.dumps(req) + "\n").encode("utf-8"))
-        buf = b""
-        while b"\n" not in buf:
-            chunk = sk.recv(1 << 20)
-            if not chunk:
-                break
-            buf += chunk
-        return json.loads(buf.split(b"\n", 1)[0]) if buf.strip() else None
-    finally:
-        sk.close()
-
-
-def ctl_status():
-    return _ctl_request({"cmd": "status"}, timeout=5.0)
-
-
-def registry_cwd_map():
-    """inform4（0829-1733-1hjh）：读声明式注册表 sessions.json 的 {name: cwd}，
-    供 op=status 补 cwd（守护不动）。读失败尽力而为 → 空映射。"""
-    try:
-        with open(REGISTRY) as f:
-            doc = json.load(f)
-        return {s.get("name"): s.get("cwd")
-                for s in (doc.get("sessions") or [])
-                if isinstance(s, dict) and s.get("name")}
-    except Exception:
-        return {}
-
-
-def ctl_reload_session(name, timeout=30.0):
-    """进程级 reload（0829-1740-u7tb）：经 ctl.sock 下发 reload-session。
-    守护同步完成「优雅停 → 立即 respawn（resume from jsonl）」后响应；
-    宽限超时覆盖 SIGTERM 宽限期（守护侧最长 ~3s）+ 拉起耗时。"""
-    return _ctl_request({"cmd": "reload-session", "name": name},
-                        timeout=timeout)
-
-
-# ---- 管理面（任务 0829-1803-2umc）：经 ctl.sock 下发守护管理命令 ----
-
-def ctl_add_session(name, cwd=None, timeout=10.0):
-    """新增会话（注册表条目 + 立即拉起）。"""
-    req = {"cmd": "add-session", "name": name}
-    if cwd:
-        req["cwd"] = cwd
-    return _ctl_request(req, timeout=timeout)
-
-
-def ctl_set_cwd(name, cwd, timeout=30.0):
-    """切工作目录（注册表更新 + 进程级 reload 重启生效）。"""
-    return _ctl_request({"cmd": "set-cwd", "name": name, "cwd": cwd},
-                        timeout=timeout)
-
-
-def ctl_rename_session(name, new_name, timeout=30.0):
-    """改名（注册表 + socket 文件改名 + 带新 --name respawn）。"""
-    return _ctl_request({"cmd": "rename-session", "name": name,
-                         "new_name": new_name}, timeout=timeout)
-
-
-def gc_idle_bridges():
-    """由 stream/api 调用时顺带清理久未活动的桥（无常驻线程）。"""
-    now = time.time()
-    with BRIDGES_LOCK:
-        stale = [b for b in BRIDGES.values()
-                 if b.subscribers == 0
-                 and now - b.last_active > BRIDGE_IDLE_SECS]
-    for b in stale:
-        log("bridge [%s] idle; closing", b.session)
-        close_bridge(b.session)

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sessiond web</title>
+<title>chat</title>
 <script type="application/javascript" src="/w/ext/markdown/deps/marked.min.js"></script>
 <style>
 :root {
@@ -14,39 +14,31 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
   font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
-header { display: flex; align-items: center; gap: 12px; padding: 8px 14px;
-  background: var(--panel); border-bottom: 1px solid var(--line);
-  position: sticky; top: 0; z-index: 5; }
-header b { color: var(--acc); }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
-.dot.on { background: var(--ok); } .dot.err { background: var(--err); }
-#connInfo { color: var(--dim); font-size: 12px; flex: 1;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#connInfo.flash { color: var(--warn); font-weight: 600; }
+/* flash 轻提示（任务 0829-2035-kyor：替代原顶部状态栏）：顶部居中浮层，自动隐藏；
+   原走系统事件侧栏的用户可见提示（自愈失败、熔断等）改经它承载，错误不静默吞掉 */
+.flashnotice { position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+  max-width: 80vw; padding: 6px 14px; border-radius: 8px; font-size: 12px;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--dim);
+  box-shadow: 0 4px 14px rgba(0,0,0,.12); z-index: 20;
+  white-space: pre-wrap; word-break: break-word; }
+.flashnotice.warn { color: var(--warn); border-color: var(--warn); }
+.flashnotice.err { color: var(--err); border-color: var(--err); }
 button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
 button:hover { border-color: var(--acc); }
 button.primary { background: var(--acc); border-color: var(--acc); color: #ffffff; }
-.layout { display: flex; height: calc(100vh - 41px); }
-aside { width: 300px; min-width: 220px; border-right: 1px solid var(--line);
-  overflow-y: auto; background: var(--panel); }
+.layout { display: flex; height: 100vh; }
 main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.sess { padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
-.sess:hover, .sess.cur { background: var(--panel2); }
-.sess .name { font-weight: 600; }
-.sess .meta { color: var(--dim); font-size: 12px; }
 .badge { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 11px;
   border: 1px solid var(--line); color: var(--dim); margin-left: 4px; }
 .badge.run { color: var(--ok); border-color: var(--ok); }
 .badge.off { color: var(--dim); } .badge.dis { color: var(--err); border-color: var(--err); }
-aside h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
-  text-transform: uppercase; letter-spacing: .08em; }
 #stream { flex: 1; overflow-y: auto; padding: 12px 16px; }
 .ev { margin-bottom: 8px; }
-/* 用户消息靠右（聊天惯例，inform3，0829-1640-har3）：浅蓝底区分，白底主题对比度 =
-   #ddf4ff 底 × #1a1f26 正文（GitHub accent 浅色系）；块右对齐、块内文本仍左起 */
+/* 用户消息靠右（聊天惯例）：浅蓝底区分；无粗边条（任务 0829-2131-pdop
+   inbox r3gt：整页所有消息块统一普通 1px 圆角边框） */
 .role-user { background: #ddf4ff; border: 1px solid #b6e3ff;
-  border-right: 3px solid var(--acc); padding: 6px 10px; border-radius: 8px;
+  padding: 6px 10px; border-radius: 8px;
   white-space: pre-wrap; word-break: break-word; max-width: 80%; margin-left: auto; }
 .md { word-break: break-word; }
 .md p { margin: 4px 0; }
@@ -55,66 +47,124 @@ aside h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
 .md code { background: var(--panel); padding: 1px 4px; border-radius: 4px;
   font-size: 12px; }
 .md pre code { background: none; padding: 0; }
-/* 极简内嵌语法高亮（0829-1609-8dwt 打磨项；不引外部库，取舍见 PROTOCOL §6.4） */
+/* 极简内嵌语法高亮（不引外部库） */
 .md pre code .tok-k { color: #cf222e; }
 .md pre code .tok-s { color: #0a3069; }
 .md pre code .tok-c { color: #6e7781; font-style: italic; }
 .md pre code .tok-n { color: #953800; }
-/* thinking / 工具调用块默认折叠（inform4，0829-1640-har3）；状态色在 summary 可见 */
-.thinking-block { margin: 2px 0; }
+/* 折叠块展开指示三角移除（任务 0829-2052-rnfe）：thinking 及同类 <details>/<summary>
+   的 disclosure marker 去掉，点按展开/收起功能保留 */
+details summary { list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+/* thinking 块（对齐 pi-web 观感，任务 0829-2107-cvdn；0829-2228-zq1t inbox thnk：
+   展开后内容区参考工具调用色块样式——柔和底色块撑满、与标题行无缝贴合，
+   同 5nnk 口径：相接处直角、无左右空隙；收起时仍是干净标题行盒子）：
+   圆角边框盒子 + 顶部 Thinking 标题行，无三角（上方全局已去）、无字数；
+   点标题行展开/收起，默认折叠 */
+.thinking-block { margin: 4px 0; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); overflow: hidden; }
 .thinking-block summary { color: var(--dim); font-size: 12px; cursor: pointer;
-  font-style: italic; }
+  padding: 6px 10px; user-select: none; border-bottom: 1px solid transparent; }
+.thinking-block[open] summary { border-bottom-color: var(--line); }
+/* 展开内容区 = 柔和底色块（与 .targs 同族浅灰蓝）：margin 0 撑满、直角贴合标题行，
+   底部圆角交给外框 overflow:hidden 裁切；基线（thinkingDetails）与流式（thinking_delta）
+   共用同一 DOM/CSS，一处生效两处一致 */
 .thinking-block pre { white-space: pre-wrap; word-break: break-word; color: var(--dim);
-  font-style: italic; font-size: 12px; margin: 4px 0; }
+  font-style: italic; font-size: 12px; margin: 0; padding: 8px 10px;
+  background: #e9eff7; border-radius: 0; }
 .sys { color: var(--dim); font-size: 12px; }
 .sys.warn { color: var(--warn); } .sys.err { color: var(--err); }
 .tool-block { background: var(--panel); border: 1px solid var(--line);
   border-radius: 4px; margin: 2px 0; font-size: 12px; color: var(--dim); }
-/* summary = 🔧 工具名 · 状态 + 关键参数预览 + 耗时（inform3，0829-1733-1hjh）；
-   flex 单行布局：预览居中弹性省略，耗时右对齐（pi-web 形态 `read /path  16s`） */
+/* summary = 工具名 · 状态 + 关键参数预览 + 耗时（任务 0829-2035-kyor：去掉装饰图标） */
 .tool-block summary { cursor: pointer; padding: 4px 8px; display: flex; gap: 6px;
   align-items: baseline; }
 .tool-block summary .tprev { flex: 1; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
 .tool-block summary .tdur { flex: none; margin-left: auto; color: var(--dim);
   font-variant-numeric: tabular-nums; }
-.tool-block .tst { font-weight: 600; }
-.tool-block.run .tst { color: var(--warn); }
-.tool-block.done .tst { color: var(--ok); }
-.tool-block.err .tst { color: var(--err); }
-.tool-block .tbody { padding: 0 8px 6px; }
+/* 工具块状态：无文字徽标（done/running/err 字样已移除），改用工具名颜色区分
+   （任务 0829-2107-cvdn）——进行中=强调色（acc 蓝），完成=弱化色（dim 灰），
+   错误=红；耗时保留在右侧。无左侧粗强调条（任务 0829-2131-pdop inbox l3ft：
+   与 thinking 块同口径，普通 1px 圆角边框盒子） */
+.tool-block summary .thead { font-weight: 600; }
+.tool-block.run summary .thead { color: var(--acc); }
+.tool-block.done summary .thead { color: var(--dim); font-weight: 400; }
+.tool-block.err summary .thead { color: var(--err); }
+/* Waiting for model 指示（任务 0829-2107-cvdn）：回合进行中且无流式产出时，
+   聊天流末尾的低调提示行（呼吸动画） */
+.waiting { color: var(--dim); font-size: 12px; font-style: italic; padding: 4px 0;
+  animation: waitpulse 1.6s ease-in-out infinite; }
+@keyframes waitpulse { 0%, 100% { opacity: .35; } 50% { opacity: .9; } }
+/* 模型错误红框（任务 0829-2131-pdop，对齐 pi-web 观感）：assistant 错误消息 /
+   agent_end、compaction_end 的 errorMessage 统一渲染为红边盒子；同文去重不叠框 */
+.errbox { margin: 4px 0; border: 1px solid #ffcecb;
+  background: #ffebe9; border-radius: 8px; padding: 8px 10px; color: var(--err);
+  font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+/* Retrying 警告框（任务 0829-2131-pdop）：auto_retry_start 时聊天流末显示；
+   auto_retry_end success 移除、failure 原地转红框常驻（复用 .errbox） */
+.retrybox { margin: 4px 0; border: 1px solid #eed888;
+  background: #fff8c5; border-radius: 8px; padding: 8px 10px; color: var(--warn);
+  font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.tool-block .tbody { padding: 0; }
 .tool-block pre { font-size: 11px; margin: 4px 0; white-space: pre-wrap;
   word-break: break-all; }
-.tool-block .targs { color: var(--dim); }
-.tool-block .tout { color: var(--fg); background: var(--bg);
-  border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px;
-  max-height: 300px; overflow-y: auto; }
+/* 参数/输出上下双色块（任务 0829-2131-pdop inbox t0ol：用户拍板；
+   0829-2224-5nnk 无缝贴合：用户 2026-08-30 拍板两块间与左右零空隙）：
+   参数=浅灰蓝、输出=浅暖灰，垂直零间距水平撑满（tbody padding 清零、块 margin 0）。
+   圆角取舍：targs 上缘顶着 summary 行不贴工具块外框，故全直角；
+   tout 底缘即工具块底缘，下两角 3px 随外框 4px+1px 边框内切。
+   相接处双方均无圆角，零缝隙。基线与流式共用同一 DOM/CSS，一处生效。 */
+.tool-block .targs { color: var(--dim); background: #e9eff7; border-radius: 0;
+  margin: 0; padding: 6px 8px; }
+.tool-block .tout { color: var(--fg); background: #f3efe9;
+  border-radius: 0 0 3px 3px; margin: 0;
+  padding: 6px 8px; max-height: 300px; overflow-y: auto; }
 details.raw summary { color: var(--dim); font-size: 12px; cursor: pointer; }
 details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   word-break: break-all; margin: 2px 0; }
-/* 系统事件侧栏（0829-1721-56qb）：右侧可折叠，默认折叠；折叠时按钮角标计未读；
-   窄屏（≤800px）改为底部叠层面板 */
-#sidebar { width: 340px; min-width: 260px; border-left: 1px solid var(--line);
-  overflow-y: auto; background: var(--panel); }
-#sidebar h3 { margin: 10px 12px 4px; font-size: 12px; color: var(--dim);
-  text-transform: uppercase; letter-spacing: .08em; }
-#evtList { padding: 4px 10px 12px; }
-#evtList details.raw { margin: 3px 0; padding-bottom: 3px;
-  border-bottom: 1px dashed var(--line); }
-#evtList details.raw.warn summary { color: var(--warn); }
-#evtList details.raw.err summary { color: var(--err); }
-#evtBadge { display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 5px;
-  border-radius: 8px; background: var(--err); color: #ffffff; font-size: 11px;
-  text-align: center; vertical-align: middle; }
-#evtBadge.hidden { display: none; }
-@media (max-width: 800px) {
-  #sidebar { position: fixed; left: 0; right: 0; bottom: 0; width: auto;
-    min-width: 0; max-height: 45vh; z-index: 9; border-left: none;
-    border-top: 1px solid var(--line); box-shadow: 0 -6px 18px rgba(0,0,0,.12); }
-}
 #inputbar { display: flex; gap: 8px; padding: 10px 16px;
   border-top: 1px solid var(--line); background: var(--panel); }
-/* 斜杠命令内联提示条（inform2，0829-1733-1hjh）：输入框上方，默认隐藏 */
+/* QUEUED 面板（任务 0829-2115-zvti；设计口径 = pi-web QUEUED 截图参考，经 dispatcher
+   inbox 2026-08-29-21-33 两条 inform 下发）：浅灰圆角盒子，头部一行「QUEUED · N」；
+   每条 = 圆角小徽标（steer=蓝色描边强调 / follow-up=灰色弱化，等宽字体）+ 单行截断文本。
+   右上无 Recall to input 按钮：本协议（pi rpc steer/follow_up）无召回能力，不提供。
+   数据源 = queue_update 事件（后端权威，任务 0829-2131-pdop）；本地待发记录退化为
+   发送瞬间的乐观补位，同文本不重复展示。 */
+#queuedPanel { margin: 8px 16px 0; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); padding: 8px 10px; }
+#queuedPanel .qp-head { font-size: 11px; color: var(--dim); letter-spacing: .5px;
+  font-weight: 600; margin-bottom: 4px; }
+#queuedPanel .qp-item { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
+#queuedPanel .qp-badge { flex: none; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo,
+  Consolas, monospace; padding: 0 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--dim); background: var(--panel2); }
+#queuedPanel .qp-badge.steer { border-color: var(--acc); color: var(--acc);
+  background: var(--bg); }                                /* steer = 蓝色描边强调 */
+#queuedPanel .qp-text { flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg); }
+#queuedPanel .qp-item.rejected .qp-badge { border-color: var(--err); color: var(--err); }
+#queuedPanel .qp-item.rejected .qp-text { color: var(--err); }
+/* 待发送图片附件条（任务 0829-2103-8etk）：输入栏上方缩略图行 */
+#attachBar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0;
+  border-top: 1px solid var(--line); background: var(--panel);
+  align-items: center; }
+.attach-thumb { position: relative; width: 56px; height: 56px;
+  border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  background: var(--bg); }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-thumb .rm { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px;
+  padding: 0; font-size: 11px; line-height: 14px; text-align: center; border-radius: 50%;
+  background: rgba(0,0,0,.6); color: #fff; border: none; cursor: pointer; }
+#attachBar .clear-all { font-size: 12px; padding: 2px 8px; }
+/* 消息内图片缩略图（自己发出的带图消息；点击查看原图）。
+   块级独占一行（任务 0829-2131-pdop inbox q3pd：用户反馈图片换行更好）：
+   流式与基线共用 renderUserMessage，一处生效两处一致 */
+.msg-img-link { display: block; margin: 6px 0 0; line-height: 0;
+  text-decoration: none; }
+.msg-img { max-width: 180px; max-height: 180px; border-radius: 6px;
+  border: 1px solid var(--line); cursor: pointer; }
+/* 斜杠命令内联提示条：输入框上方，默认隐藏 */
 .notice { padding: 4px 16px; font-size: 12px; color: var(--warn);
   background: var(--panel); border-top: 1px dashed var(--line);
   white-space: pre-wrap; word-break: break-word; }
@@ -139,84 +189,99 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 </style>
 </head>
 <body>
-<header>
-  <b>sessiond</b>
-  <span class="dot" id="connDot"></span>
-  <span id="connInfo">未挂接</span>
-  <button id="evtToggle" onclick="toggleSide()" aria-expanded="false">系统事件 <span id="evtBadge" class="hidden">0</span></button>
-  <button onclick="refreshStatus()">刷新</button>
-</header>
+<div id="flashNotice" class="flashnotice hidden"></div>
 <div class="layout">
-  <aside>
-    <h3>会话</h3>
-    <div id="sessList"></div>
-  </aside>
   <main>
     <div id="stream"></div>
     <div id="slashNotice" class="notice hidden"></div>
+    <div id="attachBar" class="hidden"></div>
+    <div id="queuedPanel" class="hidden"></div>
     <div id="inputbar">
-      <textarea id="promptInput" rows="1" placeholder="输入 prompt 或 /命令，Enter 发送（Shift+Enter 换行）"></textarea>
-      <button onclick="sendAbort()">中止</button>
-      <button class="primary" onclick="sendPrompt()">发送</button>
+      <textarea id="promptInput" rows="1" placeholder="Type a prompt or /command, Enter to send (queues automatically while streaming), Shift+Enter for newline"></textarea>
     </div>
   </main>
-  <aside id="sidebar" class="hidden">
-    <h3>系统事件</h3>
-    <div id="evtList"></div>
-  </aside>
 </div>
 
 <div id="dialogBox">
   <h4 id="dialogMethod">dialog</h4>
   <div id="dialogTitle"></div>
-  <input id="dialogInput" class="hidden" placeholder="输入…">
+  <input id="dialogInput" class="hidden" placeholder="Type here…">
   <div id="dialogOpts"></div>
   <div style="margin-top:8px; display:flex; gap:8px;">
-    <button id="dialogCancel" onclick="replyDialog({cancelled:true})">取消</button>
+    <button id="dialogCancel" onclick="replyDialog({cancelled:true})">Cancel</button>
     <span id="dialogTimeout" class="sys" style="align-self:center"></span>
   </div>
 </div>
 
 <script>
 "use strict";
+// URL 路径驱动会话（任务 0829-1958-od0t；R1：~/m 下任意 .jsonl 路径）：
+// 会话 = 页面 URL 路径指向的 .jsonl（如 /assistant/foo.jsonl、/a/b/x.jsonl），
+// 持久体即该文件，由 web 进程内按路径监督员直接监督（崩溃自动重启，
+// 从该 jsonl resume）。不同目录的同名文件 = 不同会话。
+// vmap 翻译是服务端行为，浏览器 location.pathname 仍是原始路径 → 直接解析。
 const $ = id => document.getElementById(id);
 const API = "/sessiond/rpc/api.py";
 const STREAM = "/sessiond/rpc/stream.py";
-let attached = null;          // 当前挂接会话名
-let statusTimer = null;
+// 会话路径解析：站内任意 /…*.jsonl（后端另有 ~/m 锁定校验）
+function parseSessionFromUrl() {
+  const p = location.pathname;
+  return (/^\/.*[^\/]\.jsonl$/.test(p)) ? p : null;
+}
+const SESSION = parseSessionFromUrl();
+if (SESSION) {
+  document.title = SESSION.replace(/\.jsonl$/, "") + " · chat";
+}
+let attached = null;          // 当前挂接会话名（= URL 解析出的 SESSION）
 let uidSeq = 0;
 const uid = () => "web-" + (++uidSeq) + "-" + Date.now().toString(36);
+let pendingImages = [];       // 待发送附件（任务 0829-2103-8etk）：{mime, b64, dataUrl}
+// 待送达跟踪：cmd id -> {mode, text, rejected}；follow_up（流式中自动排队）送达前本地显示待发条目，
+// 对应 user message 事件到达后转为正常用户消息（幂等：文本匹配）。
+let pendingSends = {};
 let pendingDialogs = {};      // id -> request
 let curAssistantEl = null;    // 当前 assistant 消息渲染节点（实时流式）
 let curAssistantBuf = "";     // 累积文本（用于 message_end 时 markdown 渲染）
-// 流状态（两层锚定：entries 基线 + 事件 ID 游标，任务 0829-1609-8dwt）
+// 流状态（两层锚定：entries 基线 + 事件 ID 游标）
 let streamCtrl = null;        // AbortController
-let streamCursor = "";        // 最后收到的事件 ID（e<n>），续流游标
+let streamCursor = "";        // 最后收到的事件 ID（<ns>:<seq>），续流游标
 let lastEidNum = 0;           // 事件 ID 数字部分（本地连续性检查用）
 let streamAlive = false;
 let reconnectTimer = null;
 // 基线锚定状态
-let curEpoch = null;          // 守护世代（展示/调试）
-let lastGen = null;           // 会话进程世代（hello/gen 变化检测）
+let lastGen = null;           // 会话进程世代（gen 变化检测 → 基线自愈）
 let curLeafId = null;         // 活跃分支叶
-let curProvider = null;       // 当前模型 provider/modelId（model_change 跟踪，/model 用，inform2）
+let curProvider = null;       // 当前模型 provider/modelId（model_change 跟踪，/model 用）
 let curModelId = null;
 let entryCursor = null;       // 最后 entry id（增量游标）
 let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
 let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
-let toolBlocks = {};          // toolCallId -> 折叠块引用（0829-1640-har3）
+let toolBlocks = {};          // toolCallId -> 折叠块引用
 let healBusy = false;
 let healFails = 0;
-// 流式渐进 markdown（inform2，0829-1640-har3）：text_delta 累积后节流重渲染，
-// 每次渲染都过 S2 消毒；message_end 最终收尾渲染一次。
+// 流式渐进 markdown：text_delta 累积后节流重渲染，每次渲染都过消毒；
+// message_end 最终收尾渲染一次。
 let mdRenderTimer = null;
 const MD_RENDER_MS = 150;
-// 系统事件侧栏（0829-1721-56qb）：系统/控制面帧分流右侧可折叠面板，主流只留对话
-let sideCollapsed = true;     // 默认折叠
-let sideUnread = 0;           // 折叠期间新增条数（角标）
 // dialog 倒计时
 let dialogTimer = null;
 let dialogDeadline = 0;
+// Waiting for model 指示（任务 0829-2107-cvdn）：回合进行中但无流式产出时显示；
+// 状态机：user message_start = 回合开始（turnActive），turn_end/agent_end = 回合结束；
+// 显示时机 = 回合中且无流式产出（用户消息发出后等首个产出、工具执行完成后等下一轮
+// 模型响应）；任一模型产出帧（assistant message_start / message_update /
+// tool_execution_start）到达即移除。纯前端基于现有 SSE 事件推断，无后端新事件。
+let turnActive = false;
+let waitingEl = null;
+// 回合状态三件套（任务 0829-2131-pdop）：
+// ① retryBoxEl = 当前 Retrying 警告框（auto_retry_start 建，end success 移除 / failure 转红框）；
+// ② lastRenderedErrorMsg = 最近已渲染的模型错误文本（agent_end/compaction_end 的
+//    errorMessage 与之相同时去重，不叠两个红框）；
+// ③ queueState = queue_update 下发的后端权威队列（steering/followUp），
+//    本地待发 pendingSends 退化为发送瞬间的乐观补位。
+let retryBoxEl = null;
+let lastRenderedErrorMsg = null;
+let queueState = {steering: [], followUp: []};
 
 // ---------------- 基础请求 ----------------
 async function api(op, extra) {
@@ -229,47 +294,66 @@ async function api(op, extra) {
   return j;
 }
 
-// 会话 cwd 展示（inform4，0829-1733-1hjh）：注册表 cwd 经 op=status 补齐；
-// ~ 缩写（/home/<user> → ~），列表条目与头部当前会话信息共用。
-let cwdByName = {};
-function abbrevCwd(p) {
-  if (!p) return "";
-  return String(p).replace(/^\/home\/[^/]+/, "~");
-}
-function withCwd(name) {
-  const c = cwdByName[name];
-  return name + (c ? " · " + abbrevCwd(c) : "");
+// ---------------- flash 轻提示（任务 0829-2035-kyor：原顶部状态栏已移除；
+// op=status API 后端保留供评审/调试，前端不再展示 gen/restarts/pid/cwd 等内部字段） ----------------
+let flashTimer = null;
+function flash(info, cls) {
+  const el = $("flashNotice");
+  el.textContent = info;
+  el.className = "flashnotice" + (cls ? " " + cls : "");
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    el.classList.add("hidden"); flashTimer = null;
+  }, cls === "err" ? 8000 : 4000);   // 错误提示多停留一会儿，别静默吞掉
 }
 
-// ---------------- 会话列表 ----------------
-async function refreshStatus() {
-  let st;
-  try { st = await api("status"); } catch (e) {
-    $("sessList").innerHTML = '<div class="sess"><div class="meta">status 失败: ' + esc(e.message) + "</div></div>";
-    return;
-  }
-  const el = $("sessList");
-  el.innerHTML = "";
-  cwdByName = {};
-  for (const s of (st.sessions || [])) if (s && s.name) cwdByName[s.name] = s.cwd || "";
-  for (const s of (st.sessions || [])) {
-    const d = document.createElement("div");
-    d.className = "sess" + (s.name === attached ? " cur" : "");
-    const badge = s.disabled ? '<span class="badge dis">熔断</span>'
-      : s.state === "running" ? '<span class="badge run">running</span>'
-      : '<span class="badge off">' + esc(s.state || "?") + "</span>";
-    const en = s.enabled ? "" : '<span class="badge off">disabled</span>';
-    d.innerHTML = '<div class="name">' + esc(s.name) + badge + en + "</div>"
-      + '<div class="meta">gen=' + nz(s.gen) + " · restarts=" + nz(s.restarts)
-      + " · clients=" + nz(s.clients) + (s.pid ? " · pid=" + s.pid : "")
-      + (s.cwd ? '<br>cwd=' + esc(abbrevCwd(s.cwd)) : "") + "</div>";
-    d.onclick = () => attach(s.name);
-    el.appendChild(d);
-  }
-  if (!(st.sessions || []).length)
-    el.innerHTML = '<div class="sess"><div class="meta">注册表为空</div></div>';
+// ---------------- 提示音（任务 0829-2103-dpe4：WebAudio 合成短促 beep，无音频文件） ----------------
+// 触发：① assistant 一轮结束（turn_end/agent_end）→ done 音；
+//       ② 页签后台（document.hidden）时收到新注入的消息/通知事件 → notify 音。
+// 自动播放策略：AudioContext 在首次用户手势（点击/按键）时创建+resume；
+// 未交互前 beep 静默跳过，不报错。开关仅斜杠命令 /sound（默认开，无图形控件）。
+let soundOn = true;
+let soundCtx = null;
+let soundUnlocked = false;
+let lastBeepAt = 0;
+function soundUnlock() {
+  if (soundUnlocked) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!soundCtx) soundCtx = new AC();
+    soundCtx.resume().then(() => { soundUnlocked = true; }).catch(() => {});
+  } catch (e) {}
 }
-function nz(x) { return (x === null || x === undefined) ? "?" : x; }
+window.addEventListener("pointerdown", soundUnlock, true);
+window.addEventListener("keydown", soundUnlock, true);
+function beep(kind) {
+  if (!soundOn || !soundCtx || soundCtx.state !== "running") return;  // 未交互/未解锁：静默
+  if (Date.now() - lastBeepAt < 300) return;                          // 节流：连续触发只响一次
+  lastBeepAt = Date.now();
+  try {
+    const t0 = soundCtx.currentTime;
+    const osc = soundCtx.createOscillator();
+    const gain = soundCtx.createGain();
+    osc.connect(gain); gain.connect(soundCtx.destination);
+    if (kind === "done") {                    // 双音上行（880→1174.7Hz），~0.24s
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, t0);
+      osc.frequency.setValueAtTime(1174.66, t0 + 0.09);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
+      osc.start(t0); osc.stop(t0 + 0.24);
+    } else {                                  // 单音短 beep（660Hz），~0.14s
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(660, t0);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.1, t0 + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+      osc.start(t0); osc.stop(t0 + 0.14);
+    }
+  } catch (e) {}
+}
 
 // ---------------- 挂接（基线 → 记水位 → 续流） ----------------
 async function attach(name) {
@@ -279,19 +363,20 @@ async function attach(name) {
   $("stream").innerHTML = "";
   curAssistantEl = null; curAssistantBuf = "";
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
-  $("evtList").innerHTML = ""; sideUnread = 0; updateBadge();   // 侧栏随挂接重置
-  sysLine("挂接 " + name + "：拉取历史基线（get_entries）…");
+  turnActive = false; waitingEl = null;                 // 重挂接重置等待指示（0829-2107-cvdn）
+  pendingSends = {}; queueState = {steering: [], followUp: []};
+  retryBoxEl = null; lastRenderedErrorMsg = null;       // 回合状态重置（0829-2131-pdop）
+  renderQueuedPanel();                                  // 待发/队列面板随清屏重置（0829-2115-zvti）
+  sysLine("Attaching " + name + ": fetching history baseline (get_entries)…");
   let doc;
   try { doc = await api("attach", {session: name}); }
-  catch (e) { sysLine("挂接失败: " + e.message, "err"); return; }
+  catch (e) { sysLine("Attach failed: " + e.message, "err"); return; }
   attached = name;
   applyBaseline(doc, true);
-  refreshStatus();
 }
 
 // 基线落盘：渲染活跃分支、记游标/水位、开流
 function applyBaseline(doc, initial) {
-  curEpoch = doc.epoch !== undefined ? doc.epoch : curEpoch;
   lastGen = doc.gen !== undefined ? doc.gen : lastGen;
   curLeafId = doc.leafId || null;
   entryCursor = doc.entryCursor || null;
@@ -300,15 +385,17 @@ function applyBaseline(doc, initial) {
     $("stream").innerHTML = "";
     curAssistantEl = null; curAssistantBuf = "";
     seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
+    turnActive = false; waitingEl = null;               // 自愈重渲染重置（0829-2107-cvdn）
+    pendingSends = {}; queueState = {steering: [], followUp: []};
+    retryBoxEl = null; lastRenderedErrorMsg = null;     // 回合状态重置（0829-2131-pdop）
+    renderQueuedPanel();                                // 全量重渲染：待发/队列面板一并清除（0829-2115-zvti）
   }
   for (const e of branch) renderEntry(e);
   streamCursor = doc.watermark || "";
   lastEidNum = eidNum(streamCursor);
   openStream();
-  sysLine("基线 " + (doc.entries || []).length + " entries（活跃分支 "
-    + branch.length + " 条" + (doc.gap ? "，缺口后全量重拉" : "") + "）"
-    + (curEpoch !== null ? " · epoch=" + curEpoch : "")
-    + (lastGen !== null ? " · gen=" + lastGen : ""));
+  sysLine("Baseline " + (doc.entries || []).length + " entries (active branch "
+    + branch.length + (doc.gap ? ", gap → full refetch" : "") + ")");
 }
 
 // 活跃分支：从 leafId 沿 parentId 走回根（含 pre-compaction 链）
@@ -330,7 +417,6 @@ function activeBranch(entries, leafId) {
 // entry → 渲染（基线的持久体视图）
 function renderEntry(e) {
   if (!e || !e.id || seenEntryIds.has(e.id)) return;   // 幂等
-  seenEntryIds.add(e.id);
   const t = e.type;
   if (t === "message" && e.message) { renderEntryMessage(e.message); return; }
   if (t === "session_info") return;                     // 噪音，跳过
@@ -343,8 +429,7 @@ function renderEntry(e) {
 function renderEntryMessage(m) {
   const role = m.role;
   if (role === "user") {
-    const txt = msgText(m);
-    if (txt) addDiv("role-user", txt);
+    renderUserMessage(m);                       // 基线渲染：文本 + 图片缩略图
     return;
   }
   if (role === "toolResult") {
@@ -354,7 +439,7 @@ function renderEntryMessage(m) {
     let blk = m.toolCallId ? toolBlocks[m.toolCallId] : null;
     if (!blk) blk = toolBlock(m.toolCallId, m.toolName);
     blk.outPre.textContent = resultText(m);             // 并入所属工具块
-    // 耗时（inform3）：基线无 exec 事件 → 用消息时间戳近似（assistant→result）
+    // 耗时：基线无 exec 事件 → 用消息时间戳近似（assistant→result）
     if (blk.t0 != null && m.timestamp != null)
       setToolDur(blk, m.timestamp - blk.t0);
     setToolStatus(blk, m.isError ? "err" : "done");
@@ -362,6 +447,7 @@ function renderEntryMessage(m) {
   }
   if (role === "assistant") {
     const el = addDiv("role-assistant md", "");
+    const emsg = errMsgOf(m);                     // 基线回放中的模型错误 → 红框（0829-2131-pdop）
     let text = "";
     for (const p of m.content || []) {
       if (!p) continue;
@@ -374,39 +460,38 @@ function renderEntryMessage(m) {
           seenToolIds.add(p.id);
           const blk = toolBlock(p.id, p.name);          // 折叠块；结果由 toolResult 条目并入
           blk.argsPre.textContent = fmtArgs(p.arguments);
-          setToolPreview(blk, p.name, p.arguments);     // summary 参数预览（inform3）
+          setToolPreview(blk, p.name, p.arguments);     // summary 参数预览
           if (m.timestamp != null) blk.t0 = m.timestamp;
         }
       }
     }
     renderMarkdownInto(mdDiv(el), text);                // 不擦除 thinking/工具子节点
+    if (emsg) renderErrorBox(emsg);
     return;
   }
   sysLine("◆ message role=" + role);
 }
 
-// ---------------- 自愈闭环（缺口/epoch/gen 变化 → 全量基线重拉 → 新水位续流） ----------------
+// ---------------- 自愈闭环（缺口/gen 变化 → 全量基线重拉 → 新水位续流） ----------------
 // 页面级策略 = 全量重渲染（清屏 + 活跃分支重建）：消息对象无稳定 id，增量
-// entries 与已实时渲染的消息无法按 id 互斥，全量重渲染是无重的构造性保证；
-// op=entries 增量通道（含 success:false→全量回退）由 API 层提供并验证，供其它
-// 客户端与未来优化使用（见 PROTOCOL §6）。
+// entries 与已实时渲染的消息无法按 id 互斥，全量重渲染是无重的构造性保证。
 async function heal(reason) {
   if (healBusy || !attached) return;
   healBusy = true;
   stopStream();
-  flash("历史刷新中…（" + reason + "）");
+  flash("Refreshing history… (" + reason + ")");
   try {
     const doc = await api("attach", {session: attached});   // 全量基线（含 gap 语义）
     applyBaseline(doc, false);
     healFails = 0;
-    flash("历史已刷新 ✓（" + reason + "）");
-    sysLine("自愈完成（" + reason + "，全量基线重拉）");
+    flash("History refreshed ✓ (" + reason + ")");
+    sysLine("Healed (" + reason + ", full baseline refetch)");
     scrollStream();
   } catch (e) {
     healFails++;
-    sysLine("自愈失败（" + reason + "）: " + e.message, "err");
+    sysLine("Heal failed (" + reason + "): " + e.message, "err");
     if (healFails < 5) setTimeout(() => { healBusy = false; heal(reason); }, 2000);
-    else { sysLine("自愈重试超限，请手动刷新/重新挂接", "err"); healBusy = false; return; }
+    else { sysLine("Heal retries exhausted — refresh or re-attach manually", "err"); healBusy = false; return; }
   }
   healBusy = false;
 }
@@ -415,20 +500,17 @@ function stopStream() {
   streamAlive = false;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (streamCtrl) { try { streamCtrl.abort(); } catch (e) {} streamCtrl = null; }
-  setConn(false, attached ? withCwd(attached) + "（流已停）" : "未挂接");
 }
 
 function openStream() {
   if (!attached) return;
   streamAlive = true;
-  setConn(false, "连接中… " + withCwd(attached));
   streamCtrl = new AbortController();
   const url = STREAM + "?session=" + encodeURIComponent(attached)
     + "&since=" + encodeURIComponent(streamCursor || "");
   fetch(url, {credentials: "same-origin", signal: streamCtrl.signal})
     .then(resp => {
       if (!resp.ok) throw new Error("stream " + resp.status);
-      setConn(true, withCwd(attached));
       const reader = resp.body.getReader();
       const dec = new TextDecoder("utf-8");
       let buf = "";
@@ -442,8 +524,7 @@ function openStream() {
       return pump();
     })
     .catch(e => {
-      if (!streamAlive) return;           // 主动断开，不重连
-      setConn(false, withCwd(attached) + "（重连中）");
+      if (!streamAlive) return;           // 主动断开，不重连（重连静默，防刷屏）
       reconnectTimer = setTimeout(openStream, 1500);
     });
 }
@@ -475,7 +556,7 @@ function drainFrames(buf) {
         // 同桥内跳号（跨桥时服务端会先发 webgw.gap 帧，此处为第二道探测）
         streamCursor = id; lastEidNum = n;
         let obj; try { obj = JSON.parse(data); } catch (e) { obj = null; }
-        if (obj && obj.type !== "webgw.gap") { heal("seq 跳号 " + lastEidNum + "→" + n); return ""; }
+        if (obj && obj.type !== "webgw.gap") { heal("seq jump " + lastEidNum + "→" + n); return ""; }
       }
       streamCursor = id; lastEidNum = n;
     }
@@ -485,117 +566,104 @@ function drainFrames(buf) {
   return buf;
 }
 
-function setConn(on, info) {
-  $("connDot").className = "dot" + (on ? " on" : " err");
-  $("connInfo").classList.remove("flash");
-  $("connInfo").textContent = info;
-}
-function flash(info) {
-  $("connInfo").textContent = info;
-  $("connInfo").classList.add("flash");
-  setTimeout(() => {
-    $("connInfo").classList.remove("flash");
-    if (attached) setConn(streamAlive, withCwd(attached));
-  }, 2500);
-}
-
 // ---------------- 事件渲染（实时流） ----------------
 function handleEvent(o) {
   const t = o.type;
-  if (t === "sessiond.hello") {
-    if (curEpoch !== null && o.epoch !== undefined && o.epoch !== curEpoch) {
-      curEpoch = o.epoch;
-      heal("守护重启 epoch→" + o.epoch);     // 守护世代变化 → 基线自愈
-      addSideEvent(o, "hello epoch→" + o.epoch + " → 基线自愈", "warn");
-      return;
-    }
-    if (o.epoch !== undefined) curEpoch = o.epoch;
-    if (o.gen !== undefined) lastGen = o.gen;
-    setConn(true, withCwd(o.session) + " · state=" + o.state + " · gen=" + o.gen
-      + " · pid=" + o.pid + (o.epoch !== undefined ? " · epoch=" + o.epoch : ""));
-    addSideEvent(o, "挂接 " + o.session + "（state=" + o.state + ", gen=" + o.gen
-      + ", 回放 " + (o.replay_count || 0) + " 行）");
-    return;
-  }
-  if (t === "sessiond.replay") {
-    // 实时流视角的回放：消息类事件照常渲染（与基线按游标/工具 id 去重）
-    if (o.line && typeof o.line === "object") renderEvent(o.line);
-    return;
-  }
-  if (t === "sessiond.replay_end") { addSideEvent(o, "回放结束"); return; }
   if (t === "webgw.gap") {
-    addSideEvent(o, "事件流缺口（since=" + o.since + "，最旧=" + o.oldest
-      + "）→ 基线自愈", "warn");
-    heal("事件环淘汰");
+    flash("Event stream gap → healing baseline…", "warn");
+    heal("event ring eviction");
     return;
   }
-  if (t === "sessiond.error") { addSideEvent(o, "sessiond: " + o.message, "err"); return; }
+  if (t === "sessiond.error") { flash("sessiond: " + o.message, "err"); return; }
   if (t === "sessiond.session_restarting") {
     if (o.reload) {
-      // 进程级 reload（0829-1740-u7tb）：主动重启，立即重拉（无退避）；
-      // 后续 sessiond.session_restarted 的 gen 变化触发现有基线自愈，无新增机制。
-      flash("会话重载中…");
-      addSideEvent(o, "进程级 reload：杀进程后立即从 jsonl resume 重拉", "warn");
-    } else addSideEvent(o, "会话进程死亡，" + (o.delay || 0) + "s 后重启", "warn");
+      // 进程级 reload：主动重启，立即重拉（无退避）；
+      // 后续 session_restarted 的 gen 变化触发现有基线自愈。
+      flash("Session reloading… (resume from jsonl right after kill)", "warn");
+    } else flash("Session process died, restarting in " + (o.delay || 0) + "s", "warn");
     return;
   }
   if (t === "sessiond.session_restarted") {
-    addSideEvent(o, "会话已重启（gen=" + o.gen + ", pid=" + o.pid + "）", "warn");
+    flash("Session restarted", "warn");
     if (lastGen !== null && o.gen !== undefined && o.gen !== lastGen) {
       lastGen = o.gen;
-      heal("会话进程重启 gen→" + o.gen);   // 会话重启 → 以 entries 为准校准
+      heal("session process restart gen→" + o.gen);   // 会话重启 → 以 entries 为准校准
     } else if (o.gen !== undefined) lastGen = o.gen;
     return;
   }
-  if (t === "sessiond.session_disabled") { addSideEvent(o, "会话崩溃熔断", "err"); return; }
+  if (t === "sessiond.session_disabled") { flash("Session disabled (crash loop)", "err");
+    turnActive = false; hideWaiting(); return; }
   if (t === "sessiond.dialog_resolved") {
-    if (pendingDialogs[o.id]) closeDialog(o.id, "已由 " + o.by + " 应答");
+    if (pendingDialogs[o.id]) closeDialog(o.id, "answered");
     return;
   }
-  if (t === "sessiond.pong") { addSideEvent(o, "pong"); return; }
-  if (t === "webgw.bridge_lost") {
-    addSideEvent(o, "网关与会话后端断开（守护重启？）— 重连后经缺口自愈补齐", "warn");
-    return;
-  }
+  // 提示音触发（任务 0829-2103-dpe4）：
+  // ② 后台收到新注入的消息/通知类事件 → notify 音（message_start 新消息、
+  //    sessiond.error 通知、extension_ui_request 待用户应答的 dialog）；
+  // ① assistant 一轮结束（turn_end/agent_end）→ done 音（事件本身按 side
+  //    分类不渲染，声音是它唯一的用户可见产出）。
+  if (document.hidden && (t === "message_start" || t === "sessiond.error"
+      || t === "extension_ui_request")) beep("notify");
+  if (t === "turn_end" || t === "agent_end") { beep("done");
+    turnActive = false; hideWaiting(); }                // 回合结束 → 清除等待指示
+  if (t === "response") { handleCmdResponse(o); }       // 上行命令回执（0829-2115-zvti）
   renderEvent(o);
 }
 
 function renderEvent(o) {
   const t = o.type;
-  if (classifyEvent(o) === "side") { addSideEvent(o); return; }   // 系统/控制面 → 侧栏
+  // ---- 回合状态三件套（任务 0829-2131-pdop）：重试/队列/终结错误帧 ----------------
+  if (t === "auto_retry_start") { showRetryBox(o); return; }
+  if (t === "auto_retry_end") { endRetryBox(o); return; }
+  if (t === "queue_update") {
+    queueState = {steering: Array.isArray(o.steering) ? o.steering : [],
+                  followUp: Array.isArray(o.followUp) ? o.followUp : []};
+    renderQueuedPanel();
+    return;
+  }
+  if ((t === "agent_end" || t === "compaction_end") && o.errorMessage) {
+    renderErrorBox(o.errorMessage);              // 内部与已渲染的 assistant 错误去重
+    return;
+  }
+  if (classifyEvent(o) === "side") return;   // 其余系统/控制面帧不展示（任务 0829-2035-kyor）
   if (t === "message_start") {
     const m = o.message || {};
     if (m.role === "user") {
-      const txt = msgText(m);
-      if (txt) addDiv("role-user", txt);
+      resolvePendingByMessage(m);             // 待发条目转正（0829-2115-zvti）
+      renderUserMessage(m);                     // 流式渲染：文本 + 图片缩略图（同一入口）
       curAssistantEl = null; curAssistantBuf = "";
+      turnActive = true;                        // 回合开始：等模型首个产出（0829-2107-cvdn）
+      showWaiting();
     } else if (m.role === "assistant") {
+      hideWaiting();                            // 模型已开始输出本轮消息（0829-2107-cvdn）
       curAssistantEl = addDiv("role-assistant md", "");
       curAssistantBuf = "";
+      lastRenderedErrorMsg = null;              // 新消息开始，重置错误去重键（0829-2131-pdop）
     }
     return;
   }
   if (t === "message_update") {
+    hideWaiting();                              // 任一流式内容帧到达 → 移除等待指示（0829-2107-cvdn）
     const ev = o.assistantMessageEvent || {};
     if (!curAssistantEl) { curAssistantEl = addDiv("role-assistant md", ""); curAssistantBuf = ""; }
     if (ev.type === "text_delta") {
       curAssistantBuf += ev.delta || "";
       scheduleMdRender();                               // 渐进 markdown（节流，每次过消毒）
     } else if (ev.type === "thinking_delta") {
-      // thinking 实时流：并入默认折叠块，summary 实时显示字数（inform4）
+      // thinking 实时流：并入默认折叠块；标题固定 Thinking（pi-web 口径，无字数）
       let th = curAssistantEl._think;
       if (!th) {
         const d = document.createElement("details");    // 无 open = 默认折叠
         d.className = "thinking-block";
         const s = document.createElement("summary");
+        s.textContent = "Thinking";
         const pre = document.createElement("pre");
         d.appendChild(s); d.appendChild(pre);
         curAssistantEl.insertBefore(d, curAssistantEl.firstChild);
-        th = curAssistantEl._think = {sum: s, pre: pre, buf: ""};
+        th = curAssistantEl._think = {pre: pre, buf: ""};
       }
       th.buf += ev.delta || "";
       th.pre.textContent = th.buf;
-      th.sum.textContent = "💭 thinking（" + th.buf.length + " 字）";
     } else if (ev.type === "toolcall_end") {
       const tc = ev.toolCall || {};
       if (tc.id) {
@@ -603,7 +671,7 @@ function renderEvent(o) {
         seenToolIds.add(tc.id);
         const blk = toolBlock(tc.id, tc.name);          // 建折叠块；start/update/end 并入
         blk.argsPre.textContent = fmtArgs(tc.arguments);
-        setToolPreview(blk, tc.name, tc.arguments);     // summary 参数预览（inform3）
+        setToolPreview(blk, tc.name, tc.arguments);     // summary 参数预览
       }
     }
     scrollStream();
@@ -625,13 +693,19 @@ function renderEvent(o) {
     if (m.role === "assistant") {
       for (const p of m.content || [])
         if (p && p.type === "toolCall" && p.id) seenToolIds.add(p.id);
+      const emsg = errMsgOf(m);                         // 模型错误 → 红框（0829-2131-pdop）；
+      // 不依赖 curAssistantEl，无前置 message_start 的帧也能出框（去重逻辑内置）
+      if (emsg) renderErrorBox(emsg);
     }
-    if (m.role === "toolResult" && m.toolCallId)
+    if (m.role === "toolResult" && m.toolCallId) {
       seenToolIds.add("r:" + m.toolCallId);
+      showWaiting();                            // 工具结果落盘后等下一轮模型响应（0829-2107-cvdn）
+    }
     curAssistantEl = null; curAssistantBuf = "";
     return;
   }
   if (t === "tool_execution_start") {
+    hideWaiting();                              // 工具开始执行 = 有产出，隐藏等待（0829-2107-cvdn）
     const id = o.toolCallId;
     let blk = id ? toolBlocks[id] : null;               // toolcall_end 先建过 → 复用
     if (!blk) {
@@ -641,12 +715,12 @@ function renderEvent(o) {
     if (id) seenToolIds.add(id);
     if (!blk.argsPre.textContent) blk.argsPre.textContent = fmtArgs(o.args);
     if (!blk.prev.textContent) setToolPreview(blk, o.toolName, o.args);
-    if (blk.t0 == null) blk.t0 = Date.now();            // 计时起点（pi 事件无时间戳，inform3）
+    if (blk.t0 == null) blk.t0 = Date.now();            // 计时起点（pi 事件无时间戳）
     setToolStatus(blk, "running");
     scrollStream(); return;
   }
   if (t === "tool_execution_update") {
-    // 流式行并入所属工具块，不单独占行（inform4）；partialResult 是累积值 → 整段替换（pi rpc.md）
+    // 流式行并入所属工具块；partialResult 是累积值 → 整段替换
     const id = o.toolCallId;
     if (id && seenToolIds.has("r:" + id)) return;       // 基线已收尾（幂等）
     let blk = id ? toolBlocks[id] : null;
@@ -663,96 +737,113 @@ function renderEvent(o) {
     let blk = o.toolCallId ? toolBlocks[o.toolCallId] : null;
     if (!blk) blk = toolBlock(o.toolCallId, o.toolName);
     blk.outPre.textContent = resultText(o.result);
-    if (blk.t0 != null) setToolDur(blk, Date.now() - blk.t0);   // 耗时（inform3）；running 时省略
+    if (blk.t0 != null) setToolDur(blk, Date.now() - blk.t0);   // 耗时
     setToolStatus(blk, o.isError ? "err" : "done");
+    showWaiting();                              // 工具执行完成 → 等下一轮模型响应（0829-2107-cvdn）
     scrollStream(); return;
   }
   if (t === "extension_ui_request") { showDialog(o); return; }
 }
 
-// ---------------- 系统事件侧栏（0829-1721-56qb） ----------------
-// 分类规则：主流 = 对话（用户/助手消息、thinking、工具调用、dialog）；
-// 侧栏 = 其余一切（生命周期/控制面帧、response 帧、连接提示、未知类型）。
+// ---------------- 事件分类（主流 = 对话；其余系统/控制面帧不展示） ----------------
 const MAIN_EVENT_TYPES = new Set(["message_start", "message_update", "message_end",
   "tool_execution_start", "tool_execution_update", "tool_execution_end",
   "extension_ui_request"]);                                   // thinking 随 message_update 走主流
 function classifyEvent(o) {
   return (o && MAIN_EVENT_TYPES.has(o.type)) ? "main" : "side";
 }
-// 侧栏条目一行摘要（时间戳+类型+摘要；默认只到类型名，需要时补摘要）
-function sideSummary(o) {
-  const t = o.type;
-  if (t === "response") return "← " + (o.command || "?") + (o.success ? " ok"
-    : " FAIL" + (o.error ? " — " + trunc(o.error, 200) : ""));
-  if (t === "agent_end") return "agent end (willRetry=" + o.willRetry + ")";
-  if (t === "queue_update") return "queue: steer=" + JSON.stringify(o.steering)
-    + " followUp=" + JSON.stringify(o.followUp);
-  return "";   // turn_start/turn_end/agent_start/agent_settled 等只列类型名
+
+// ---------------- 回合状态三件套（任务 0829-2131-pdop） ----------------
+// 模型错误判定（真实帧形态已核实：run/temp/chat-img-test-*.jsonl 内
+// "stopReason":"error" + "errorMessage":"400: {...}"）：权威信号 = stopReason
+// 为 error，文案取 errorMessage（缺失时退消息文本）。pi TUI 同口径（源码：
+// assistant-message.js 以 theme.fg("error", `Error: ${errorMsg}`) 渲染）。
+function errMsgOf(m) {
+  if (!m || m.stopReason !== "error") return null;
+  return String(m.errorMessage || msgText(m) || "").trim() || "Unknown error";
 }
-function addSideEvent(o, summaryOverride, cls) {
-  const sum = (summaryOverride !== undefined) ? summaryOverride : sideSummary(o);
-  addSideEntry((o.type || "?") + (sum ? " · " + sum : ""), o, cls);
+// 红框渲染：同文去重（不叠两个框）——assistant 错误消息已渲染过后，
+// agent_end/compaction_end 携相同 errorMessage 不再重复出框。
+function renderErrorBox(text) {
+  const s = String(text || "").trim();
+  if (!s || s === lastRenderedErrorMsg) return;
+  lastRenderedErrorMsg = s;
+  hideWaiting();                                  // 与 waiting 行同现时优先展示错误（0829-2107-cvdn 协调）
+  const d = addDiv("errbox", "");
+  d.textContent = "Error: " + s;
+  scrollStream();
 }
-// 通用侧栏条目：一行摘要，点击展开原始 JSON（复用 details.raw 样式）
-function addSideEntry(label, rawObj, cls) {
-  const d = document.createElement("details");        // 无 open = 默认折叠，点击展开
-  d.className = "raw" + (cls ? " " + cls : "");
-  const s = document.createElement("summary");
-  s.textContent = new Date().toLocaleTimeString() + " " + label;
-  const pre = document.createElement("pre");
-  pre.textContent = JSON.stringify(rawObj, null, 1);
-  d.appendChild(s); d.appendChild(pre);
-  const list = $("evtList");
-  list.appendChild(d);
-  while (list.childElementCount > 1000) list.removeChild(list.firstElementChild);
-  if (sideCollapsed) { sideUnread++; updateBadge(); }
-  else {
-    const sb = $("sidebar");
-    sb.scrollTop = sb.scrollHeight;                   // 展开态自动跟随最新
+// Retrying 警告框：auto_retry_start → 聊天流末橙/黄框；
+// auto_retry_end success → 移除（+ flash 恢复提示），failure → 原地转红框常驻。
+function showRetryBox(o) {
+  hideWaiting();                                  // 重试等待期间由警告框代言，不与 waiting 行重叠
+  const sec = (typeof o.delayMs === "number") ? Math.max(1, Math.round(o.delayMs / 1000)) : null;
+  let msg = "Retrying (" + (o.attempt || 1) + "/" + (o.maxAttempts || "?") + ")"
+    + (sec != null ? " in " + sec + "s" : "") + "\u2026";
+  if (o.errorMessage) msg += "\n" + trunc(String(o.errorMessage), 300);
+  if (!retryBoxEl) retryBoxEl = addDiv("retrybox", "");
+  retryBoxEl.textContent = msg;
+  scrollStream();
+}
+function endRetryBox(o) {
+  if (o.success) {
+    if (retryBoxEl) { retryBoxEl.remove(); retryBoxEl = null; }
+    flash("Retry succeeded, model recovered");    // 可选恢复提示（需求 2）
+    return;
   }
-}
-function toggleSide() {
-  sideCollapsed = !sideCollapsed;
-  $("sidebar").classList.toggle("hidden", sideCollapsed);
-  $("evtToggle").setAttribute("aria-expanded", String(!sideCollapsed));
-  if (!sideCollapsed) {
-    sideUnread = 0; updateBadge();
-    const sb = $("sidebar"); sb.scrollTop = sb.scrollHeight;
+  // 失败：原地转红框常驻（不走 renderErrorBox 的同文去重，保留重试失败这一独立事实）
+  const txt = "Retries exhausted (" + (o.attempt || "?") + "): "
+    + (o.finalError || o.errorMessage || "unknown error");
+  if (retryBoxEl) {
+    retryBoxEl.className = "ev errbox";
+    retryBoxEl.textContent = txt;
+    retryBoxEl = null;
+  } else {
+    const d = addDiv("errbox", "");
+    d.textContent = txt;
   }
-}
-function updateBadge() {
-  const b = $("evtBadge");
-  if (sideCollapsed && sideUnread > 0) {
-    b.textContent = sideUnread > 99 ? "99+" : String(sideUnread);
-    b.classList.remove("hidden");
-  } else b.classList.add("hidden");
+  lastRenderedErrorMsg = null;                    // 后续同文错误帧仍可出框（语义已不同）
+  scrollStream();
 }
 
-// ---------------- thinking/工具调用折叠块（inform4，0829-1640-har3） ----------------
+// ---------------- Waiting for model 指示（任务 0829-2107-cvdn） ----------------
+function showWaiting() {
+  if (!turnActive || waitingEl) return;         // 幂等：回合外/已显示不重复插
+  const d = document.createElement("div");
+  d.className = "ev waiting";
+  d.textContent = "Waiting for model\u2026";
+  $("stream").appendChild(d);
+  waitingEl = d;
+  scrollStream();
+}
+function hideWaiting() {
+  if (waitingEl) { waitingEl.remove(); waitingEl = null; }
+}
+
+// ---------------- thinking/工具调用折叠块 ----------------
 function thinkingDetails(text) {
   const d = document.createElement("details");          // 无 open = 默认折叠
   d.className = "thinking-block";
   const s = document.createElement("summary");
-  s.textContent = "💭 thinking（" + text.length + " 字）";
+  s.textContent = "Thinking";                           // pi-web 口径：仅标题，无字数提示
   const pre = document.createElement("pre");
   pre.textContent = text;
   d.appendChild(s); d.appendChild(pre);
   return d;
 }
-// 工具调用整段（tool_execution_start→result，含其间 update 流式行）折叠为一块，
-// summary 「🔧 <工具名> · running/done/err」，状态在 summary 可见。
+// 工具调用整段（tool_execution_start→result，含其间 update 流式行）折叠为一块；
+// 状态无文字徽标，由颜色区分（run=强调/done=弱化/err=红，任务 0829-2107-cvdn）。
 function toolBlock(id, name) {
   if (id && toolBlocks[id]) return toolBlocks[id];
   const det = document.createElement("details");        // 默认折叠
   det.className = "ev tool-block run";
   const sum = document.createElement("summary");
   const head = document.createElement("span");
-  head.textContent = "🔧 " + (name || "?") + " · ";
-  const st = document.createElement("span");
-  st.className = "tst"; st.textContent = "running";
-  const prev = document.createElement("span"); prev.className = "tprev";  // 参数预览（inform3）
-  const dur = document.createElement("span"); dur.className = "tdur";     // 耗时，右对齐（inform3）
-  sum.appendChild(head); sum.appendChild(st); sum.appendChild(prev); sum.appendChild(dur);
+  head.className = "thead";
+  head.textContent = name || "?";                       // 无文字状态徽标，状态用颜色表达（0829-2107-cvdn）
+  const prev = document.createElement("span"); prev.className = "tprev";  // 参数预览
+  const dur = document.createElement("span"); dur.className = "tdur";     // 耗时，右对齐
+  sum.appendChild(head); sum.appendChild(prev); sum.appendChild(dur);
   const body = document.createElement("div");
   body.className = "tbody";
   const argsPre = document.createElement("pre"); argsPre.className = "targs";
@@ -760,12 +851,12 @@ function toolBlock(id, name) {
   body.appendChild(argsPre); body.appendChild(outPre);
   det.appendChild(sum); det.appendChild(body);
   $("stream").appendChild(det);
-  const blk = {det: det, st: st, prev: prev, dur: dur, argsPre: argsPre, outPre: outPre, t0: null};
+  const blk = {det: det, prev: prev, dur: dur, argsPre: argsPre, outPre: outPre, t0: null};
   if (id) toolBlocks[id] = blk;
   return blk;
 }
 function setToolStatus(blk, status) {
-  blk.st.textContent = status;                          // running/done/err 在 summary 上
+  // 状态只改 class（颜色表达），不再写文字徽标（任务 0829-2107-cvdn）
   blk.det.className = "ev tool-block "
     + (status === "done" ? "done" : status === "err" ? "err" : "run");
 }
@@ -774,10 +865,9 @@ function fmtArgs(args) {
   const s = typeof args === "string" ? args : JSON.stringify(args, null, 2);
   return trunc(s, 20000);
 }
-// summary 参数预览（inform3，0829-1733-1hjh）：按工具类型取关键参数——
+// summary 参数预览：按工具类型取关键参数——
 // bash→command、read/write/edit→path、grep/find→pattern、dispatch→name、
 // web_search→query、其余→首参数 JSON 串；单行化、~100 字符截断溢出省略号。
-// 基线（entries）与流式（实时事件）两路共用。
 const ARG_KEY = { bash: "command", read: "path", write: "path", edit: "path",
   grep: "pattern", find: "pattern", dispatch: "name", web_search: "query" };
 function argPreview(name, args) {
@@ -816,14 +906,8 @@ function mdDiv(el) {
   }
   return el._md;
 }
-function liveText(el, text) {
-  // 备用纯文本渲染（当前未用：流式改渐进 markdown，inform2）
-  if (!el._plain) { el._plain = document.createElement("div"); el.appendChild(el._plain); }
-  el._plain.textContent = text;
-}
 function scheduleMdRender() {
-  // 流式渐进渲染：150ms 节流，合并 delta 后整段重渲染（仅替换当前消息的 md 子容器，
-  // 不碰其它节点；滚动锚定由 message_update 末尾的 scrollStream 保持）
+  // 流式渐进渲染：150ms 节流，合并 delta 后整段重渲染（仅替换当前消息的 md 子容器）
   if (mdRenderTimer) return;
   mdRenderTimer = setTimeout(() => {
     mdRenderTimer = null;
@@ -835,7 +919,7 @@ function renderMarkdownInto(el, text) {
   if (!text) return;
   if (window.marked && window.marked.parse) {
     try {
-      el.innerHTML = sanitizeHtml(window.marked.parse(text));   // S2：消毒后再 innerHTML
+      el.innerHTML = sanitizeHtml(window.marked.parse(text));   // 消毒后再 innerHTML
       el.querySelectorAll("pre code").forEach(highlightCode);
       return;
     } catch (e) {}
@@ -843,12 +927,10 @@ function renderMarkdownInto(el, text) {
   el.textContent = text;
 }
 
-// ---------------- 极简白名单消毒（S2，0829-1640-har3） ----------------
-// 取舍：w 无内置 sanitizer 且不引外部依赖（单文件零构建约束）→ 原生 DOM 解析 +
+// ---------------- 极简白名单消毒 ----------------
+// w 无内置 sanitizer 且不引外部依赖（单文件零构建约束）→ 原生 DOM 解析 +
 // 标签/属性/URL 三重白名单。危险容器（script/style/iframe/svg/form 控件等）连子树整体移除；
 // 白名单外普通标签解包保留文本；属性只留 a[href]、img[src|alt] 且 URL 协议白名单。
-// 局限：非专业消毒库（如 DOMPurify），mutation XSS 等边角面不承诺——会话内容同源可信 +
-// BasicAuth 门禁下的纵深防御定位，见 PROTOCOL §6.5。
 const SANITIZE_TAGS = new Set(["p", "br", "b", "i", "u", "em", "strong", "code", "pre",
   "blockquote", "ul", "ol", "li", "a", "h1", "h2", "h3", "h4", "h5", "h6",
   "table", "thead", "tbody", "tfoot", "tr", "td", "th", "img", "span", "hr",
@@ -892,8 +974,7 @@ function sanitizeHtml(html) {
   sanitizeWalk(tpl.content);
   return tpl.innerHTML;
 }
-// 极简内嵌高亮：注释/字符串/数字/关键字，单一正则扫描。不引外部库（取舍：
-// 无精确语法树，跨语言通用词表，满足可读性即可）。
+// 极简内嵌高亮：注释/字符串/数字/关键字，单一正则扫描。不引外部库。
 const HL_RE = /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\b(\d+(?:\.\d+)?)\b|\b(const|let|var|function|return|if|elif|else|for|while|class|import|from|export|async|await|try|catch|except|finally|def|pass|raise|with|as|in|of|new|typeof|instanceof|switch|case|break|continue|lambda|yield|None|True|False|null|undefined|true|false|then|do|done|fi|esac|echo|exit|local|select|struct|fn|mut|impl|use|public|private|static|void|int|str|string|bool)\b/g;
 function highlightCode(codeEl) {
   const src = codeEl.textContent;
@@ -910,13 +991,13 @@ function highlightCode(codeEl) {
   codeEl.innerHTML = out;
 }
 
-// ---------------- dialog 组件（倒计时实时递减，打磨项①） ----------------
+// ---------------- dialog 组件（倒计时实时递减） ----------------
 function showDialog(o) {
   const id = o.id;
   pendingDialogs[id] = o;
   const box = $("dialogBox");
   if (box.style.display === "block" && box.dataset.did !== String(id)) {
-    sysLine("⚠ 又一 dialog 排队 [" + (o.method || "?") + "] id=" + id, "warn");
+    sysLine("⚠ Another dialog queued [" + (o.method || "?") + "] id=" + id, "warn");
     return;
   }
   showDialogNow(o);
@@ -927,7 +1008,7 @@ function showDialogNow(o) {
   box.dataset.did = String(id);
   box.style.display = "block";
   $("dialogMethod").textContent = "dialog [" + (o.method || "?") + "] id=" + id;
-  $("dialogTitle").textContent = o.title || o.message || "(无标题)";
+  $("dialogTitle").textContent = o.title || o.message || "(untitled)";
   const opts = $("dialogOpts");
   opts.innerHTML = "";
   const input = $("dialogInput");
@@ -943,10 +1024,10 @@ function showDialogNow(o) {
   } else if (m === "confirm") {
     input.classList.add("hidden");
     const y = document.createElement("button");
-    y.textContent = "确认"; y.className = "primary";
+    y.textContent = "Confirm"; y.className = "primary";
     y.onclick = () => replyDialog({confirmed: true});
     const n = document.createElement("button");
-    n.textContent = "拒绝";
+    n.textContent = "Reject";
     n.onclick = () => replyDialog({confirmed: false});
     opts.appendChild(y); opts.appendChild(n);
   } else { // input / editor / 未知
@@ -957,7 +1038,7 @@ function showDialogNow(o) {
         replyDialog({value: input.value}); }
     };
     const b = document.createElement("button");
-    b.textContent = "提交"; b.className = "primary";
+    b.textContent = "Submit"; b.className = "primary";
     b.onclick = () => replyDialog({value: input.value});
     opts.appendChild(b);
   }
@@ -971,7 +1052,7 @@ function startDialogCountdown(timeoutMs) {
   dialogDeadline = Date.now() + timeoutMs;
   const tick = () => {
     const remain = Math.max(0, Math.ceil((dialogDeadline - Date.now()) / 1000));
-    el.textContent = "剩余 " + remain + "s 自动结算";
+    el.textContent = "Auto-settle in " + remain + "s";
     if (remain <= 0) stopDialogCountdown();
   };
   tick();
@@ -987,8 +1068,8 @@ async function replyDialog(fields) {
   const cmd = Object.assign({type: "extension_ui_response", id: castId(id)}, fields);
   try {
     await api("cmd", {session: attached, cmd: JSON.stringify(cmd)});
-    closeDialog(id, "已应答");
-  } catch (e) { sysLine("dialog 应答失败: " + e.message, "err"); }
+    closeDialog(id, "answered");
+  } catch (e) { sysLine("Dialog reply failed: " + e.message, "err"); }
 }
 function castId(id) { const o = pendingDialogs[id]; return o ? o.id : id; }
 function closeDialog(id, note) {
@@ -1011,51 +1092,172 @@ function clearPendingDialogs() {
 
 // ---------------- 上行 ----------------
 async function sendCmd(cmd) {
-  if (!attached) { sysLine("尚未挂接会话", "err"); return; }
+  if (!attached) { sysLine("Not attached to a session", "err"); return; }
   try { await api("cmd", {session: attached, cmd: JSON.stringify(cmd)}); }
-  catch (e) { sysLine("发送失败: " + e.message, "err"); }
+  catch (e) { sysLine("Send failed: " + e.message, "err"); }
 }
 function sendPrompt() {
   const el = $("promptInput");
   const msg = el.value.trim();
-  if (!msg) return;
+  if (!msg && !pendingImages.length) return;
+  // 斜杠命令拦截：/ 开头不进 prompt（附件保留，不误删）；控制命令面不走消息通道。
+  if (msg.startsWith("/")) { el.value = ""; el.style.height = "auto";
+    handleSlash(msg); return; }
   el.value = ""; el.style.height = "auto";
-  // 斜杠命令拦截（inform2，0829-1733-1hjh）：/ 开头不进 prompt；
-  // /reload → doReload（op=reload，0829-1740-u7tb）也经 handleSlash 分发。
-  if (msg.startsWith("/")) { handleSlash(msg); return; }
   hideNotice();
-  sendCmd({type: "prompt", message: msg, id: uid()});
+  // Enter = send or queue（用户 2026-08-30 拍板，任务 0829-2228-zq1t）：
+  // agent 空闲 → prompt 直发；agent 流式中（turnActive）→ follow_up 自动排队。
+  // 三段模式切换/发送按钮已移除；流式中不再有拦截提示。
+  const type = turnActive ? "follow_up" : "prompt";
+  const cmd = {type: type, message: msg, id: uid()};
+  if (pendingImages.length) {
+    // pi rpc ImageContent 格式（docs/rpc.md）；follow_up 同样支持 images；
+    // 发完清空附件条（任务 0829-2103-8etk）
+    cmd.images = pendingImages.map(a => ({type: "image", data: a.b64, mimeType: a.mime}));
+    pendingImages = []; renderAttachBar();
+  }
+  if (type === "follow_up") addPendingSend(cmd.id, msg, "queue");
+  sendTracked(cmd);
 }
-// 进程级 reload（0829-1740-u7tb）：确认后经 op=reload 杀会话进程并从 session.jsonl
-// resume 重拉（干净进程 = extension 全新加载）。重连/回放由现有缺口/自愈机器承接：
-// 守护广播 session_restarting(reload)/session_restarted(gen+1) → gen 变化 → 基线自愈。
-async function doReload() {
-  if (!attached) { sysLine("尚未挂接会话，无法 reload", "err"); return; }
-  const ok = window.confirm("重载会话 " + attached + "？\n"
-    + "会话进程将被杀死并从 session.jsonl 重启（extension 改动生效）；\n"
-    + "进行中的 turn 会丢失，对话历史保留。");
-  if (!ok) return;
-  flash("会话重载中…");
-  sysLine("reload 会话 " + attached + "：杀进程 + resume 重拉…");
-  try {
-    const r = await api("reload", {session: attached});
-    sysLine("reload 已下发（gen→" + nz(r.gen) + ", pid=" + nz(r.pid)
-      + "），等待重启自愈…");
-    refreshStatus();
-  } catch (e) {
-    sysLine("reload 失败: " + e.message, "err");
-    if (attached) setConn(streamAlive, attached);
+
+// ---------------- QUEUED 面板（任务 0829-2115-zvti 本地视图 → 0829-2131-pdop 权威接入） ----------------
+// 数据源 = queue_update 事件（后端权威：steering + followUp 分组）；本地待发记录
+// （pendingSends，steer/queue 送出后、对应 user message 事件到达前）退化为发送瞬间的
+// 乐观补位：仅当同文本尚不在后端队列里时显示，避免与权威条目重复。
+// 观感按 pi-web QUEUED 口径（见上方 CSS 注释）；无 Recall to input 按钮：
+// pi rpc 协议（steer/follow_up）无清除/召回队列的命令，不提供。
+function renderQueuedPanel() {
+  const panel = $("queuedPanel");
+  panel.innerHTML = "";
+  const items = [];
+  for (const s of queueState.steering) items.push({kind: "steer", text: s});
+  for (const f of queueState.followUp) items.push({kind: "fu", text: f});
+  const seen = new Set(items.map(i => i.text));
+  for (const k of Object.keys(pendingSends)) {
+    const p = pendingSends[k];
+    if (seen.has(p.text)) continue;                       // 后端已收编 → 不重复展示（去重）
+    items.push({kind: p.mode === "steer" ? "steer" : "fu", text: p.text,
+                rejected: p.rejected, local: true});
+    seen.add(p.text);
+  }
+  if (!items.length) { panel.classList.add("hidden"); return; }
+  panel.classList.remove("hidden");
+  const head = document.createElement("div");
+  head.className = "qp-head";
+  head.textContent = "QUEUED \u00b7 " + items.length;      // steer + follow-up 混合计数（含两者，0829-2131-pdop inbox s3p2）
+  panel.appendChild(head);
+  for (const p of items) {
+    const it = document.createElement("div");
+    it.className = "qp-item" + (p.rejected ? " rejected" : "");
+    const badge = document.createElement("span");
+    badge.className = "qp-badge " + (p.kind === "steer" ? "steer" : "fu");
+    badge.textContent = p.kind === "steer" ? "steer" : "follow-up";
+    const txt = document.createElement("span");
+    txt.className = "qp-text";
+    txt.textContent = p.text;                             // CSS 单行截断省略号，title 存全文摘要（0829-2131-pdop）
+    txt.title = p.rejected ? "Send rejected/failed (see notice)"
+      : p.kind === "steer"
+        ? "Queued: delivered after the current tool finishes, before the next model call"
+        : "Pending: delivered only after the agent fully stops";
+    it.appendChild(badge); it.appendChild(txt);
+    panel.appendChild(it);
   }
 }
-function sendAbort() { sendCmd({type: "abort", id: uid()}); }
+function addPendingSend(id, text, mode) {
+  pendingSends[id] = {mode: mode, text: text, rejected: false};
+  renderQueuedPanel();
+  scrollStream();
+}
+function resolvePendingByMessage(m) {
+  // 送达信号 = 对应 user message 事件：文本相等即认领（模板展开等极端失配时降级为普通渲染）
+  const txt = msgText(m);
+  for (const id of Object.keys(pendingSends)) {
+    if (pendingSends[id].text === txt) {
+      delete pendingSends[id];
+      renderQueuedPanel();
+      return;
+    }
+  }
+}
 
-// ---------------- 斜杠命令拦截（inform2/inform3，0829-1733-1hjh） ----------------
+// ---------------- 上行命令回执（response 事件，任务 0829-2115-zvti） ----------------
+// pi rpc 对 prompt/steer/follow_up 均有 {type:"response", id, command, success} 回执，
+// 经事件环送达。被拒（如流式中未带 streamingBehavior 的 prompt）→ 显式 flash，不静默。
+function handleCmdResponse(o) {
+  if (typeof o.id !== "string" || !(o.id in pendingSends)) return;
+  const p = pendingSends[o.id];
+  if (o.success) return;                       // 已入队：面板条目保留，等送达移除
+  const err = o.error || o.message || "rejected";
+  flash("Send rejected (" + (o.command || p.mode) + "): " + err, "err");
+  p.rejected = true;
+  renderQueuedPanel();
+}
+
+// 带发送跟踪的上行：HTTP 层失败时同步标错队列面板条目（sendCmd 的加强版）
+async function sendTracked(cmd) {
+  if (!attached) { sysLine("Not attached to a session", "err"); return; }
+  try { await api("cmd", {session: attached, cmd: JSON.stringify(cmd)}); }
+  catch (e) {
+    sysLine("Send failed: " + e.message, "err");
+    const p = pendingSends[cmd.id];
+    if (p) { p.rejected = true; renderQueuedPanel(); }
+  }
+}
+// 进程级 reload：确认后经 op=reload 杀会话进程并从 session.jsonl resume 重拉
+// （干净进程 = extension 全新加载）。重连由现有缺口/自愈机器承接：
+// 监督员广播 session_restarting(reload)/session_restarted(gen+1) → gen 变化 → 基线自愈。
+async function doReload() {
+  if (!attached) { sysLine("Not attached to a session, cannot reload", "err"); return; }
+  const ok = window.confirm("Reload session " + attached + "?\n"
+    + "The session process will be killed and resumed from session.jsonl (extension changes take effect);\n"
+    + "the in-flight turn is lost, conversation history is kept.");
+  if (!ok) return;
+  flash("Session reloading…");
+  sysLine("Reloading session " + attached + ": kill + resume…");
+  try {
+    const r = await api("reload", {session: attached});
+    sysLine("Reload issued, waiting for restart heal…");
+  } catch (e) {
+    sysLine("Reload failed: " + e.message, "err");
+  }
+}
+// Abort 按钮已移除（任务 0829-2228-zq1t inbox a8bt）：/abort 斜杠命令代替，
+// 走 op=cmd {"type":"abort"} 控制面，立即执行不进队列（见 handleSlash）。
+// 进程级 clear（任务 0829-2238-atnj）：确认后调 op=clear（杀会话进程→删 jsonl→
+// 立即重拉空起点），保留会话路径清空全部内容；成功后自行重挂接空基线 +
+// 英文 flash。healBusy 暂置抦住 SSE gen 变化的并发自愈（本处自接管重挂接，
+// 两者同为全量重拉，幂等）。
+async function doClear() {
+  if (!attached) { flash("Not attached to a session, cannot clear", "err"); return; }
+  if (healBusy) return;
+  const okc = window.confirm("Clear session " + attached + "?\n"
+    + "The session process will be killed and the session file deleted, then the "
+    + "session restarts empty at the same path.\n"
+    + "ALL conversation history in this session is lost permanently. "
+    + "This cannot be undone.");
+  if (!okc) return;
+  healBusy = true;
+  flash("Clearing session…");
+  try {
+    const r = await api("clear", {session: attached});
+    stopStream();
+    const doc = await api("attach", {session: attached});   // 空基线重挂接（全量）
+    applyBaseline(doc, false);
+    if (r.gen !== undefined) lastGen = r.gen;               // 校准新世代，防冗余自愈
+    scrollStream();
+    flash("Session cleared");
+  } catch (e) {
+    flash("Clear failed: " + e.message, "err");
+  }
+  healBusy = false;
+}
+
+// ---------------- 斜杠命令拦截 ----------------
 // 以 / 开头的输入不进 prompt：可映射 pi rpc 命令的做真实现，其余内联提示。
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-const SLASH_HELP = "会话面：/abort · /compact · /model <provider>/<modelId> · "
+const SLASH_HELP = "Session commands: /abort · /clear · /compact · /model <provider>/<modelId> · "
   + "/thinking <" + THINKING_LEVELS.join("|") + "> · /export · /fork [<entryId>]"
-  + (typeof doReload === "function" ? " · /reload" : "")
-  + " │ 管理面：/ls · /attach <name> · /new <name> [cwd] · /cd <dir> · /set-name <name>";
+  + " · /reload · /sound [on|off]";
 let noticeTimer = null;
 function showNotice(text, cls, sticky) {
   const n = $("slashNotice");
@@ -1075,132 +1277,134 @@ function handleSlash(msg) {
   switch (cmd) {
     case "/abort":
       sendCmd({type: "abort", id: uid()});
-      showNotice("已发送 abort（等当前生成/工具停下）"); return;
+      showNotice("Abort sent (waits for the current generation/tool to stop)"); return;
+    case "/clear":
+      doClear(); return;
     case "/compact":
       sendCmd({type: "compact", id: uid(), ...(arg ? {customInstructions: arg} : {})});
-      showNotice("已请求压缩（compact）…"); return;
+      showNotice("Compaction requested…"); return;
     case "/model": {
-      if (!arg) { showNotice("用法：/model <provider>/<modelId>", "err"); return; }
+      if (!arg) { showNotice("Usage: /model <provider>/<modelId>", "err"); return; }
       const i = arg.indexOf("/");
       const provider = i > 0 ? arg.slice(0, i) : curProvider;
       const modelId = i > 0 ? arg.slice(i + 1) : arg;
       if (!provider || !modelId) {
-        showNotice("用法：/model <provider>/<modelId>（当前 provider 未知，请写全）", "err");
+        showNotice("Usage: /model <provider>/<modelId> (current provider unknown — write the full form)", "err");
         return;
       }
       sendCmd({type: "set_model", provider: provider, modelId: modelId, id: uid()});
-      showNotice("已请求切换模型 → " + provider + "/" + modelId); return;
+      showNotice("Model switch requested → " + provider + "/" + modelId); return;
     }
     case "/thinking":
       if (THINKING_LEVELS.indexOf(arg) < 0) {
-        showNotice("用法：/thinking <" + THINKING_LEVELS.join("|") + ">", "err"); return;
+        showNotice("Usage: /thinking <" + THINKING_LEVELS.join("|") + ">", "err"); return;
       }
       sendCmd({type: "set_thinking_level", level: arg, id: uid()});
-      showNotice("已请求 thinking → " + arg); return;
+      showNotice("Thinking level requested → " + arg); return;
     case "/export":
       sendCmd({type: "export_html", id: uid(), ...(arg ? {outputPath: arg} : {})});
-      showNotice("已请求导出 HTML（默认落在会话工作目录）…"); return;
-    case "/name":
-      showNotice("会话名由注册表管理，不可改（守护拦截 set_session_name）", "err"); return;
+      showNotice("HTML export requested (defaults to the session working dir)…"); return;
     case "/fork": {
       const entryId = arg || curLeafId;
       if (!entryId) {
-        showNotice("用法：/fork <entryId>（无可用叶条目）", "err"); return;
+        showNotice("Usage: /fork <entryId> (no leaf entry available)", "err"); return;
       }
       sendCmd({type: "fork", entryId: entryId, id: uid()});
-      showNotice("已请求 fork @ " + entryId); return;
+      showNotice("Fork requested @ " + entryId); return;
     }
     case "/reload":
-      // 进程级 reload = 0829-1740-u7tb 的 op=reload；若该改动未落地（doReload 缺失）
-      // 则按 inform3 口径落未知命令提示，不实现也不提示 TUI 专属
-      if (typeof doReload === "function") doReload();
-      else showNotice("未知命令 /reload —— " + SLASH_HELP, "err");
+      doReload(); return;
+    case "/sound": {
+      // 提示音开关（任务 0829-2103-dpe4）：无参切换，默认开；无图形控件。
+      if (!arg) soundOn = !soundOn;
+      else if (arg === "on") soundOn = true;
+      else if (arg === "off") soundOn = false;
+      else { showNotice("Usage: /sound [on|off]", "err"); return; }
+      showNotice("Sound: " + (soundOn ? "on" : "off"));
+      if (soundOn) beep("notify");            // 响一声确认（未解锁则静默）
       return;
-    // ---------------- 管理面斜杠命令（任务 0829-1803-2umc） ----------------
-    // 针对 sessiond 会话注册表/守护，不是当前会话的 prompt；前端拦截 → 桥接层 →
-    // 守护 ctl（add-session/set-cwd/rename-session），响应/错误走提示条+侧栏。
-    case "/ls":
-      doLs(); return;
-    case "/attach": {
-      if (!arg) { showNotice("用法：/attach <会话名>（/ls 查看清单）", "err"); return; }
-      doAttachByName(arg.split(/\s+/)[0]); return;
     }
-    case "/new": {
-      const parts = arg.split(/\s+/).filter(Boolean);
-      if (!parts.length) { showNotice("用法：/new <name> [cwd]（cwd 缺省 ~/m）", "err"); return; }
-      doNewSession(parts[0], parts.slice(1).join(" ")); return;
-    }
-    case "/cd":
-      if (!arg) { showNotice("用法：/cd <dir>（当前会话切工作目录，重启生效）", "err"); return; }
-      doSetCwd(arg); return;
-    case "/set-name":
-      if (!arg) { showNotice("用法：/set-name <新名>（当前会话改名，重启生效）", "err"); return; }
-      doSetName(arg.split(/\s+/)[0]); return;
     default:
-      showNotice("未知命令 " + cmd + " —— " + SLASH_HELP, "err"); return;
+      showNotice("Unknown command " + cmd + " — " + SLASH_HELP, "err"); return;
   }
 }
 
-// ---------------- 管理命令实现（任务 0829-1803-2umc） ----------------
-async function doLs() {
-  let st;
-  try { st = await api("status"); }
-  catch (e) { showNotice("/ls 失败：" + e.message, "err"); return; }
-  const rows = (st.sessions || []).map(s =>
-    (s.name === attached ? "▶ " : "   ") + s.name
-    + " · " + (s.disabled ? "熔断" : (s.state || "?"))
-    + " · gen=" + nz(s.gen)
-    + (s.cwd ? " · cwd=" + abbrevCwd(s.cwd) : "")
-    + (s.enabled ? "" : " · disabled"));
-  showNotice("会话清单（" + (st.sessions || []).length + " 个）\n"
-    + (rows.join("\n") || "（空）"), "", true);
-  for (const r of rows) sysLine("/ls: " + r.trim());   // 侧栏留痕（含 state/gen/cwd/enabled）
-}
-async function doAttachByName(name) {
-  // 复用会话列表「挂接」的既有 attach 流程（基线重拉+续流）；不存在则提示。
-  try {
-    const st = await api("status");
-    if (!(st.sessions || []).some(s => s.name === name)) {
-      showNotice("会话 " + name + " 不存在（/ls 查看清单）", "err", true);
-      return;
-    }
-  } catch (e) { /* status 不可达不拦挂接尝试，错误由 attach() 自报 */ }
-  showNotice("挂接 " + name + "…（基线重拉+续流）");
-  attach(name);
-}
-async function doNewSession(name, cwd) {
-  try {
-    const r = await api("new", Object.assign({name: name}, cwd ? {cwd: cwd} : {}));
-    showNotice("已创建会话 " + r.name + (r.cwd ? "（cwd=" + abbrevCwd(r.cwd) + "）" : "")
-      + "，拉起中；/ls 确认 running，/attach " + r.name + " 挂接", "", true);
-    sysLine("/new " + r.name + " ok" + (r.cwd ? " cwd=" + r.cwd : ""));
-    refreshStatus();
-  } catch (e) { showNotice("/new 拒绝：" + e.message, "err", true); }
-}
-async function doSetCwd(dir) {
-  if (!attached) { showNotice("尚未挂接会话（/attach <name> 后再 /cd）", "err"); return; }
-  showNotice("更新 " + attached + " 的 cwd → " + dir + "（重启生效）…");
-  try {
-    const r = await api("set-cwd", {session: attached, cwd: dir});
-    sysLine("/cd ok: cwd=" + (r.cwd || dir) + (r.gen !== undefined ? " gen→" + r.gen : "（未拉起，仅登记）"));
-    showNotice("cwd 已更新 → " + abbrevCwd(r.cwd || dir)
-      + (r.gen !== undefined ? "，会话已重启（gen=" + r.gen + "），等待自愈续流…" : "（会话未拉起，下次拉起生效）"), "", true);
-    refreshStatus();
-  } catch (e) { showNotice("/cd 拒绝：" + e.message, "err", true); }
-}
-async function doSetName(name) {
-  if (!attached) { showNotice("尚未挂接会话（/attach <name> 后再 /set-name）", "err"); return; }
-  showNotice("改名 " + attached + " → " + name + "（socket 改名 + 重启生效）…");
-  try {
-    const r = await api("rename", {session: attached, name: name});
-    sysLine("/set-name ok: " + (r.old || attached) + " → " + r.session + " gen→" + nz(r.gen));
-    showNotice("已改名 → " + r.session + "，重新挂接新名…");
-    await attach(r.session);      // 新名挂接（基线重拉+续流）；旧名 socket 已失效
-    refreshStatus();
-  } catch (e) { showNotice("/set-name 拒绝：" + e.message, "err", true); }
+// ---------------- 粘贴取图 + 待发送附件条（任务 0829-2103-8etk） ----------------
+// paste 事件只拦 image 类型项；文本/文件等非图片粘贴不 preventDefault，行为不变。
+$("promptInput").addEventListener("paste", e => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  let got = false;
+  for (const it of items) {
+    if (it.kind !== "file" || !(it.type || "").startsWith("image/")) continue;
+    const f = it.getAsFile();
+    if (!f) continue;
+    got = true;
+    const mime = it.type, reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || "");
+      const i = url.indexOf(",");
+      if (i < 0) return;
+      pendingImages.push({mime: mime, b64: url.slice(i + 1), dataUrl: url});
+      renderAttachBar();
+    };
+    reader.readAsDataURL(f);
+  }
+  if (got) e.preventDefault();
+});
+function renderAttachBar() {
+  const bar = $("attachBar");
+  bar.innerHTML = "";
+  if (!pendingImages.length) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  pendingImages.forEach((a, idx) => {
+    const t = document.createElement("span");
+    t.className = "attach-thumb";
+    const img = document.createElement("img");
+    img.src = a.dataUrl; img.alt = a.mime;
+    t.appendChild(img);
+    const rm = document.createElement("button");
+    rm.className = "rm"; rm.textContent = "×"; rm.title = "Remove this image";
+    rm.onclick = () => { pendingImages.splice(idx, 1); renderAttachBar(); };
+    t.appendChild(rm);
+    bar.appendChild(t);
+  });
+  const clr = document.createElement("button");
+  clr.className = "clear-all"; clr.textContent = "Clear (" + pendingImages.length + ")";
+  clr.onclick = () => { pendingImages = []; renderAttachBar(); };
+  bar.appendChild(clr);
 }
 
-// IME 组合保护（inform2，0829-1721-56qb）：组合期间 Enter 只确认候选字，不发送；
+// ---------------- 用户消息渲染（文本 + 图片缩略图；流式与基线共用） ----------------
+function renderUserMessage(m) {
+  const txt = msgText(m);
+  const imgs = (Array.isArray(m.content) ? m.content : [])
+    .filter(p => p && p.type === "image" && p.data && p.mimeType);
+  if (!txt && !imgs.length) return;
+  const d = addDiv("role-user", txt);
+  for (const p of imgs) {
+    const a = document.createElement("a");
+    a.className = "msg-img-link";
+    a.href = "data:" + p.mimeType + ";base64," + p.data;
+    a.target = "_blank"; a.rel = "noopener";
+    // Chrome 禁止新标签页直接导航 data: URL → 点击时转 blob URL 打开原图
+    a.onclick = ev => { ev.preventDefault();
+      window.open(dataToBlobUrl(p.data, p.mimeType), "_blank", "noopener"); };
+    const img = document.createElement("img");
+    img.className = "msg-img";
+    img.src = a.href; img.alt = "image";
+    a.appendChild(img);
+    d.appendChild(a);
+  }
+}
+function dataToBlobUrl(b64, mime) {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([u8], {type: mime}));
+}
+
+// IME 组合保护：组合期间 Enter 只确认候选字，不发送；
 // 部分浏览器（Chrome）compositionend 后仍会再派发一次 Enter keydown → 用标志位
 // 延迟一拍清除吞掉它。
 let composing = false;
@@ -1217,7 +1421,7 @@ $("promptInput").addEventListener("keydown", e => {
 $("promptInput").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 120) + "px";
-  // / 补全提示（inform2，简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
+  // / 补全提示（简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
   if (this.value.trimStart().startsWith("/")) showNotice(SLASH_HELP, "", true);
   else hideNotice();
 });
@@ -1232,8 +1436,8 @@ function addDiv(cls, text) {
   return d;
 }
 function sysLine(text, cls) {
-  // 前端自生成的系统/控制面提示（挂接/自愈/重连/epoch 等）同样分流侧栏（0829-1721-56qb）
-  addSideEntry(text, {type: "ui.note", text: text}, cls);
+  // 前端自生成的提示（挂接/自愈/错误等）经 flash 轻提示承载，错误不静默吞掉
+  flash(text, cls);
 }
 function esc(s) {
   return String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;",
@@ -1249,9 +1453,21 @@ function msgText(m) {
 }
 function scrollStream() { const el = $("stream"); el.scrollTop = el.scrollHeight; }
 
-// ---------------- 启动 ----------------
-refreshStatus();
-statusTimer = setInterval(refreshStatus, 5000);
+// ---------------- 启动：加载即按 URL 挂接对应会话 ----------------
+if (SESSION) {
+  // 双宿主盲区警示（任务 0829-2052-rnfe）：/agents/ 下的 .jsonl 可能是其它机制以
+  // pi --session 打开的活跃会话（如子任务会话）；8080 的 SESSIOND_SESSION_FILE
+  // 识别域看不见外部宿主，继续操作可能对同一文件再起进程。只警告不拦截。
+  if (SESSION.split("/").includes("agents")) {
+    flash("⚠ This session lives under /agents/ and may be an active session owned by "
+      + "another host (e.g. a subtask). 8080 cannot see external hosts; continuing may "
+      + "double-host the same session file — proceed with care.", "err");
+  }
+  attach(SESSION);
+} else {
+  sysLine("No session recognized: open /<site-path>.jsonl?v=chat (current: "
+    + location.pathname + ")", "err");
+}
 </script>
 </body>
 </html>

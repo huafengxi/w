@@ -102,6 +102,42 @@ def do_view(store, path, meta, args):
     else:
         return response_part_file(store, path, meta, range_req)
 
+def _redact_log_args(args):
+    """日志脱敏（任务 0829-2134-n8i2：op=cmd 日志全量脱敏）：
+    op=cmd 请求的日志统一降级——只记 type + 各字段长度/计数摘要，
+    prompt 文本（message 等字符串字段）与 images 一律不全文入日志。
+    例：{"type": "prompt", "message": "<12 chars>", "images": "[1 x image/png]"}
+    steer/follow_up 及其它 cmd 类型同口径。只作用于日志面，
+    不触碰透传给执行路径的原始 args。"""
+    if args.get('op') != 'cmd':
+        return args
+    cmd = args.get('cmd')
+    if not isinstance(cmd, str) or not cmd:
+        return args
+    try:
+        obj = json.loads(cmd)
+    except Exception:
+        return dict(args, cmd=cmd[:80] + '…<truncated>')
+    if not isinstance(obj, dict):
+        return dict(args, cmd=cmd[:80] + '…<truncated>')
+    red = {}
+    for k, v in obj.items():
+        if k == 'type':
+            red[k] = v
+        elif k == 'images' and isinstance(v, list):
+            mimes = ','.join((i.get('mimeType') or '?') if isinstance(i, dict) else '?'
+                             for i in v)
+            red[k] = '[%d x %s]' % (len(v), mimes) if v else '[]'
+        elif isinstance(v, str):
+            red[k] = '<%d chars>' % len(v)
+        elif isinstance(v, list):
+            red[k] = '[%d items]' % len(v)
+        elif isinstance(v, dict):
+            red[k] = '{%d keys}' % len(v)
+        else:
+            red[k] = v
+    return dict(args, cmd=json.dumps(red, ensure_ascii=False))
+
 def build_dict(*__args, **__kw):
     d = dict()
     for i in __args:
@@ -124,7 +160,7 @@ class Handler:
         vpath = self.vmap.translate(meta['path'], meta, args)
         if vpath != path:
             vmeta = get_meta(self.store, vpath)
-        logging.info('RESOLVE: meta=%s vmeta=%s args=%.2000s', meta, vmeta, args)
+        logging.info('RESOLVE: meta=%s vmeta=%s args=%.2000s', meta, vmeta, _redact_log_args(args))
         if not vmeta.get('type'):
             return None
         try:
