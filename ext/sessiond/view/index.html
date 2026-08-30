@@ -268,6 +268,7 @@ let streamCursor = "";        // 最后收到的事件 ID（<ns>:<seq>），续�
 let lastEidNum = 0;           // 事件 ID 数字部分（本地连续性检查用）
 let streamAlive = false;
 let reconnectTimer = null;
+let lastStreamAt = 0;         // 最近一帧/建流时刻（Android 僵尸流活性判定，任务 0830-1452-svok）
 // 基线锚定状态
 let lastGen = null;           // 会话进程世代（gen 变化检测 → 基线自愈）
 let curLeafId = null;         // 活跃分支叶
@@ -551,6 +552,7 @@ function openStream() {
   fetch(url, {credentials: "same-origin", signal: streamCtrl.signal})
     .then(resp => {
       if (!resp.ok) throw new Error("stream " + resp.status);
+      lastStreamAt = Date.now();            // 建流成功（任务 0830-1452-svok）
       const reader = resp.body.getReader();
       const dec = new TextDecoder("utf-8");
       let buf = "";
@@ -568,6 +570,24 @@ function openStream() {
       reconnectTimer = setTimeout(openStream, 1500);
     });
 }
+
+// 回前台强制重连（任务 0830-1452-svok）：Android Chrome 标签页后台化会把 fetch 流挂起成僵尸——
+// reader.read() 不返回也不抛错，openStream 的 catch 重连不触发；回前台后流看似活着实则停摆，
+// 错过 sessiond.dialog_resolved 导致 ask_user dialog 永久残留。回前台即重连：since=当前游标回放安全，
+// 补发错过的事件；环已淘汰则服务端发 webgw.gap 走既有自愈。
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && attached) { stopStream(); openStream(); }
+});
+
+// 静默 watchdog（任务 0830-1452-svok）：服务端每 15s 发 keep-alive ping，前台可见却 40s
+// 收不到任何帧判定流已死 → 强制重连（阈值 = 15s ping 周期的 2 倍余量；兜底其他原因的僵尸流）。
+setInterval(() => {
+  if (attached && streamAlive && !document.hidden && lastStreamAt
+      && Date.now() - lastStreamAt > 40000) {
+    sysLine("stream silent >40s → reconnecting", "warn");
+    stopStream(); openStream();
+  }
+}, 10000);
 
 function eidNum(eid) {
   // eid 形如 "<bridge-ns>:<seq>"；取末段序号做本地连续性检查
@@ -588,6 +608,7 @@ function drainFrames(buf) {
       if (line.startsWith("id:")) id = line.slice(3).trim();
       else if (line.startsWith("data:")) data = line.slice(5).trim();
     }
+    lastStreamAt = Date.now();            // 每消费一帧更新活性（含 keep-alive 帧，任务 0830-1452-svok）
     if (data === null) continue;          // 注释/keep-alive
     if (id !== null) {
       const n = eidNum(id);
