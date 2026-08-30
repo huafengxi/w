@@ -11,7 +11,23 @@
     </style>
     <script type="application/javascript" src="/w/view/my.js"></script>
     <script type="application/javascript">
-      function getUrl() { return window.location.href.replace('v=iframe', ''); }
+      // mode is fixed per route at load time (?v=iflow → flow, ?v=itab → tab,
+      // ?v=iframe → flow compat alias); no runtime flow/tab switch.
+      var ARGS = (function () { try { return $QUERY_ARGS || {}; } catch (e) { return {}; } })();
+      var layoutMode = (function () {
+         var m = ARGS.mode;
+         if (!m) {  // fallback: derive from URL when QUERY_ARGS is not substituted/parseable
+             var v = new URLSearchParams(window.location.search).get('v');
+             if (v == 'itab') m = 'tab';
+         }
+         return m == 'tab' ? 'tab' : 'flow';
+      })();
+      function getUrl() { return window.location.href.replace(/v=(iframe|iflow|itab)/, ''); }
+      function switchView() {  // cross-view jump: swap v between iflow and itab, keep other params
+         var url = new URL(window.location.href);
+         url.searchParams.set('v', layoutMode == 'tab' ? 'iflow' : 'itab');
+         window.location.href = url.href;
+      }
       function setIframeSrc(iframe, src) {
          if (!iframe.src.endsWith(src)) { iframe.src = src; }
          iframe.style.display = 'block';
@@ -24,7 +40,6 @@
          var html = doc.documentElement ? doc.documentElement.scrollHeight : 0;
          return Math.max(body, html);
       }
-      var layoutMode = 'flow';  // 'flow' = content-adaptive, 'tab' = viewport-fill
       function topBarHeight() {
          var el = $('iframe-list');
          return el ? el.offsetTop : 0;
@@ -88,6 +103,13 @@
              items.push({ name: name, link: link, iframe: iframe, checkbox: checkbox, tab: tab });
              setIframeSrc(iframe, link);
          }
+         // single-shot layout init by route mode (replaces the old runtime switch)
+         if (layoutMode == 'tab') {
+             checklist.style.display = 'none';
+             tabbar.style.display = 'block';
+             selectTab(currentTab >= 0 ? currentTab : 0);
+         }
+         $('btn-switch').value = layoutMode == 'tab' ? '→ flow' : '→ tab';
       }
       function iframeLoaded(item) {
          return item.iframe.src && item.iframe.src.endsWith(item.link);
@@ -110,30 +132,6 @@
              }
          }
       }
-      function setLayout(mode) {
-         layoutMode = mode;
-         var checklist = $("check-list");
-         var tabbar = $("tab-bar");
-         $("btn-flow").style.fontWeight = (mode == 'flow') ? 'bold' : 'normal';
-         $("btn-tab").style.fontWeight = (mode == 'tab') ? 'bold' : 'normal';
-         if (mode == 'tab') {
-             checklist.style.display = 'none';
-             tabbar.style.display = 'block';
-             selectTab(currentTab >= 0 ? currentTab : 0);
-         } else {
-             tabbar.style.display = 'none';
-             checklist.style.display = 'block';
-             for (var j = 0; j < items.length; j++) {
-                 var it = items[j];
-                 if (it.checkbox.checked) {
-                     if (!iframeLoaded(it)) { setIframeSrc(it.iframe, it.link); }
-                     else { it.iframe.style.display = 'block'; it.iframe.style.height = frameHeight(it.iframe) + 'px'; }
-                 } else {
-                     it.iframe.style.display = 'none';
-                 }
-             }
-         }
-      }
       function resize_all() {
         if (layoutMode == 'tab') {
              // tab mode: re-apply viewport-fill height (no content sizing)
@@ -153,8 +151,7 @@
   </head>
   <body onload="initApp()" style="margin:0">
    <div style="float: left"><input type="button" value="resize" style="float: left" onclick="resize_all()"></div>
-   <div style="float: left"><input type="button" id="btn-flow" value="flow" style="float: left; font-weight: bold" onclick="setLayout('flow')">
-   <input type="button" id="btn-tab" value="tab" style="float: left" onclick="setLayout('tab')"></div>
+   <div style="float: left"><input type="button" id="btn-switch" value="→ tab" style="float: left" onclick="switchView()"></div>
    <div id="tab-bar"></div>
    <div id="check-list"></div>
    <div id="iframe-list">
