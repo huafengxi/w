@@ -3,4 +3,4 @@
 text/org: /w/ext/org/view/org.html
 org2md: /w/ext/shell/rpc/sh.py?cmd=org2markdown.es&pipe_src=1
 org2reveal: /w/ext/shell/rpc/sh.py?cmd=org2reveal.es&pipe_src=1
-text/org/bot: /w/ext/shell/rpc/sh.py?cmd=org2html.py&pipe_src=1
+# text/org/bot (org2html.py) 路由已移除：org2html 归档至 ~/m/archive，脚本本就不在 bin_dirs PATH 上（py2 失效）
