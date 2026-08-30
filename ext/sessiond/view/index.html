@@ -267,7 +267,9 @@ const MD_RENDER_MS = 150;
 let dialogTimer = null;
 let dialogDeadline = 0;
 // Waiting for model 指示（任务 0829-2107-cvdn）：回合进行中但无流式产出时显示；
-// 状态机：user message_start = 回合开始（turnActive），turn_end/agent_end = 回合结束；
+// 状态机：user message_start = 回合开始（turnActive），agent_end = 回合结束；
+// turn_end 仅是子回合边界——每个 assistant 子回合（含以 tool call 结束的）都发一次，
+// 一次 agent run 发多个、仅一个 agent_end，不清 turnActive（0830-1029-urgg）；
 // 显示时机 = 回合中且无流式产出（用户消息发出后等首个产出、工具执行完成后等下一轮
 // 模型响应）；任一模型产出帧（assistant message_start / message_update /
 // tool_execution_start）到达即移除。纯前端基于现有 SSE 事件推断，无后端新事件。
@@ -614,8 +616,9 @@ function handleEvent(o) {
   if (document.hidden && (t === "message_start" || t === "sessiond.error"
       || t === "extension_ui_request")) beep("notify");
   if (t === "agent_settled") beep("done");
-  if (t === "turn_end" || t === "agent_end") {
-    turnActive = false; hideWaiting(); }                // 回合结束 → 清除等待指示
+  if (t === "turn_end") hideWaiting();                  // 子回合边界：仅清等待指示，不清 turnActive（0830-1029-urgg）
+  if (t === "agent_end") {
+    turnActive = false; hideWaiting(); }                // agent run 结束 → 清除等待指示
   if (t === "response") { handleCmdResponse(o); }       // 上行命令回执（0829-2115-zvti）
   renderEvent(o);
 }
@@ -1128,6 +1131,9 @@ function sendPrompt() {
     pendingImages = []; renderAttachBar();
   }
   if (type === "follow_up") addPendingSend(cmd.id, msg, "queue");
+  else pendingSends[cmd.id] = {mode: "prompt", text: msg, rejected: false};
+  // prompt 直发静默登记：不进队列面板（renderQueuedPanel 跳过 prompt 条目），
+  // 仅供 handleCmdResponse 的 "already processing" 兜底定位原文重发（0830-1029-urgg）
   sendTracked(cmd);
 }
 
@@ -1146,6 +1152,7 @@ function renderQueuedPanel() {
   const seen = new Set(items.map(i => i.text));
   for (const k of Object.keys(pendingSends)) {
     const p = pendingSends[k];
+    if (p.mode === "prompt") continue;                    // prompt 直发不是排队条目，不进面板（0830-1029-urgg）
     if (seen.has(p.text)) continue;                       // 后端已收编 → 不重复展示（去重）
     items.push({kind: p.mode === "steer" ? "steer" : "fu", text: p.text,
                 rejected: p.rejected, local: true});
@@ -1193,12 +1200,24 @@ function resolvePendingByMessage(m) {
 
 // ---------------- 上行命令回执（response 事件，任务 0829-2115-zvti） ----------------
 // pi rpc 对 prompt/steer/follow_up 均有 {type:"response", id, command, success} 回执，
-// 经事件环送达。被拒（如流式中未带 streamingBehavior 的 prompt）→ 显式 flash，不静默。
+// 经事件环送达。被拒 → 显式 flash，不静默；仅 prompt 被 "already processing" 拒时
+// 自动转 follow_up 重发（兜底竞态，0830-1029-urgg）。
 function handleCmdResponse(o) {
   if (typeof o.id !== "string" || !(o.id in pendingSends)) return;
   const p = pendingSends[o.id];
   if (o.success) return;                       // 已入队：面板条目保留，等送达移除
   const err = o.error || o.message || "rejected";
+  // 兜底竞态（0830-1029-urgg）：prompt 直发被 "already processing" 拒绝 = 空闲判定与
+  // agent 启动同瞬相撞 → 不标 rejected / 不闪 err，自动转 follow_up 重发入队。
+  // images 无法从 pending 恢复，仅重发文本（极端情况可接受）。
+  if (p.mode !== "queue" && /already processing/i.test(err)) {
+    delete pendingSends[o.id];
+    const nid = uid();
+    addPendingSend(nid, p.text, "queue");
+    sendTracked({type: "follow_up", message: p.text, id: nid});
+    flash("Agent busy → queued as follow-up", "warn");
+    return;
+  }
   flash("Send rejected (" + (o.command || p.mode) + "): " + err, "err");
   p.rejected = true;
   renderQueuedPanel();
