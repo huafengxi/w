@@ -1200,7 +1200,10 @@ function showDialogNow(o) {
     input.classList.remove("hidden");
     input.value = o.defaultValue || o.value || "";
     input.onkeydown = e => {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault();
+      if (e.key === "Enter" && !e.shiftKey) {
+        // IME 组合保护（0830-2245-jdx3）：组合期间 Enter 只确认候选字，不提交
+        if (e.isComposing || e.keyCode === 229 || dialogComposing) return;
+        e.preventDefault();
         replyDialog({value: input.value}); }
     };
     const b = document.createElement("button");
@@ -1721,6 +1724,12 @@ let composing = false;
 $("promptInput").addEventListener("compositionstart", () => { composing = true; });
 $("promptInput").addEventListener("compositionend", () => {
   setTimeout(() => { composing = false; }, 0);
+});
+// dialog（ask_user 弹窗）输入框同款保护（0830-2245-jdx3）
+let dialogComposing = false;
+$("dialogInput").addEventListener("compositionstart", () => { dialogComposing = true; });
+$("dialogInput").addEventListener("compositionend", () => {
+  setTimeout(() => { dialogComposing = false; }, 0);
 });
 $("promptInput").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) {
