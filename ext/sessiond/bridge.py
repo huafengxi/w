@@ -198,6 +198,17 @@ class Bridge:
             self._broadcast_dialog_resolved(expired, timeout=True)
         return res
 
+    def last_queue_state(self):
+        """环内最近一次 queue_update 快照（0830-1457-a57d）：attach 基线补发，
+        前端刷新后队列面板直出。pi 只在队列变化时发 queue_update 实时事件，基线不
+        含快照会导致面板空到下一次变更；事件环倒序取最新一条即权威当前态。"""
+        with self.lock:
+            for _seq, _eid, obj in reversed(self.ring):
+                if isinstance(obj, dict) and obj.get("type") == "queue_update":
+                    return {"steering": list(obj.get("steering") or []),
+                            "followUp": list(obj.get("followUp") or [])}
+        return {"steering": [], "followUp": []}
+
     # ---- 基线：get_entries ----
 
     def get_entries(self, timeout=ENTRIES_TIMEOUT):

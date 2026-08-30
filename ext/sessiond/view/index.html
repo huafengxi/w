@@ -427,6 +427,13 @@ function applyBaseline(doc, initial) {
   // 离线/刷新期间触发的 ask_user 仅凭事件环收不到（续流游标在其后）——后端随基线
   // 下发权威快照，逐个重建（showDialog 同 id 幂等，不会叠框）。
   for (const d of doc.pendingDialogs || []) showDialog(d);
+  // 队列快照基线直出（任务 0830-1457-a57d）：刷新后不等下一次 queue_update 事件，
+  // 基线带权威队列态直接落地渲染（环内最近一次 queue_update）。
+  if (doc.queue) {
+    queueState = {steering: Array.isArray(doc.queue.steering) ? doc.queue.steering : [],
+                  followUp: Array.isArray(doc.queue.followUp) ? doc.queue.followUp : []};
+    renderQueuedPanel();
+  }
   streamCursor = doc.watermark || "";
   lastEidNum = eidNum(streamCursor);
   openStream();

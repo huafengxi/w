@@ -44,6 +44,7 @@ def _baseline_doc(b, r):
     return {"ok": True, "session": b.session,
             "gen": r.get("gen"), "entries": entries,
             "pendingDialogs": b.pending_dialog_list(),
+            "queue": b.last_queue_state(),
             "leafId": data.get("leafId"),
             "watermark": r.get("watermark")}
 
