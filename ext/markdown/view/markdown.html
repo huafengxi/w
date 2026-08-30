@@ -101,12 +101,41 @@
          $('log-all').style.display = disp;
       }
 
+      // Optional ?refresh=N query param: poll the markdown source every N
+      // seconds and re-render only when the content actually changed.
+      // Absent or <=0 keeps the original load-once behavior untouched.
+      function getRefreshSec() {
+         var m = window.location.search.match(/[?&]refresh=(\d+)/);
+         return m ? parseInt(m[1], 10) : 0;
+      }
+      var lastRendered = null;
+      function pollRefresh() {
+         if (getRefreshSec() <= 0) return;
+         var url = getUrl();
+         if (document.hidden) return; // paused while tab hidden; next tick resumes
+         var y = window.scrollY;
+         try {
+            // ?t=... only busts caches; the server ignores unknown params
+            var content = read(url + '?t=' + Date.now());
+            if (content === lastRendered) return;
+            lastRendered = content;
+            renderDoc(content);
+            window.scrollTo(0, y);
+         } catch (e) { /* transient fetch error; retry on next tick */ }
+      }
+      (function(){
+         var sec = getRefreshSec();
+         if (sec <= 0) return;
+         document.addEventListener('visibilitychange', pollRefresh); // catch up right after unhiding
+         setInterval(pollRefresh, sec * 1000);
+      })();
+
       function initApp(){
         var url = window.location.pathname;
         var gitlab_url = "http://gitlab.alibaba-inc.com/yuanqi.xhf/mysite-mirror/blob/master/";
         $("gitlab_link").href = gitlab_url + url;
         if (inIframe())hide($('head-bar'));
-        makeEditor($('editor'), function (content){ renderDoc(content); });
+        makeEditor($('editor'), function (content){ lastRendered = content; renderDoc(content); });
       }
     </script>
   </head>
