@@ -54,6 +54,10 @@ class Bridge:
         # 挂起 dialog：id -> 完整 extension_ui_request 对象（应答校验 + 基线
         # 重建，0830-0956-vk20 bug2：前端刷新/重连后经 attach 文档重建对话框）
         self.pending_dialogs = {}
+        # dialog 超时 deadline（monotonic 秒，仅请求带 timeout 字段者有；
+        # 0830-1104-eji4：pi 端超时是 rpc-mode 内部 setTimeout，不发任何事件，
+        # 桥接不清理会让 attach 基线向新 tab 重建已死 dialog → 按 deadline 清理）
+        self._dialog_deadline = {}
         self.subscribers = 0                 # 当前 SSE 流订阅数
         self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest)
         self.session = self.sup.name         # 展示名以监督员解析为准
@@ -62,12 +66,32 @@ class Bridge:
 
     def _ingest(self, obj):
         """监督员回调：生命周期帧与 pi 原始输出行统一入环。"""
+        expired = []
         if isinstance(obj, dict):
             t = obj.get("type")
             if t == "extension_ui_request" and obj.get("method") in DIALOG_METHODS:
                 with self.lock:
+                    expired = self._sweep_expired_dialogs_locked()
                     self.pending_dialogs[obj.get("id")] = obj
-            elif t == "response" and isinstance(obj.get("id"), str):
+                    to = obj.get("timeout")
+                    if isinstance(to, (int, float)) and to > 0:
+                        self._dialog_deadline[obj.get("id")] = \
+                            time.monotonic() + to / 1000.0
+            elif t == "sessiond.session_restarted":
+                # 会话进程重启：pi 侧 dialog Promise 全部失效，清表并广播结算，
+                # 否则 attach 基线会向各端重建已死 dialog（0830-1104-eji4）。
+                with self.lock:
+                    stale = list(self.pending_dialogs.keys())
+                    self.pending_dialogs.clear()
+                    self._dialog_deadline.clear()
+                if stale:
+                    self._broadcast_dialog_resolved(stale, restarted=True)
+            elif self._dialog_deadline:
+                # 任意 pi 事件都顺带清理超时 dialog（0830-1104-eji4）：pi 超时
+                # 后必然有后续事件（工具结果/续写）流经这里，无需额外定时器。
+                with self.lock:
+                    expired = self._sweep_expired_dialogs_locked()
+            if t == "response" and isinstance(obj.get("id"), str):
                 waiter = None
                 with self.lock:
                     waiter = self.pending.pop(obj["id"], None)
@@ -83,7 +107,33 @@ class Bridge:
                     waiter["eid"] = eid       # 响应行的事件 ID = 水位
                     waiter["event"].set()
                     return
+        if expired:
+            self._broadcast_dialog_resolved(expired, timeout=True)
         self._append(obj)
+
+    def _sweep_expired_dialogs_locked(self):
+        """清理超时 dialog（须持锁调用），返回被清理的 rid 列表。0830-1104-eji4：
+        pi rpc-mode 的 dialog 超时是内部 setTimeout、不发事件；桥接必须自己按
+        请求自带的 timeout 字段（毫秒）跟踪 deadline，否则 pending_dialogs 永不清理，
+        attach 基线（0830-0956-vk20 bug2）会向新/刷新端重建已死 dialog。"""
+        if not self._dialog_deadline:
+            return []
+        now = time.monotonic()
+        expired = [rid for rid, dl in self._dialog_deadline.items()
+                   if rid in self.pending_dialogs and now >= dl]
+        for rid in expired:
+            self.pending_dialogs.pop(rid, None)
+            self._dialog_deadline.pop(rid, None)
+        return expired
+
+    def _broadcast_dialog_resolved(self, rids, **extra):
+        """向全部 SSE 订阅者广播 dialog 结算（0830-1104-eji4）：多 tab 关框同步。
+        含应答端自身——其前端已本地 closeDialog 删表，handler 查无 pendingDialogs[id]
+        幂等 no-op，安全。事件入环，晚到的订阅者（since 回放）也能收到。"""
+        for rid in rids:
+            evt = {"type": "sessiond.dialog_resolved", "id": rid}
+            evt.update(extra)
+            self._append(evt)
 
     def _append(self, obj):
         with self.cond:
@@ -104,9 +154,13 @@ class Bridge:
         if t == "extension_ui_response":
             rid = cmd_obj.get("id")
             with self.lock:
-                if rid not in self.pending_dialogs:
-                    return "no pending dialog with id %r" % (rid,)
-                self.pending_dialogs.pop(rid, None)
+                expired = self._sweep_expired_dialogs_locked()
+                hit = self.pending_dialogs.pop(rid, None)
+                self._dialog_deadline.pop(rid, None)
+            if expired:
+                self._broadcast_dialog_resolved(expired, timeout=True)
+            if hit is None:
+                return "no pending dialog with id %r" % (rid,)
         if t == "abort":
             # 0830-0956-vk20 bug1：会话阻塞于 ask_user 时 /abort 不生效——pi rpc
             # 的 dialog 是裸 Promise（仅 response/signal/timeout 可解），ask_user
@@ -114,21 +168,35 @@ class Bridge:
             # cancelled 代答（pi 端按取消结算 → 工具返回后回合解锁，abort 状态
             # 随即收尾），pi 端不悬空。先发 abort 再发代答，顺序串行入 stdin。
             with self.lock:
+                expired = self._sweep_expired_dialogs_locked()
                 stale = list(self.pending_dialogs.keys())
                 self.pending_dialogs.clear()
+                self._dialog_deadline.clear()
+            if expired:
+                self._broadcast_dialog_resolved(expired, timeout=True)
             for rid in stale:
                 self.sup.send({"type": "extension_ui_response", "id": rid,
                                "cancelled": True})
+            if stale:
+                self._broadcast_dialog_resolved(stale, cancelled=True)
         if not self.sup.send(cmd_obj):
             return "session process stdin unavailable (state=%s)" \
                    % self.sup.state
+        if t == "extension_ui_response":
+            # 转发成功后广播结算（0830-1104-eji4）：其它 tab 的 handler
+            # （view/index.html `sessiond.dialog_resolved`）据此关框。
+            self._broadcast_dialog_resolved([rid])
         return None
 
     def pending_dialog_list(self):
         """当前悬空 dialog 请求体列表（0830-0956-vk20 bug2）：随 attach/entries
         基线下发，前端刷新/重连后据此重建 pending dialog。"""
         with self.lock:
-            return list(self.pending_dialogs.values())
+            expired = self._sweep_expired_dialogs_locked()
+            res = list(self.pending_dialogs.values())
+        if expired:
+            self._broadcast_dialog_resolved(expired, timeout=True)
+        return res
 
     # ---- 基线：get_entries ----
 
