@@ -51,6 +51,21 @@ view 文件本身分布在 `core/view/` 与各 `ext/<feature>/view/` 目录。
 `core/view/` 只保留通用组件 (`template/404/code/iframe/split` 等)，每个 ext
 自带自己的 view 资源。
 
+### 缺失文件的视图兜底（统一语义，0830-2242-u42d 补注）
+
+**「缺失文件 + 后缀显式 mime 映射 + 该 mime 在 vmap 有视图 → 渲染视图（而非 404）」
+是设计的必然行为，不是回归**（实现 0830-1924-ft6s，`core/handler.py`）。
+判定链：`store.head` 对缺失文件给不出 `type` → 若后缀在 **frag 显式映射表**
+（`mime.guess_explicit`：基线 `mime/mime.frag` + 各 `ext/<name>/mime.frag`，
+不含 mimetypes/text-plain 泛化回退）命中、且该 mime 在 vmap 有视图，则兜底到该视图；
+视图侧自行容忍文件缺失（如聊天窗渲染空会话）。
+
+层味：core 只认「mime → 视图」，文件存在与否不是路由条件——`?v=` 本来就能对任意
+路径强制同视图，兜底只是把「显式映射的路径」纳入同一语义，未新增攻击面。
+**泛化面**：不止 `.jsonl`——任何「后缀有 frag 显式映射且 mime 在 vmap 有视图」的
+缺失路径（`.md`/`.org`/`.itab` 等）都从 404 页变为视图渲染；未映射后缀（如 `.txt`、
+`.svg`）缺失仍走 404 语义。排障时见到「缺失文件却渲染了视图」先对照本节，勿当 bug。
+
 ## script
 
 只有 mime type 为 `script` 的 python 文件才会被当作 RPC 执行。
