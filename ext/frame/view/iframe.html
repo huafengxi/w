@@ -15,7 +15,7 @@
       function setIframeSrc(iframe, src) {
          if (!iframe.src.endsWith(src)) { iframe.src = src; }
          iframe.style.display = 'block';
-         iframe.onload = function () { iframe.style.height = frameHeight(iframe) + 'px'; }
+         iframe.onload = function () { applyHeight(iframe); }
       }
       function frameHeight(iframe) {
          var doc = iframe.contentWindow && iframe.contentWindow.document;
@@ -23,6 +23,21 @@
          var body = doc.body ? doc.body.scrollHeight : 0;
          var html = doc.documentElement ? doc.documentElement.scrollHeight : 0;
          return Math.max(body, html);
+      }
+      var layoutMode = 'flow';  // 'flow' = content-adaptive, 'tab' = viewport-fill
+      function topBarHeight() {
+         var el = $('iframe-list');
+         return el ? el.offsetTop : 0;
+      }
+      // tab mode: fill the viewport below the control/tab bar, page scrolls
+      // inside (content-adaptive sizing would loop on 100vh embedded pages).
+      // flow mode: keep content-adaptive height.
+      function applyHeight(iframe) {
+         if (layoutMode == 'tab') {
+             iframe.style.height = 'calc(100vh - ' + topBarHeight() + 'px)';
+         } else {
+             iframe.style.height = frameHeight(iframe) + 'px';
+         }
       }
       var items = [];        // {name, link, iframe, checkbox, tab}
       var currentTab = -1;   // last selected tab index in tab layout
@@ -87,7 +102,7 @@
                      setIframeSrc(it.iframe, it.link);  // lazy load; onload sets height
                  } else {
                      it.iframe.style.display = 'block';
-                     it.iframe.style.height = frameHeight(it.iframe) + 'px';
+                     applyHeight(it.iframe);
                  }
              } else {
                  it.tab.className = 'tab';
@@ -96,6 +111,7 @@
          }
       }
       function setLayout(mode) {
+         layoutMode = mode;
          var checklist = $("check-list");
          var tabbar = $("tab-bar");
          $("btn-flow").style.fontWeight = (mode == 'flow') ? 'bold' : 'normal';
@@ -111,7 +127,7 @@
                  var it = items[j];
                  if (it.checkbox.checked) {
                      if (!iframeLoaded(it)) { setIframeSrc(it.iframe, it.link); }
-                     else { it.iframe.style.display = 'block'; }
+                     else { it.iframe.style.display = 'block'; it.iframe.style.height = frameHeight(it.iframe) + 'px'; }
                  } else {
                      it.iframe.style.display = 'none';
                  }
@@ -119,6 +135,14 @@
          }
       }
       function resize_all() {
+        if (layoutMode == 'tab') {
+             // tab mode: re-apply viewport-fill height (no content sizing)
+             for (var j = 0; j < items.length; j++) {
+                 var it = items[j];
+                 if (it.iframe.style.display != 'none') { applyHeight(it.iframe); }
+             }
+             return;
+        }
         for(var iframe of $('iframe-list').childNodes) {
              if (iframe.class == 'ifr') {
              iframe.style.height = frameHeight(iframe) + 'px';
