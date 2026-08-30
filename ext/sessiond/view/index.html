@@ -391,6 +391,10 @@ function applyBaseline(doc, initial) {
     renderQueuedPanel();                                // 全量重渲染：待发/队列面板一并清除（0829-2115-zvti）
   }
   for (const e of branch) renderEntry(e);
+  // 重建悬空 dialog（0830-0956-vk20 bug2）：extension_ui_request 不在 entries 里，
+  // 离线/刷新期间触发的 ask_user 仅凭事件环收不到（续流游标在其后）——后端随基线
+  // 下发权威快照，逐个重建（showDialog 同 id 幂等，不会叠框）。
+  for (const d of doc.pendingDialogs || []) showDialog(d);
   streamCursor = doc.watermark || "";
   lastEidNum = eidNum(streamCursor);
   openStream();
@@ -1283,6 +1287,9 @@ function handleSlash(msg) {
   switch (cmd) {
     case "/abort":
       sendCmd({type: "abort", id: uid()});
+      // 0830-0956-vk20 bug1：后端对悬空 dialog 同步发 cancelled 代答，前端同步
+      // 关闭本地 dialog 盒子，保持一致。
+      clearPendingDialogs();
       showNotice("Abort sent (waits for the current generation/tool to stop)"); return;
     case "/clear":
       doClear(); return;

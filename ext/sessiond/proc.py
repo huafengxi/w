@@ -184,9 +184,12 @@ class Supervisor:
 
     # ---- 对外 ----
 
-    def wait_ready(self, timeout=10.0):
+    def wait_ready(self, timeout=25.0):
         """等待会话进程就位（state=running）。首次访问时监督线程刚拉起，
-        spawn 需毫秒~秒级（+ 旧宿主清场宽限）；基线路径等待而非快速失败。"""
+        spawn 需毫秒~秒级（+ 旧宿主清场宽限）；基线路径等待而非快速失败。
+        上限取值（0830-0956-vk20 毛刺3）：清场旧宿主最坏 = ORPHAN_GRACE 15s
+        自然退出宽限 + SIGTERM 宽限 3s（+SIGKILL）+ spawn；原 10s 覆盖不住→
+        首个 attach 504，放宽到 25 = 15+3+7（余量）。"""
         deadline = time.monotonic() + timeout
         with self._cond:
             while self.state != "running" or self.proc is None:

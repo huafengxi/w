@@ -51,7 +51,9 @@ class Bridge:
         self.ns = uuid.uuid4().hex[:8]
         self.pending = {}                    # req id -> waiter dict（get_entries）
         self._req_seq = 0
-        self.pending_dialogs = set()         # 挂起 dialog id（应答校验用）
+        # 挂起 dialog：id -> 完整 extension_ui_request 对象（应答校验 + 基线
+        # 重建，0830-0956-vk20 bug2：前端刷新/重连后经 attach 文档重建对话框）
+        self.pending_dialogs = {}
         self.subscribers = 0                 # 当前 SSE 流订阅数
         self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest)
         self.session = self.sup.name         # 展示名以监督员解析为准
@@ -64,7 +66,7 @@ class Bridge:
             t = obj.get("type")
             if t == "extension_ui_request" and obj.get("method") in DIALOG_METHODS:
                 with self.lock:
-                    self.pending_dialogs.add(obj.get("id"))
+                    self.pending_dialogs[obj.get("id")] = obj
             elif t == "response" and isinstance(obj.get("id"), str):
                 waiter = None
                 with self.lock:
@@ -104,11 +106,29 @@ class Bridge:
             with self.lock:
                 if rid not in self.pending_dialogs:
                     return "no pending dialog with id %r" % (rid,)
-                self.pending_dialogs.discard(rid)
+                self.pending_dialogs.pop(rid, None)
+        if t == "abort":
+            # 0830-0956-vk20 bug1：会话阻塞于 ask_user 时 /abort 不生效——pi rpc
+            # 的 dialog 是裸 Promise（仅 response/signal/timeout 可解），ask_user
+            # 不传 signal，session.abort() 触不到它。这里把所有悬空 dialog 以
+            # cancelled 代答（pi 端按取消结算 → 工具返回后回合解锁，abort 状态
+            # 随即收尾），pi 端不悬空。先发 abort 再发代答，顺序串行入 stdin。
+            with self.lock:
+                stale = list(self.pending_dialogs.keys())
+                self.pending_dialogs.clear()
+            for rid in stale:
+                self.sup.send({"type": "extension_ui_response", "id": rid,
+                               "cancelled": True})
         if not self.sup.send(cmd_obj):
             return "session process stdin unavailable (state=%s)" \
                    % self.sup.state
         return None
+
+    def pending_dialog_list(self):
+        """当前悬空 dialog 请求体列表（0830-0956-vk20 bug2）：随 attach/entries
+        基线下发，前端刷新/重连后据此重建 pending dialog。"""
+        with self.lock:
+            return list(self.pending_dialogs.values())
 
     # ---- 基线：get_entries ----
 

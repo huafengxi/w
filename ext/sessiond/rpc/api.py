@@ -33,7 +33,10 @@ def _bridge_or_err(session):
 
 
 def _baseline_doc(b, r, gap=False):
-    """把 get_entries 结果整理成基线/增量响应文档。"""
+    """把 get_entries 结果整理成基线/增量响应文档。
+    附 pendingDialogs（0830-0956-vk20 bug2）：尚悬空的 extension_ui_request
+    请求体——extension UI 请求不在会话 entries 里，前端刷新/重连后仅凭基线
+    无法重建 pending dialog，由后端权威补发。"""
     resp = r["resp"]
     if not resp.get("success"):
         return None
@@ -41,6 +44,7 @@ def _baseline_doc(b, r, gap=False):
     entries = data.get("entries") or []
     return {"ok": True, "session": b.session, "gap": gap,
             "gen": r.get("gen"), "entries": entries,
+            "pendingDialogs": b.pending_dialog_list(),
             "leafId": data.get("leafId"),
             "entryCursor": entries[-1].get("id") if entries else None,
             "watermark": r.get("watermark")}
