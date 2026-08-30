@@ -271,6 +271,7 @@ let lastGen = null;           // 会话进程世代（gen 变化检测 → 基�
 let curLeafId = null;         // 活跃分支叶
 let curProvider = null;       // 当前模型 provider/modelId（model_change 跟踪，/model 用）
 let curModelId = null;
+let curThinkingLevel = null;  // 当前思考强度（thinking_level_change + get_state 跟踪，0830-1257-vwzb）
 let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
 let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
 let toolBlocks = {};          // toolCallId -> 折叠块引用
@@ -419,6 +420,7 @@ function applyBaseline(doc, initial) {
   openStream();
   sysLine("Baseline " + (doc.entries || []).length + " entries (active branch "
     + branch.length + ")");
+  sendGetState();                              // 基线完成 → 拉权威模型/思考强度（0830-1257-vwzb）
 }
 
 // 活跃分支：从 leafId 沿 parentId 走回根（含 pre-compaction 链）
@@ -446,7 +448,8 @@ function renderEntry(e) {
   if (t === "model_change") { curProvider = e.provider || curProvider;
     curModelId = e.modelId || curModelId;
     sysLine("◆ model → " + (e.provider || "?") + "/" + (e.modelId || "?")); return; }
-  if (t === "thinking_level_change") { sysLine("◆ thinking → " + (e.thinkingLevel || "?")); return; }
+  if (t === "thinking_level_change") { curThinkingLevel = e.thinkingLevel || curThinkingLevel;  // 0830-1257-vwzb：基线同步跟踪思考强度（与 model_change 同口径）
+    sysLine("◆ thinking → " + (e.thinkingLevel || "?")); return; }
   sysLine("◆ " + (t || "?"));
 }
 function renderEntryMessage(m) {
@@ -664,6 +667,16 @@ function renderEvent(o) {
   if ((t === "agent_end" || t === "compaction_end") && o.errorMessage) {
     renderErrorBox(o.errorMessage);              // 内部与已渲染的 assistant 错误去重
     return;
+  }
+  // 模型/思考强度静默跟踪（任务 0830-1257-vwzb）：这两类帧会被下方 side 过滤丢弃，
+  // 丢弃前先更新三变量（不新增 flash/sysLine）；斜杠提示可见时顺带刷新状态行。
+  if (t === "model_change") {
+    curProvider = o.provider || curProvider; curModelId = o.modelId || curModelId;
+    refreshSlashNoticeIfVisible(); return;
+  }
+  if (t === "thinking_level_change") {
+    curThinkingLevel = o.thinkingLevel || curThinkingLevel;
+    refreshSlashNoticeIfVisible(); return;
   }
   if (classifyEvent(o) === "side") return;   // 其余系统/控制面帧不展示（任务 0829-2035-kyor）
   if (t === "message_start") {
@@ -1293,6 +1306,17 @@ function resolvePendingByMessage(m) {
 // 经事件环送达。被拒 → 显式 flash，不静默；仅 prompt 被 "already processing" 拒时
 // 自动转 follow_up 重发（兜底竞态，0830-1029-urgg）。
 function handleCmdResponse(o) {
+  if (o.command === "get_state") {            // get_state 回执：权威模型/思考强度（0830-1257-vwzb）
+    getStateInFlight = false;
+    if (o.success && o.data) {                // 失败静默忽略（不闪 err）
+      const m = o.data.model || {};
+      curProvider = m.provider || curProvider;
+      curModelId = m.modelId || m.id || curModelId;
+      curThinkingLevel = o.data.thinkingLevel || curThinkingLevel;
+      refreshSlashNoticeIfVisible();
+    }
+    return;
+  }
   if (typeof o.id !== "string" || !(o.id in pendingSends)) return;
   const p = pendingSends[o.id];
   if (o.success) return;                       // 已入队：面板条目保留，等送达移除
@@ -1322,6 +1346,18 @@ async function sendTracked(cmd) {
     const p = pendingSends[cmd.id];
     if (p) { p.rejected = true; renderQueuedPanel(); }
   }
+}
+// ---------------- get_state 权威查询（任务 0830-1257-vwzb） ----------------
+// 只读查询当前模型/思考强度（pi rpc get_state → RpcSessionState{model, thinkingLevel}，
+// 流式中发也安全）；attach 基线完成后、每次输入 / 展示斜杠提示时发送，
+// 成功由 handleCmdResponse 回填三变量；失败静默忽略。
+let getStateInFlight = false;
+function sendGetState() {
+  if (!attached || getStateInFlight) return;
+  getStateInFlight = true;
+  api("cmd", {session: attached, cmd: JSON.stringify({type: "get_state", id: uid()})})
+    .catch(() => {});                          // HTTP 失败静默（不闪 err）
+  setTimeout(() => { getStateInFlight = false; }, 3000);  // 回执丢失时的兜底解锁（正常由 response 帧提前清）
 }
 // 进程级 reload：直接经 op=reload 杀会话进程并从 session.jsonl resume 重拉（用户拍板
 // 去二次确认，任务 0830-1132-7yh5：/reload 直接执行，不再弹 window.confirm，与 /clear 同口径）。
@@ -1371,7 +1407,9 @@ const SLASH_HELP = "Session commands: /abort · /clear · /compact · /model <pr
   + "/thinking <" + THINKING_LEVELS.join("|") + "> · /export · /fork [<entryId>]"
   + " · /image · /reload · /sound [on|off]";
 let noticeTimer = null;
+let slashNoticeOn = false;    // 当前粘性展示的是斜杠命令提示（0830-1257-vwzb，供 get_state 回执定点刷新）
 function showNotice(text, cls, sticky) {
+  slashNoticeOn = false;      // 任何其它提示覆盖斜杠提示（0830-1257-vwzb）
   const n = $("slashNotice");
   n.textContent = text;
   n.className = "notice" + (cls ? " " + cls : "");   // 清掉 hidden，可附 err 色
@@ -1380,7 +1418,21 @@ function showNotice(text, cls, sticky) {
 }
 function hideNotice() {
   if (noticeTimer) { clearTimeout(noticeTimer); noticeTimer = null; }
+  slashNoticeOn = false;      // 0830-1257-vwzb
   $("slashNotice").classList.add("hidden");
+}
+// 斜杠提示 = 状态行 + 命令表（任务 0830-1257-vwzb）：任一值缺失显示 ?；
+// 状态初值来自基线/事件跟踪，权威值由 get_state 回执回填后刷新。
+function slashStatusLine() {
+  return "model: " + (curProvider || "?") + "/" + (curModelId || "?")
+    + " \u00b7 thinking: " + (curThinkingLevel || "?");
+}
+function showSlashNotice() {
+  showNotice(slashStatusLine() + "\n" + SLASH_HELP, "", true);
+  slashNoticeOn = true;
+}
+function refreshSlashNoticeIfVisible() {
+  if (slashNoticeOn && !$("slashNotice").classList.contains("hidden")) showSlashNotice();
 }
 function handleSlash(msg) {
   const sp = msg.indexOf(" ");
@@ -1569,7 +1621,7 @@ $("promptInput").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 120) + "px";
   // / 补全提示（简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
-  if (this.value.trimStart().startsWith("/")) showNotice(SLASH_HELP, "", true);
+  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填
   else hideNotice();
 });
 
