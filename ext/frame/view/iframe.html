@@ -5,6 +5,9 @@
     <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
     <style type="text/css">
     .checkbox { float: left; }
+    #tab-bar { display: none; }
+    #tab-bar .tab { display: inline-block; padding: 2px 8px; margin-right: 2px; border: 1px solid #999; cursor: pointer; }
+    #tab-bar .tab.selected { background: #cde; font-weight: bold; }
     </style>
     <script type="application/javascript" src="/w/view/my.js"></script>
     <script type="application/javascript">
@@ -21,6 +24,8 @@
          var html = doc.documentElement ? doc.documentElement.scrollHeight : 0;
          return Math.max(body, html);
       }
+      var items = [];        // {name, link, iframe, checkbox, tab}
+      var currentTab = -1;   // last selected tab index in tab layout
       function appendIndex(checklist, iframe, name, link) {
              var div = document.createElement('div');
              checklist.appendChild(div)
@@ -32,6 +37,15 @@
              checkbox.checked = true;
              checkbox.onclick = function () { if (checkbox.checked) { setIframeSrc(iframe, link); } else { iframe.style.display = 'none'; } }
              div.appendChild(document.createTextNode(name));
+             return checkbox;
+      }
+      function appendTab(tabbar, name, idx) {
+             var tab = document.createElement('div');
+             tab.className = 'tab';
+             tab.appendChild(document.createTextNode(name));
+             tab.onclick = function () { selectTab(idx); };
+             tabbar.appendChild(tab);
+             return tab;
       }
       function appendIframe(body) {
              var iframe = document.createElement('iframe');
@@ -46,6 +60,7 @@
          var links = http(getUrl()).split('\n');
          var body = $("iframe-list");
          var checklist = $("check-list");
+         var tabbar = $("tab-bar");
          for(var i in links) {
              var s = links[i];
              if (!s || s.startsWith('#')) continue;
@@ -53,8 +68,54 @@
              var name = name_and_link[0];
              var link = name_and_link[1] || name;
              var iframe = appendIframe(body);
-             appendIndex(checklist, iframe, name, link);
+             var checkbox = appendIndex(checklist, iframe, name, link);
+             var tab = appendTab(tabbar, name, items.length);
+             items.push({ name: name, link: link, iframe: iframe, checkbox: checkbox, tab: tab });
              setIframeSrc(iframe, link);
+         }
+      }
+      function iframeLoaded(item) {
+         return item.iframe.src && item.iframe.src.endsWith(item.link);
+      }
+      function selectTab(idx) {
+         currentTab = idx;
+         for (var j = 0; j < items.length; j++) {
+             var it = items[j];
+             if (j == idx) {
+                 it.tab.className = 'tab selected';
+                 if (!iframeLoaded(it)) {
+                     setIframeSrc(it.iframe, it.link);  // lazy load; onload sets height
+                 } else {
+                     it.iframe.style.display = 'block';
+                     it.iframe.style.height = frameHeight(it.iframe) + 'px';
+                 }
+             } else {
+                 it.tab.className = 'tab';
+                 it.iframe.style.display = 'none';
+             }
+         }
+      }
+      function setLayout(mode) {
+         var checklist = $("check-list");
+         var tabbar = $("tab-bar");
+         $("btn-flow").style.fontWeight = (mode == 'flow') ? 'bold' : 'normal';
+         $("btn-tab").style.fontWeight = (mode == 'tab') ? 'bold' : 'normal';
+         if (mode == 'tab') {
+             checklist.style.display = 'none';
+             tabbar.style.display = 'block';
+             selectTab(currentTab >= 0 ? currentTab : 0);
+         } else {
+             tabbar.style.display = 'none';
+             checklist.style.display = 'block';
+             for (var j = 0; j < items.length; j++) {
+                 var it = items[j];
+                 if (it.checkbox.checked) {
+                     if (!iframeLoaded(it)) { setIframeSrc(it.iframe, it.link); }
+                     else { it.iframe.style.display = 'block'; }
+                 } else {
+                     it.iframe.style.display = 'none';
+                 }
+             }
          }
       }
       function resize_all() {
@@ -68,6 +129,9 @@
   </head>
   <body onload="initApp()" style="margin:0">
    <div style="float: left"><input type="button" value="resize" style="float: left" onclick="resize_all()"></div>
+   <div style="float: left"><input type="button" id="btn-flow" value="flow" style="float: left; font-weight: bold" onclick="setLayout('flow')">
+   <input type="button" id="btn-tab" value="tab" style="float: left" onclick="setLayout('tab')"></div>
+   <div id="tab-bar"></div>
    <div id="check-list"></div>
    <div id="iframe-list">
   </body>
