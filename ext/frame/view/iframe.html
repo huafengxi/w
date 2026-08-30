@@ -95,7 +95,10 @@
              iframe.style.display = 'none';
              return iframe;
       }
+      // basename of a path (used for the browser tab title)
+      function baseName(p) { var m = String(p).match(/[^/]+$/); return m ? m[0] : p; }
       function initApp(){
+         setWindowTitle(baseName(ARGS.src || window.location.pathname));
          var links = http(getUrl()).split('\n');
          var body = $("iframe-list");
          var checklist = $("check-list");
