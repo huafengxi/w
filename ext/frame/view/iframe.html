@@ -54,7 +54,11 @@
       // flow mode: keep content-adaptive height.
       function applyHeight(iframe) {
          if (layoutMode == 'tab') {
+             // dvh fallback chain: vh first, then dvh (ignored by browsers
+             // without dvh support; on Android Chrome dvh tracks the dynamic
+             // toolbar so the iframe never exceeds the visible viewport).
              iframe.style.height = 'calc(100vh - ' + topBarHeight() + 'px)';
+             iframe.style.height = 'calc(100dvh - ' + topBarHeight() + 'px)';
          } else {
              iframe.style.height = frameHeight(iframe) + 'px';
          }
@@ -112,6 +116,9 @@
          if (layoutMode == 'tab') {
              checklist.style.display = 'none';
              tabbar.style.display = 'block';
+             // tab mode: viewport-fill layout — no whole-page scrolling;
+             // scrolling happens only inside the embedded page.
+             document.body.style.overflow = 'hidden';
              selectTab(currentTab >= 0 ? currentTab : 0);
          }
       }
