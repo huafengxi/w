@@ -554,17 +554,23 @@ function openStream() {
   if (!attached) return;
   streamAlive = true;
   streamCtrl = new AbortController();
+  const my = streamCtrl;                  // 每流身份：本流的 AbortController（任务 0830-1533-56xk）。
+  // 竞态修复：旧版用全局 streamAlive 判存活，stopStream()+openStream() 序列里旧流的
+  // abort reject 进 catch 时 streamAlive 已被新流置回 true → 旧流误判真断线 → 开出并行
+  // 第二流，双流消费同一事件环导致消息重复渲染（Android 锁屏/切后台高频触发）。
+  // 改判本流 signal.aborted：被 abort 的流无论全局状态如何，既不续泵也不重连。
   const url = STREAM + "?session=" + encodeURIComponent(attached)
     + "&since=" + encodeURIComponent(streamCursor || "");
-  fetch(url, {credentials: "same-origin", signal: streamCtrl.signal})
+  fetch(url, {credentials: "same-origin", signal: my.signal})
     .then(resp => {
+      if (my.signal.aborted) return;      // 建流前已被顶替/停止，直接放弃（防孤儿流起跑）
       if (!resp.ok) throw new Error("stream " + resp.status);
       lastStreamAt = Date.now();            // 建流成功（任务 0830-1452-svok）
       const reader = resp.body.getReader();
       const dec = new TextDecoder("utf-8");
       let buf = "";
       const pump = () => reader.read().then(r => {
-        if (!streamAlive) return;
+        if (my.signal.aborted) return;    // 本流已死（被新流顶替/停止），停止泵送（0830-1533-56xk）
         if (r.done) { throw new Error("stream ended"); }
         buf += dec.decode(r.value, {stream: true});
         buf = drainFrames(buf);
@@ -573,8 +579,9 @@ function openStream() {
       return pump();
     })
     .catch(e => {
-      if (!streamAlive) return;           // 主动断开，不重连（重连静默，防刷屏）
-      reconnectTimer = setTimeout(openStream, 1500);
+      if (my.signal.aborted) return;      // 主动 abort（被新流顶替/停止）→ 不重连（防孤儿流，0830-1533-56xk）
+      if (streamCtrl !== my) return;      // 双保险：已不是当前这一代流，无权发起重连（0830-1533-56xk）
+      reconnectTimer = setTimeout(openStream, 1500);   // 真断线，静默重连（防刷屏）
     });
 }
 
