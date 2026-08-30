@@ -204,6 +204,11 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   border: 1px solid var(--line); border-radius: 6px; padding: 8px;
   margin-bottom: 8px; font: inherit; }
 .hidden { display: none !important; }
+/* 回到底部浮钮（任务 0830-1544-q9rr）：非粘底时出现，fixed 浮在输入框上方；
+   ≥44px 命中区（移动端可点），样式与现有面板/按钮口径一致 */
+#toBottomBtn { position: fixed; right: 14px; z-index: 30; min-width: 44px; min-height: 44px;
+  padding: 10px 14px; border-radius: 22px; background: var(--panel2); color: var(--fg);
+  border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,.25); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -219,6 +224,8 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
     </div>
   </main>
 </div>
+
+<button id="toBottomBtn" class="hidden" onclick="backToBottom()">↓ 回到底部</button>
 
 <div id="dialogBox">
   <h4 id="dialogMethod">dialog</h4>
@@ -439,6 +446,7 @@ function applyBaseline(doc, initial) {
   openStream();
   sysLine("Baseline " + (doc.entries || []).length + " entries (active branch "
     + branch.length + ")");
+  stickyBottom = true; scrollStream(true);       // attach/heal 基线落地 → 强制回底并恢复跟随（0830-1544-q9rr）
   sendGetState();                              // 基线完成 → 拉权威模型/思考强度（0830-1257-vwzb）
   sendCtxStats();                              // 基线完成 → 拉上下文占用（0830-1324-3qet）
 }
@@ -534,7 +542,7 @@ async function heal(reason) {
     healFails = 0;
     flash("History refreshed ✓ (" + reason + ")");
     sysLine("Healed (" + reason + ", full baseline refetch)");
-    scrollStream();
+    scrollStream(true);                          // 基线重渲染 → 强制回底（0830-1544-q9rr）
   } catch (e) {
     healFails++;
     sysLine("Heal failed (" + reason + "): " + e.message, "err");
@@ -1285,6 +1293,7 @@ function sendPrompt() {
   // prompt 直发静默登记：不进队列面板（renderQueuedPanel 跳过 prompt 条目），
   // 仅供 handleCmdResponse 的 "already processing" 兜底定位原文重发（0830-1029-urgg）
   sendTracked(cmd);
+  stickyBottom = true; scrollStream(true);       // 用户发送 → 强制回底，看到自己的输入与回复起点（0830-1544-q9rr）
 }
 
 // ---------------- QUEUED 面板（任务 0829-2115-zvti 本地视图 → 0829-2131-pdop 权威接入） ----------------
@@ -1334,7 +1343,7 @@ function renderQueuedPanel() {
 function addPendingSend(id, text, mode) {
   pendingSends[id] = {mode: mode, text: text, rejected: false};
   renderQueuedPanel();
-  scrollStream();
+  scrollStream(true);                            // 用户发送（排队）→ 强制回底（0830-1544-q9rr）
 }
 function resolvePendingByMessage(m) {
   // 送达信号 = 对应 user message 事件：文本相等即认领（模板展开等极端失配时降级为普通渲染）
@@ -1475,7 +1484,7 @@ async function doClear() {
     const doc = await api("attach", {session: attached});   // 空基线重挂接（全量）
     applyBaseline(doc, false);
     if (r.gen !== undefined) lastGen = r.gen;               // 校准新世代，防冗余自愈
-    scrollStream();
+    scrollStream(true);                          // 清空后空基线重挂接 → 强制回底（0830-1544-q9rr）
     flash("Session cleared");
   } catch (e) {
     flash("Clear failed: " + e.message, "err");
@@ -1752,7 +1761,54 @@ function msgText(m) {
     return c.filter(p => p && p.type === "text").map(p => p.text || "").join("\n");
   return "";
 }
-function scrollStream() { const el = $("stream"); el.scrollTop = el.scrollHeight; }
+// ---------------- sticky-bottom 滚动模式（任务 0830-1544-q9rr） ----------------
+// 粘底跟随语义（IM/终端通用范式）：用户在底部时新内容跟随滚动；用户主动上滚即停止
+// 强制拉底并浮出「回到底部」按钮；点浮钮或手动滚回底部恢复跟随。
+// 判定口径：scrollHeight - scrollTop - clientHeight < 40px 视为粘底（容忍移动端误差）。
+// stickyBottom 由 scroll 事件持续更新（程序化置底也触发 → 自动维持）；
+// wheel/touchmove 上滚手势同步置非粘底，防止 scroll 事件到达前先被下一帧拉回。
+let stickyBottom = true;
+function scrollStream(force) {
+  const el = $("stream");
+  if (!force && !stickyBottom) return;     // 非粘底：增量渲染不强制拉底（0830-1544-q9rr）
+  el.scrollTop = el.scrollHeight;
+}
+function updateBottomFab() {
+  const b = $("toBottomBtn");
+  if (!b) return;
+  b.classList.toggle("hidden", stickyBottom);
+  if (!stickyBottom) positionBottomFab();
+}
+function positionBottomFab() {
+  const b = $("toBottomBtn"), bar = $("inputbar");
+  if (!b || !bar) return;
+  const r = bar.getBoundingClientRect();
+  b.style.bottom = Math.max(8, window.innerHeight - r.top + 8) + "px";  // 恒浮于输入框上方
+}
+function backToBottom() {
+  stickyBottom = true;
+  const el = $("stream");
+  el.scrollTop = el.scrollHeight;
+  updateBottomFab();
+}
+(function () {
+  const el = $("stream");
+  const atBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.addEventListener("scroll", () => { stickyBottom = atBottom(); updateBottomFab(); });
+  el.addEventListener("wheel", (e) => {            // 滚轮向上 = 上滚意图 → 立即解除粘底（0830-1544-q9rr）
+    if (e.deltaY < 0) { stickyBottom = false; updateBottomFab(); }
+  }, {passive: true});
+  let touchY = null;
+  el.addEventListener("touchstart", (e) => {
+    touchY = e.touches[0] ? e.touches[0].clientY : null;
+  }, {passive: true});
+  el.addEventListener("touchmove", (e) => {        // 手指下滑 = 内容上滚 → 解除粘底（0830-1544-q9rr）
+    const y = e.touches[0] ? e.touches[0].clientY : null;
+    if (y != null && touchY != null && y > touchY) { stickyBottom = false; updateBottomFab(); }
+    touchY = y;
+  }, {passive: true});
+  window.addEventListener("resize", positionBottomFab);   // 视口/键盘变化时重定位浮钮（0830-1544-q9rr）
+})();
 
 // ---------------- 手机软键盘高度适配（任务 0830-1142-tx6v） ----------------
 // iOS Safari 不支持 interactive-widget=resizes-content（键盘弹出为覆盖而非收缩），
@@ -1772,7 +1828,8 @@ function scrollStream() { const el = $("stream"); el.scrollTop = el.scrollHeight
       if (layout.style.height) layout.style.height = "";
     } else {                                          // 键盘弹出：压到可见高度
       layout.style.height = h + "px";
-      scrollStream();                                 // 最新消息回到视野（幂等）
+      scrollStream(true);                              // 键盘弹出保持既有行为：最新消息回到视野（0830-1544-q9rr）
+      positionBottomFab();                             // 布局高度变化 → 浮钮重定位（0830-1544-q9rr）
     }
   };
   vv.addEventListener("resize", fit);
