@@ -1320,15 +1320,12 @@ async function sendTracked(cmd) {
     if (p) { p.rejected = true; renderQueuedPanel(); }
   }
 }
-// 进程级 reload：确认后经 op=reload 杀会话进程并从 session.jsonl resume 重拉
+// 进程级 reload：直接经 op=reload 杀会话进程并从 session.jsonl resume 重拉（用户拍板
+// 去二次确认，任务 0830-1132-7yh5：/reload 直接执行，不再弹 window.confirm，与 /clear 同口径）。
 // （干净进程 = extension 全新加载）。重连由现有缺口/自愈机器承接：
 // 监督员广播 session_restarting(reload)/session_restarted(gen+1) → gen 变化 → 基线自愈。
 async function doReload() {
   if (!attached) { sysLine("Not attached to a session, cannot reload", "err"); return; }
-  const ok = window.confirm("Reload session " + attached + "?\n"
-    + "The session process will be killed and resumed from session.jsonl (extension changes take effect);\n"
-    + "the in-flight turn is lost, conversation history is kept.");
-  if (!ok) return;
   flash("Session reloading…");
   sysLine("Reloading session " + attached + ": kill + resume…");
   try {
