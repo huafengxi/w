@@ -4,5 +4,6 @@
 /dav  WebDav dav.env
 /report    Cmd w/ext/report/bin/lookup.py templates
 /api/agentd-report Cmd python3 w/ext/agentd/bin/agentd-report.py
+/api/svc Cmd python3 w/ext/svc/bin/svc-status.py
 /sessiond	Dir	w/ext/sessiond
 /	Dir	.
