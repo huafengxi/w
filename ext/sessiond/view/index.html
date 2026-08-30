@@ -1151,7 +1151,12 @@ async function replyDialog(fields) {
   try {
     await api("cmd", {session: attached, cmd: JSON.stringify(cmd)});
     closeDialog(id, "answered");
-  } catch (e) { sysLine("Dialog reply failed: " + e.message, "err"); }
+  } catch (e) {
+    // 0830-1104-eji4：服务端报错（如 'no pending dialog'）= 对端已结算，
+    // 本地关框才是正确语义；原来只在 try 内关框 → 非应答端 Cancel 永久卡死。
+    sysLine("Dialog reply failed: " + e.message + " — closing locally (already settled)", "err");
+    closeDialog(id, "settled");
+  }
 }
 function castId(id) { const o = pendingDialogs[id]; return o ? o.id : id; }
 function closeDialog(id, note) {
