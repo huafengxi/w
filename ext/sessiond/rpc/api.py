@@ -5,7 +5,6 @@
 # （ext/sessiond/proc.py）直接监督，无管理面：
 #   op=status  该会话状态（state/pid/gen/restarts/cwd/session_file）
 #   op=attach  建桥 + 经 pi rpc get_entries 返回消息基线（全量）
-#   op=entries 增量补发（since=entry id 游标，success:false 自动回退全量并置 gap）
 #   op=cmd     上行单条 pi 命令
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→删 jsonl→立即重拉，
@@ -32,8 +31,8 @@ def _bridge_or_err(session):
         return None, _j({"ok": False, "error": str(e)}, '400 Bad Request')
 
 
-def _baseline_doc(b, r, gap=False):
-    """把 get_entries 结果整理成基线/增量响应文档。
+def _baseline_doc(b, r):
+    """把 get_entries 结果整理成基线响应文档。
     附 pendingDialogs（0830-0956-vk20 bug2）：尚悬空的 extension_ui_request
     请求体——extension UI 请求不在会话 entries 里，前端刷新/重连后仅凭基线
     无法重建 pending dialog，由后端权威补发。"""
@@ -42,15 +41,14 @@ def _baseline_doc(b, r, gap=False):
         return None
     data = resp.get("data") or {}
     entries = data.get("entries") or []
-    return {"ok": True, "session": b.session, "gap": gap,
+    return {"ok": True, "session": b.session,
             "gen": r.get("gen"), "entries": entries,
             "pendingDialogs": b.pending_dialog_list(),
             "leafId": data.get("leafId"),
-            "entryCursor": entries[-1].get("id") if entries else None,
             "watermark": r.get("watermark")}
 
 
-def interp(store, op='', session='', cmd='', since='', **kw):
+def interp(store, op='', session='', cmd='', **kw):
     b, err = _bridge_or_err(session)
     if err:
         return err
@@ -63,23 +61,6 @@ def interp(store, op='', session='', cmd='', since='', **kw):
                        "error": "baseline failed: %s" % r["error"]},
                       '504 Gateway Timeout')
         doc = _baseline_doc(b, r)
-        if doc is None:
-            return _j({"ok": False, "session": b.session,
-                       "error": "get_entries rejected: %s"
-                       % (r["resp"].get("error") or "?")}, '502 Bad Gateway')
-        return _j(doc)
-    if op == 'entries':
-        r = b.get_entries(since=since or None)   # 增量（带 entry id 游标）
-        gap = False
-        if r["ok"] and not r["resp"].get("success"):
-            # since 不匹配任何 entry（原生 gap 信号）→ 自动回退全量重拉
-            gap = True
-            r = b.get_entries()
-        if not r["ok"]:
-            return _j({"ok": False, "session": b.session,
-                       "error": "entries failed: %s" % r["error"]},
-                      '504 Gateway Timeout')
-        doc = _baseline_doc(b, r, gap=gap)
         if doc is None:
             return _j({"ok": False, "session": b.session,
                        "error": "get_entries rejected: %s"

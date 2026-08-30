@@ -9,7 +9,7 @@ socket）。首次访问某路径时创建并拉起会话进程，之后复用�
 
 事件 ID 游标与基线口径沿用（0829-1609-8dwt，原见 sessiond/PROTOCOL.md §6）：
   - 实时流游标 = 桥接分配的不透明事件 ID `<ns>:<seq>`（环内稳定）。
-  - 完整历史基线 = 经 pi rpc `get_entries`（since=entry id 游标）；
+  - 完整历史基线 = 经 pi rpc `get_entries`（全量）；
     `get_entries()` 发命令并等待配对响应（监督员单写者，id 原样往返）。
     响应行照常入环但瘦身（entries 列表替换为条数），避免巨型 SSE 负载。
 
@@ -200,8 +200,8 @@ class Bridge:
 
     # ---- 基线：get_entries ----
 
-    def get_entries(self, since=None, timeout=ENTRIES_TIMEOUT):
-        """发 pi rpc get_entries 并等待配对响应。
+    def get_entries(self, timeout=ENTRIES_TIMEOUT):
+        """发 pi rpc get_entries（全量）并等待配对响应。
 
         返回 {"ok": True, "resp": <pi response>, "watermark": <响应行 eid>,
         "gen": <会话进程世代>}；失败返回 {"ok": False, "error": ...}。
@@ -217,8 +217,6 @@ class Bridge:
             waiter = {"event": threading.Event(), "resp": None}
             self.pending[rid] = waiter
         cmd = {"type": "get_entries", "id": rid}
-        if since:
-            cmd["since"] = since
         if not self.sup.send(cmd):
             with self.lock:
                 self.pending.pop(rid, None)

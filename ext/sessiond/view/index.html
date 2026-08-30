@@ -271,7 +271,6 @@ let lastGen = null;           // 会话进程世代（gen 变化检测 → 基�
 let curLeafId = null;         // 活跃分支叶
 let curProvider = null;       // 当前模型 provider/modelId（model_change 跟踪，/model 用）
 let curModelId = null;
-let entryCursor = null;       // 最后 entry id（增量游标）
 let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
 let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
 let toolBlocks = {};          // toolCallId -> 折叠块引用
@@ -399,7 +398,6 @@ async function attach(name) {
 function applyBaseline(doc, initial) {
   lastGen = doc.gen !== undefined ? doc.gen : lastGen;
   curLeafId = doc.leafId || null;
-  entryCursor = doc.entryCursor || null;
   const branch = activeBranch(doc.entries || [], curLeafId);
   if (!initial) {
     $("stream").innerHTML = "";

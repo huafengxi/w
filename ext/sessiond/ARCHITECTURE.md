@@ -30,7 +30,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
    浏览器             │  view/index.html（单文件前端：渲染 + 自愈 + 上行）                             │
    ┌──────────┐      │        │                                            ▲                        │
    │ 用户输入  │──────┼──────▶ │  fetch POST /sessiond/rpc/api.py           │                        │
-   │ (prompt/  │      │        │    op=status/attach/entries/cmd/           │ SSE 帧                 │
+   │ (prompt/  │      │        │    op=status/attach/cmd/                   │ SSE 帧                 │
    │  斜杠…)   │      │        │       reload/clear                         │ id:+data:              │
    └──────────┘      │        ▼                                            │ (`: ping` 保活)         │
         ▲            │   ┌──────────┐   send(cmd)/get_entries()   ┌────────────────┐                │
@@ -62,7 +62,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 ```
 
 - **下行**：pi stdout JSON 行 → `proc.py:_read_stdout` → `bridge.py:_ingest` 入环 → `stream.py` SSE 帧 → 前端 `drainFrames` → 渲染。
-- **基线**：前端 `op=attach/entries` → `bridge.py:get_entries` 发 `{type:"get_entries"}` 并等配对响应（完整历史来自 jsonl，而非事件环）。
+- **基线**：前端 `op=attach` → `bridge.py:get_entries` 发 `{type:"get_entries"}` 并等配对响应（完整历史来自 jsonl，而非事件环）。
 - **上行**：前端 `op=cmd` → `bridge.py:send` → 监督员单写者串行写入子进程 stdin。
 
 ---
@@ -121,7 +121,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 ### 上行与基线
 
 - `bridge.py:send(cmd_obj)`：命令拦截面 `BLOCKED_COMMANDS = {switch_session, set_session_name}`（会改绑 session_file/会话名，使监督登记失准）→ 返回错误串；`extension_ui_response` 校验必须有对应悬空 `pending_dialogs` id，否则拒绝并返回错误串，放行且转发成功后广播 `sessiond.dialog_resolved` 结算帧（§11.4 发射时机表）；`abort` 特殊处理：把所有悬空 dialog 以 `cancelled` 代答（pi rpc dialog 是裸 Promise，`session.abort()` 触不到，不代答则回合永久阻塞），先发 abort 再串行发代答，并广播 `cancelled:true` 结算帧。应答/代答/`abort` 前均顺带清扫超时 dialog。
-- `bridge.py:get_entries(since=None, timeout=ENTRIES_TIMEOUT=20s)`：`ensure_started` + `wait_ready` → 发 `{type:"get_entries", id:"wbge-…" [, since]}` → 等配对响应行（响应行的事件 ID = `watermark` 水位）。超时/不就位/不可写均返回 `{ok: False, error}`。
+- `bridge.py:get_entries(timeout=ENTRIES_TIMEOUT=20s)`：`ensure_started` + `wait_ready` → 发 `{type:"get_entries", id:"wbge-…"}` → 等配对响应行（响应行的事件 ID = `watermark` 水位）。超时/不就位/不可写均返回 `{ok: False, error}`。
 
 ---
 
@@ -132,14 +132,13 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | op | 参数 | 成功响应（关键字段） | 语义与副作用 | 错误 |
 |---|---|---|---|---|
 | `status` | — | `{ok, session, state, pid, gen, restarts, disabled, session_file, cwd}` | 只读查询监督员状态（`proc.py:status_doc`），无副作用 | 400 session 缺失/非法 |
-| `attach` | — | `{ok, session, gap, gen, entries, pendingDialogs, leafId, entryCursor, watermark}` | **全量基线**：`get_entries()` 无 since；顺带下发悬空 dialog 快照（`pendingDialogs`）。`entryCursor` = 末条 entry id | 504 `get_entries` 超时/不就位；502 pi 拒绝（`success:false`） |
-| `entries` | `since`（entry id 游标，可空） | 同 `attach`，且 `gap` 可置 `true` | **增量补发**；pi 返回 `success:false`（since 不匹配任何 entry，原生 gap 信号）→ **自动回退全量重拉并置 `gap:true`** | 同 `attach` |
+| `attach` | — | `{ok, session, gen, entries, pendingDialogs, leafId, watermark}` | **全量基线**：`get_entries()`；顺带下发悬空 dialog 快照（`pendingDialogs`） | 504 `get_entries` 超时/不就位；502 pi 拒绝（`success:false`） |
 | `cmd` | `cmd`（JSON 字符串，须为含 `type` 的对象） | `{ok: true}` | 上行单条 pi 命令，经 `bridge.py:send`；被拦截/无悬空 dialog/stdin 不可写 → 403 | 400 JSON 解析失败或非对象/无 type；403 `send` 返回错误 |
 | `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时） | 502 重拉超时等失败 |
 | `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因） | 502 失败（含删文件失败） |
 | 未知 | — | — | — | 400 `unknown op` |
 
-响应形状统一由 `api.py:_baseline_doc` 整理（attach/entries 共用）；`watermark` = get_entries 响应行的事件环 ID，前端用它作为续流游标。
+attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries 响应行的事件环 ID，前端用它作为续流游标。
 
 ## 5. 后端 API：事件流 `rpc/stream.py`（SSE）
 
@@ -237,7 +236,7 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 | `streamCursor` / `lastEidNum` | 最后收到的事件 ID（`<ns>:<seq>`）= 续流游标 / 其数字部分（本地连续性检查） |
 | `streamAlive` / `streamCtrl` / `reconnectTimer` | 流存活标志 / AbortController / 1.5s 重连定时器 |
 | `lastGen` | 会话进程世代；`session_restarted` 且 gen 变化 → 基线自愈 |
-| `curLeafId` / `entryCursor` / `seenEntryIds` | 活跃分支叶 / 最后 entry id / 已渲染 entry 幂等集 |
+| `curLeafId` / `seenEntryIds` | 活跃分支叶 / 已渲染 entry 幂等集 |
 | `seenToolIds` / `toolBlocks` | 已渲染 toolCallId 集（基线 `r:` 前缀表结果侧，与实时事件互斥）/ toolCallId→折叠块句柄 |
 | `turnGroup` / `lastProcessGroup` | 当前回合的过程组引用（user `message_start` 重置）/ 孤儿工具帧的兜底挂点（指向同一组） |
 | `curAssistantEl` / `curAssistantBuf` / `mdRenderTimer` | 当前流式 assistant 节点 / 累积文本 / 150ms 节流渲染定时器 |
