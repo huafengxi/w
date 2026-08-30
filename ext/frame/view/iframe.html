@@ -22,7 +22,17 @@
          }
          return m == 'tab' ? 'tab' : 'flow';
       })();
-      function getUrl() { return window.location.href.replace(/v=(iframe|iflow|itab)/, ''); }
+      // Prefer the server-authoritative ARGS.src (original path injected by the
+      // vmap view). With extension-default views (e.g. .itab → tab) re-fetching
+      // location would return this view's HTML instead of the raw list, so fetch
+      // the raw source via v=read (no 'read' key in vmap → falls back to the real
+      // mime → raw passthrough). Fall back to stripping v= from location.
+      function getUrl() {
+         if (ARGS.src) {
+             return ARGS.src + (ARGS.src.indexOf('?') >= 0 ? '&' : '?') + 'v=read';
+         }
+         return window.location.href.replace(/v=(iframe|iflow|itab)/, '');
+      }
       function switchView() {  // cross-view jump: swap v between iflow and itab, keep other params
          var url = new URL(window.location.href);
          url.searchParams.set('v', layoutMode == 'tab' ? 'iflow' : 'itab');
