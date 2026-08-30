@@ -122,6 +122,15 @@
              // tab mode: viewport-fill layout — no whole-page scrolling;
              // scrolling happens only inside the embedded page.
              document.body.style.overflow = 'hidden';
+             // fullscreen button floats right; insert before tabs so inline tabs
+             // flow into the remaining left space
+             var fsBtn = document.createElement('div');
+             fsBtn.id = 'fs-toggle';
+             fsBtn.className = 'tab';
+             fsBtn.style.cssFloat = 'right';
+             fsBtn.textContent = '⛶';
+             fsBtn.onclick = toggleFullscreen;
+             tabbar.insertBefore(fsBtn, tabbar.firstChild);
              selectTab(currentTab >= 0 ? currentTab : 0);
          }
       }
@@ -159,6 +168,25 @@
              if (it.iframe.style.height != h) { it.iframe.style.height = h; }
          }
       }
+      // fullscreen toggle (tab mode): Android Chrome has no browser-level
+      // fullscreen switch; the only path is the Fullscreen API, which must be
+      // triggered synchronously from a user gesture (no setTimeout).
+      function toggleFullscreen() {
+         try {
+             if (document.fullscreenElement) {
+                 document.exitFullscreen();
+             } else {
+                 var p = document.documentElement.requestFullscreen();
+                 if (p && p.catch) p.catch(function () {});  // silent degrade
+             }
+         } catch (e) { /* unsupported browser: silent degrade */ }
+      }
+      document.addEventListener('fullscreenchange', function () {
+         var btn = $('fs-toggle');
+         if (btn) btn.textContent = document.fullscreenElement ? '✕' : '⛶';
+         // dvh shifts when the status bar hides; recompute the visible iframe
+         if (layoutMode == 'tab' && items[currentTab]) applyHeight(items[currentTab].iframe);
+      });
       // window resize → embedded pages reflow → heights go stale (debounced)
       var resizeTimer = null;
       window.addEventListener('resize', function () {
