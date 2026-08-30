@@ -5,8 +5,9 @@
 # + events/*.ev（逐次一文件的变迁记录）。本端点只读，绝不写 agents/ 树。
 #   op=list（默认）  全部票的摘要数组：未终结在前，各按 updatedAt 倒序；
 #                    附最近一条 event 摘要（有则给）
-#   op=detail&id=<票 id>  单票全量：ticket.json + status.json + 全部 events
-#                         （按 ts 升序），供前端展开时间线
+#   op=detail&id=<票 id>  单票全量：ticket.json（含 body 开题正文）+ status.json +
+#                         全部 events（按 ts 升序）+ inbox/*.msg 消息信封列表（含
+#                         unresolvedAsk 标记）+ epic 的 context.md，供前端展开详情
 # 健壮性：单个文件缺失/损坏只跳过该字段或该票，不抛错；目录整体不可读则
 # 整票跳过。鉴权由 w 全局 BasicAuth 承担；id 白名单校验防路径穿越。
 import re
@@ -17,6 +18,7 @@ WS = _os.path.expanduser("~/m")
 AGENTS_DIR = _os.path.realpath(_os.path.join(WS, "agents"))
 _ID_RE = re.compile(r"^(ticket|epic)\.[A-Za-z0-9._-]+$")
 _TERMINAL = ("resolved", "cancelled")
+_CONTEXT_MAX = 100 * 1024   # context.md 超此大小截断
 
 
 def _j(obj, status="200 OK"):
@@ -51,6 +53,44 @@ def _load_events(ev_dir):
     return out
 
 
+def _load_inbox(inbox_dir):
+    """inbox/*.msg 信封逐个解析（id/from/ts/type/ref/body），损坏文件跳过；
+    忽略 inbox/ack/ 子目录与非 .msg 文件；按 (ts, 文件名) 升序；
+    type=ask 且 inbox 中不存在 ref 回引该 ask id 的 reply 信封 → unresolvedAsk。"""
+    msgs = []
+    try:
+        names = sorted(os.listdir(inbox_dir))
+    except OSError:
+        return msgs
+    for name in names:
+        if not name.endswith(".msg"):
+            continue
+        p = os.path.join(inbox_dir, name)
+        if not os.path.isfile(p):   # ack/ 是目录，防御性跳过非普通文件
+            continue
+        m = _load_json(p)
+        if isinstance(m, dict):
+            m.setdefault("_file", name)
+            msgs.append(m)
+    msgs.sort(key=lambda m: (m.get("ts") or "", m.get("_file") or ""))
+    replied = {m.get("ref") for m in msgs if m.get("type") == "reply" and m.get("ref")}
+    for m in msgs:
+        if m.get("type") == "ask":
+            m["unresolvedAsk"] = m.get("id") not in replied
+    return msgs
+
+
+def _load_context(path):
+    """读 context.md 全文；缺失返回 None；超 _CONTEXT_MAX 截断并标注。只读。"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(_CONTEXT_MAX + 1)
+    except OSError:
+        return None
+    truncated = len(data) > _CONTEXT_MAX
+    return data.decode("utf-8", "replace")[:_CONTEXT_MAX], truncated
+
+
 def _scan_one(d):
     """解析单个 ticket.*/epic.* 目录；ticket.json 缺失/非 dict 则返回 None（跳过）。"""
     ticket = _load_json(os.path.join(d, "ticket.json"))
@@ -73,6 +113,7 @@ def _scan_one(d):
         "updatedAt": status.get("updatedAt") or "",
         "updatedBy": status.get("updatedBy") or "",
         "parent": ticket.get("parent"),
+        "body": ticket.get("body") or "",
         "refs": ticket.get("refs") or [],
         "tasks": status.get("tasks") or [],
         "tickets": status.get("tickets") or [],
@@ -102,6 +143,7 @@ def _list_tickets():
             continue
         item = _scan_one(d)
         if item is not None:
+            item.pop("body", None)   # list 摘要不带正文，避免轮询载荷膨胀
             out.append(item)
     # 未终结（非 resolved/cancelled）在前；各组内按 updatedAt 倒序
     # （ISO 时间串字典序 = 时间序；缺失视为最旧排组内最后）
@@ -130,6 +172,11 @@ def _detail(ticket_id):
         return None, _j({"ok": False, "error": "ticket unreadable: %r" % (ticket_id,)},
                         "404 Not Found")
     item["events"] = _load_events(os.path.join(d, "events"))
+    item["inbox"] = _load_inbox(os.path.join(d, "inbox"))
+    if item.get("kind") == "epic":
+        ctx = _load_context(os.path.join(d, "context.md"))
+        if ctx is not None:
+            item["context"], item["contextTruncated"] = ctx
     return item, None
 
 
