@@ -61,7 +61,6 @@ def set_logging(log_file=''):
 
 from core.wsgi import run_wsgi, make_wsgi_app
 from core.handler import Handler
-from core.live_api import api_handler
 from stores.store import build_root_store
 
 def main():
@@ -79,7 +78,7 @@ def main():
     set_logging(log_file)
     root = build_root_store('w/stores/fstab')
     handler = Handler(root).handle_req
-    app = make_wsgi_app([api_handler, handler])
+    app = make_wsgi_app([handler])
     logging.info("listen at: %s", listen_addr)
     host_port = listen_addr.split(':')
     if len(host_port) == 2:
