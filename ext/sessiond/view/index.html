@@ -418,7 +418,7 @@ function applyBaseline(doc, initial) {
   lastEidNum = eidNum(streamCursor);
   openStream();
   sysLine("Baseline " + (doc.entries || []).length + " entries (active branch "
-    + branch.length + (doc.gap ? ", gap → full refetch" : "") + ")");
+    + branch.length + ")");
 }
 
 // 活跃分支：从 leafId 沿 parentId 走回根（含 pre-compaction 链）
@@ -506,7 +506,7 @@ async function heal(reason) {
   stopStream();
   flash("Refreshing history… (" + reason + ")");
   try {
-    const doc = await api("attach", {session: attached});   // 全量基线（含 gap 语义）
+    const doc = await api("attach", {session: attached});   // 全量基线
     applyBaseline(doc, false);
     healFails = 0;
     flash("History refreshed ✓ (" + reason + ")");

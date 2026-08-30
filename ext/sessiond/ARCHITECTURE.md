@@ -268,6 +268,8 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 
 `heal()`（`index.html:heal`）：`healBusy` 互斥 → 停流 → `op=attach` 全量基线 → `applyBaseline(doc, false)` **清屏全量重渲染**（页面级策略：消息对象无稳定 id，全量重渲染是无重复的构造性保证；基线组默认折叠、`pendingDialogs` 逐个重建对话框）→ 以 `watermark` 为新游标 `openStream`。失败 2s 后重试，累计 5 次耗尽后提示手动刷新。
 
+**已知边界**：`watermark` 取 get_entries 响应行入环时刻。若 attach 发生在回合进行中，响应行之前入环的在途增量（message_update delta/工具 partialResult）不在 jsonl 基线内、又位于 watermark 之前，新订阅者看不到——表现即在途消息从半截开始显示；由收尾帧全量语义自愈（message_end 最终全文渲染、tool_execution_end 带完整 result）。
+
 基线渲染时活跃分支重建：从 `leafId` 沿 `parentId` 走回根（含 pre-compaction 链），`entry` 幂等集去重；基线中的工具结果（`toolResult`）并入对应工具块，无实时事件故耗时用消息时间戳近似。
 
 ---
