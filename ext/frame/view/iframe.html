@@ -63,8 +63,19 @@
              iframe.style.height = frameHeight(iframe) + 'px';
          }
       }
-      var items = [];        // {name, link, iframe, checkbox, tab}
+      var items = [];        // {name, link, iframe, checkbox, tab, refreshSec, nextRefresh}
       var currentTab = -1;   // last selected tab index in tab layout
+      // Per-row auto-refresh（任务 0830-1829-xfxl：type=script 直服形态下内容视图
+      // 无自轮询，容器统一承担刷新职责）：行内 URL 带 ?refresh=N/&refresh=N 时，
+      // 容器每 N 秒重载该行 iframe（?t= 缓存破坏；服务端忽略未知参数）；
+      // 页面隐藏时暂停；无参数行不受影响。
+      function refreshSecOf(link) {
+         var m = String(link).match(/[?&]refresh=(\d+)/);
+         return m ? parseInt(m[1], 10) : 0;
+      }
+      function reloadSrc(link) {
+         return link + (link.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
+      }
       function appendIndex(checklist, iframe, name, link) {
              var div = document.createElement('div');
              checklist.appendChild(div)
@@ -112,7 +123,7 @@
              var iframe = appendIframe(body);
              var checkbox = appendIndex(checklist, iframe, name, link);
              var tab = appendTab(tabbar, name, items.length);
-             items.push({ name: name, link: link, iframe: iframe, checkbox: checkbox, tab: tab });
+             items.push({ name: name, link: link, iframe: iframe, checkbox: checkbox, tab: tab, refreshSec: refreshSecOf(link), nextRefresh: 0 });
              setIframeSrc(iframe, link);
          }
          // single-shot layout init by route mode (replaces the old runtime switch)
@@ -135,7 +146,9 @@
          }
       }
       function iframeLoaded(item) {
-         return item.iframe.src && item.iframe.src.endsWith(item.link);
+         // indexOf (not endsWith): container-level refresh appends a ?t=<ts>
+         // cache-buster to the src, so the abs URL no longer ends with the link
+         return item.iframe.src && item.iframe.src.indexOf(item.link) >= 0;
       }
       function selectTab(idx) {
          currentTab = idx;
@@ -195,6 +208,24 @@
       });
       // poll for async content growth (lazy load, fold/expand, late render)
       setInterval(refitFlow, 2000);
+      // container-level per-row refresh: reload each row's iframe on its own
+      // cadence (only rows whose link carries refresh=N)
+      function refreshAll() {
+         if (document.hidden) return; // paused while page hidden; resumes next tick
+         var now = Date.now();
+         for (var j = 0; j < items.length; j++) {
+             var it = items[j];
+             if (it.refreshSec <= 0 || !iframeLoaded(it)) continue;
+             if (it.iframe.style.display == 'none') {
+                it.nextRefresh = now + it.refreshSec * 1000; // hidden: reschedule, no fetch
+                continue;
+             }
+             if (now < it.nextRefresh) continue;
+             it.nextRefresh = now + it.refreshSec * 1000;
+             it.iframe.src = reloadSrc(it.link);
+         }
+      }
+      setInterval(refreshAll, 1000);
     </script>
   </head>
   <body onload="initApp()" style="margin:0">
