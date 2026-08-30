@@ -65,8 +65,8 @@ details summary::-webkit-details-marker { display: none; }
 .process-group summary .pg-arrow { display: inline-block; font-size: 10px;
   transition: transform .15s; }
 .process-group[open] summary .pg-arrow { transform: rotate(90deg); }
-.process-group .pg-body { margin: 2px 0 2px 3px; padding-left: 10px;
-  border-left: 2px solid var(--line); }
+/* 展开内容区无左侧竖线与左缩进（0830-1124-ysiy：Android 窄屏回收横向空间） */
+.process-group .pg-body { margin: 2px 0; }
 /* thinking 块（对齐 pi-web 观感，任务 0829-2107-cvdn；0829-2228-zq1t inbox thnk：
    展开后内容区参考工具调用色块样式——柔和底色块撑满、与标题行无缝贴合，
    同 5nnk 口径：相接处直角、无左右空隙；收起时仍是干净标题行盒子）：
