@@ -33,11 +33,6 @@
          }
          return window.location.href.replace(/v=(iframe|iflow|itab)/, '');
       }
-      function switchView() {  // cross-view jump: swap v between iflow and itab, keep other params
-         var url = new URL(window.location.href);
-         url.searchParams.set('v', layoutMode == 'tab' ? 'iflow' : 'itab');
-         window.location.href = url.href;
-      }
       function setIframeSrc(iframe, src) {
          if (!iframe.src.endsWith(src)) { iframe.src = src; }
          iframe.style.display = 'block';
@@ -119,7 +114,6 @@
              tabbar.style.display = 'block';
              selectTab(currentTab >= 0 ? currentTab : 0);
          }
-         $('btn-switch').value = layoutMode == 'tab' ? '→ flow' : '→ tab';
       }
       function iframeLoaded(item) {
          return item.iframe.src && item.iframe.src.endsWith(item.link);
@@ -166,7 +160,6 @@
     </script>
   </head>
   <body onload="initApp()" style="margin:0">
-   <div style="float: left"><input type="button" id="btn-switch" value="→ tab" style="float: left" onclick="switchView()"></div>
    <div id="tab-bar"></div>
    <div id="check-list"></div>
    <div id="iframe-list">
