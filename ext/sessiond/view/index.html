@@ -70,8 +70,8 @@ details summary::-webkit-details-marker { display: none; }
 /* thinking 块（对齐 pi-web 观感，任务 0829-2107-cvdn；0829-2228-zq1t inbox thnk：
    展开后内容区参考工具调用色块样式——柔和底色块撑满、与标题行无缝贴合，
    同 5nnk 口径：相接处直角、无左右空隙；收起时仍是干净标题行盒子）：
-   圆角边框盒子 + 顶部 Thinking 标题行，无三角（上方全局已去）、无字数；
-   点标题行展开/收起，默认折叠 */
+   圆角边框盒子 + 顶部 Thinking 标题行，无三角（上方全局已去）；处理中与完成后
+   标题行均显示累计字数（Thinking · N 字，0830-1125-n4hl）；点标题行展开/收起，默认折叠 */
 .thinking-block { margin: 4px 0; border: 1px solid var(--line); border-radius: 8px;
   background: var(--panel); overflow: hidden; }
 .thinking-block summary { color: var(--dim); font-size: 12px; cursor: pointer;
@@ -688,20 +688,23 @@ function renderEvent(o) {
       scheduleMdRender();                               // 渐进 markdown（节流，每次过消毒）
     } else if (ev.type === "thinking_delta") {
       // thinking 实时流：并入默认折叠块，块本身挂入 turn 级组容器（处理中 → 组展开）
-      // 标题固定 Thinking（pi-web 口径，无字数）
+      // 标题行随 delta 累计显示字数：Thinking · N 字（0830-1125-n4hl）
       let th = curAssistantEl._think;
       if (!th) {
         const d = document.createElement("details");    // 无 open = 默认折叠（块级折叠行为不变）
         d.className = "thinking-block";
         const s = document.createElement("summary");
         s.textContent = "Thinking";
+        const cnt = document.createElement("span");     // 独立计数 span，避免每次重设整串（0830-1125-n4hl）
+        s.appendChild(cnt);
         const pre = document.createElement("pre");
         d.appendChild(s); d.appendChild(pre);
         grpAddBlock(processGroup(true), d, false);      // 0830-1039-a6vy；turn 粒度 = 0830-1047-ehzc
-        th = curAssistantEl._think = {pre: pre, buf: ""};
+        th = curAssistantEl._think = {pre: pre, buf: "", cnt: cnt};
       }
       th.buf += ev.delta || "";
       th.pre.textContent = th.buf;
+      th.cnt.textContent = " · " + fmtThinkingCount(th.buf.length) + " 字";  // 累计字数感知进度（0830-1125-n4hl）
     } else if (ev.type === "toolcall_end") {
       const tc = ev.toolCall || {};
       if (tc.id) {
@@ -859,11 +862,21 @@ function hideWaiting() {
 }
 
 // ---------------- thinking/工具调用折叠块 ----------------
+// thinking 累计字数格式化（0830-1125-n4hl）：<1000 直接显示；≥1000 显示 x.xk（去尾 .0）。
+// 流式处理中与基线/回放结束态共用，保证两处格式一致。
+function fmtThinkingCount(n) {
+  if (n < 1000) return String(n);
+  const k = (n / 1000).toFixed(1);
+  return (k.endsWith(".0") ? k.slice(0, -2) : k) + "k";
+}
 function thinkingDetails(text) {
   const d = document.createElement("details");          // 无 open = 默认折叠
   d.className = "thinking-block";
   const s = document.createElement("summary");
-  s.textContent = "Thinking";                           // pi-web 口径：仅标题，无字数提示
+  s.textContent = "Thinking";                           // 标题 + 最终字数，与流式结束态同格式（0830-1125-n4hl）
+  const cnt = document.createElement("span");
+  cnt.textContent = " · " + fmtThinkingCount(text.length) + " 字";
+  s.appendChild(cnt);
   const pre = document.createElement("pre");
   pre.textContent = text;
   d.appendChild(s); d.appendChild(pre);
