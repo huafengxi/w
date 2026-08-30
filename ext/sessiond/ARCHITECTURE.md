@@ -219,7 +219,7 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 
 | 元素 | 说明 |
 |---|---|
-| 提示音（无图形控件） | WebAudio 合成 beep：`done` 双音上行（仅 `agent_settled`）、`notify` 单音（页签后台时新 `message_start` 且 `!turnActive`、`sessiond.error`、`extension_ui_request`）；300ms 节流；首次用户手势才解锁（未解锁静默跳过）；开关仅 `/sound [on|off]`，**默认开、无 UI 开关** |
+| 提示音（无图形控件） | WebAudio 合成 beep：`done` 双音上行（仅 `agent_settled`）、`notify` 单音（页签后台时新 `message_start` 且 `!turnActive`、`sessiond.error`、`extension_ui_request`）；300ms 节流；首次用户手势才解锁（未解锁静默跳过）；开关仅 `/sound [on\|off]`，**默认开、无 UI 开关** |
 | `pendingSends` 中 `mode:"prompt"` 条目 | prompt 直发的**静默登记**：不进 QUEUED 面板（`renderQueuedPanel` 跳过），仅供 "already processing" 兜底定位原文重发；属界面状态机的一部分 |
 | `.mdtext` 子容器 | assistant 块内 markdown 专用子容器（`mdDiv`），重渲染不擦除 thinking/工具子节点 |
 | `curAssistantEl._think` | 流式 thinking 块句柄挂在当前 assistant 元素上（懒创建） |
