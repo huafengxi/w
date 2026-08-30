@@ -603,9 +603,15 @@ function handleEvent(o) {
     if (pendingDialogs[o.id]) closeDialog(o.id, "answered");
     return;
   }
-  // 提示音触发（任务 0829-2103-dpe4；done 音收口 = 0830-0925-jv9f）：
+  // 提示音触发（任务 0829-2103-dpe4；done 音收口 = 0830-0925-jv9f；
+  // message_start 降噪 = 0830-1036-8p9g）：
   // ② 后台收到新注入的消息/通知类事件 → notify 音（message_start 新消息、
   //    sessiond.error 通知、extension_ui_request 待用户应答的 dialog）；
+  //    message_start 仅在 !turnActive 时响：回合内每次工具调用后模型续写会开新
+  //    assistant message（即每个子回合都有 message_start），turnActive=true 时属
+  //    回合内续写 → 静默，避免后台每个工具调用都响一声。判定先于下方 renderEvent，
+  //    而 turnActive 在 renderEvent 里收到 user message_start 时才置 true，故回合
+  //    起点的首个 message_start 仍会响一声（整个回合的起点，属预期）；
   // ① 整个处理完成 → done 音：只在 agent_settled 响（agent 运行彻底落定：
   //    无自动重试、无 compaction、无队列续跑，会话回到等待用户输入终态）。
   //    旧版在 turn_end/agent_end 都响 → 带工具调用的回合每轮都响，太吵。
@@ -613,8 +619,8 @@ function handleEvent(o) {
   //    agent_settled x1；agent_settled 由 pi agent-session finally 保证发出，
   //    rpc 模式经 toJsonEvent 原样透传到本流（事件本身按 side 分类不渲染，
   //    声音是它唯一的用户可见产出）。
-  if (document.hidden && (t === "message_start" || t === "sessiond.error"
-      || t === "extension_ui_request")) beep("notify");
+  if (document.hidden && t === "message_start" && !turnActive) beep("notify");
+  if (document.hidden && (t === "sessiond.error" || t === "extension_ui_request")) beep("notify");
   if (t === "agent_settled") beep("done");
   if (t === "turn_end") hideWaiting();                  // 子回合边界：仅清等待指示，不清 turnActive（0830-1029-urgg）
   if (t === "agent_end") {
