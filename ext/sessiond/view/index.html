@@ -597,14 +597,20 @@ function handleEvent(o) {
     if (pendingDialogs[o.id]) closeDialog(o.id, "answered");
     return;
   }
-  // 提示音触发（任务 0829-2103-dpe4）：
+  // 提示音触发（任务 0829-2103-dpe4；done 音收口 = 0830-0925-jv9f）：
   // ② 后台收到新注入的消息/通知类事件 → notify 音（message_start 新消息、
   //    sessiond.error 通知、extension_ui_request 待用户应答的 dialog）；
-  // ① assistant 一轮结束（turn_end/agent_end）→ done 音（事件本身按 side
-  //    分类不渲染，声音是它唯一的用户可见产出）。
+  // ① 整个处理完成 → done 音：只在 agent_settled 响（agent 运行彻底落定：
+  //    无自动重试、无 compaction、无队列续跑，会话回到等待用户输入终态）。
+  //    旧版在 turn_end/agent_end 都响 → 带工具调用的回合每轮都响，太吵。
+  //    实证（/tmp/beep-test 单工具回合）：turn_end x2 / agent_end x1 /
+  //    agent_settled x1；agent_settled 由 pi agent-session finally 保证发出，
+  //    rpc 模式经 toJsonEvent 原样透传到本流（事件本身按 side 分类不渲染，
+  //    声音是它唯一的用户可见产出）。
   if (document.hidden && (t === "message_start" || t === "sessiond.error"
       || t === "extension_ui_request")) beep("notify");
-  if (t === "turn_end" || t === "agent_end") { beep("done");
+  if (t === "agent_settled") beep("done");
+  if (t === "turn_end" || t === "agent_end") {
     turnActive = false; hideWaiting(); }                // 回合结束 → 清除等待指示
   if (t === "response") { handleCmdResponse(o); }       // 上行命令回执（0829-2115-zvti）
   renderEvent(o);
