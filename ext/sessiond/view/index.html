@@ -1366,7 +1366,7 @@ async function doClear() {
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const SLASH_HELP = "Session commands: /abort · /clear · /compact · /model <provider>/<modelId> · "
   + "/thinking <" + THINKING_LEVELS.join("|") + "> · /export · /fork [<entryId>]"
-  + " · /reload · /sound [on|off]";
+  + " · /image · /reload · /sound [on|off]";
 let noticeTimer = null;
 function showNotice(text, cls, sticky) {
   const n = $("slashNotice");
@@ -1424,6 +1424,10 @@ function handleSlash(msg) {
       sendCmd({type: "fork", entryId: entryId, id: uid()});
       showNotice("Fork requested @ " + entryId); return;
     }
+    case "/image":
+      // 任务 0830-1139-yao1：手机上粘贴取图别扭，低频场景用命令唤起系统文件选择器。
+      // 必须在本同步调用链内触发 input.click()（见 pickImages 注释）。
+      pickImages(); return;
     case "/reload":
       doReload(); return;
     case "/sound": {
@@ -1464,6 +1468,33 @@ $("promptInput").addEventListener("paste", e => {
   }
   if (got) e.preventDefault();
 });
+// /image 命令（任务 0830-1139-yao1）：动态创建隐藏 file input 并程序化 click()，
+// 唤起系统文件选择器（手机弹相册/文件）。浏览器安全策略要求 click() 处于用户手势的
+// 同步调用链内：Enter → sendPrompt → handleSlash → pickImages，中途无 await，合法。
+// 读取逻辑与粘贴取图同构：{mime, b64, dataUrl} push 进 pendingImages + renderAttachBar。
+function pickImages() {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = "image/*"; inp.multiple = true;
+  inp.style.display = "none";
+  inp.onchange = () => {
+    Array.from(inp.files || []).forEach(f => {
+      if (!(f.type || "").startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const url = String(reader.result || "");
+        const i = url.indexOf(",");
+        if (i < 0) return;
+        pendingImages.push({mime: f.type, b64: url.slice(i + 1), dataUrl: url});
+        renderAttachBar();
+      };
+      reader.readAsDataURL(f);
+    });
+    inp.remove();                                    // 用完即移除，避免重复触发/泄漏
+  };
+  inp.oncancel = () => inp.remove();                 // 用户取消也回收（现代浏览器支持）
+  document.body.appendChild(inp);
+  inp.click();                                       // 同步触发，处于用户手势链内
+}
 function renderAttachBar() {
   const bar = $("attachBar");
   bar.innerHTML = "";
