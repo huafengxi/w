@@ -252,7 +252,8 @@ let pendingImages = [];       // 待发送附件（任务 0829-2103-8etk）：{m
 let pendingSends = {};
 let pendingDialogs = {};      // id -> request
 let curAssistantEl = null;    // 当前 assistant 消息渲染节点（实时流式）
-let lastProcessGroup = null;  // 最近的组级折叠容器（工具块无明确归属时的兜底挂点，0830-1039-a6vy）
+let turnGroup = null;         // turn 级过程组引用：一个来回（turn）一个组，同回合多条 assistant 消息共享（0830-1047-ehzc）
+let lastProcessGroup = null;  // 最近的组级折叠容器（工具块无明确归属时的兜底挂点，0830-1039-a6vy；指向 turnGroup）
 let curAssistantBuf = "";     // 累积文本（用于 message_end 时 markdown 渲染）
 // 流状态（两层锚定：entries 基线 + 事件 ID 游标）
 let streamCtrl = null;        // AbortController
@@ -375,7 +376,7 @@ async function attach(name) {
   stopStream();
   clearPendingDialogs();
   $("stream").innerHTML = "";
-  curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null;
+  curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
   turnActive = false; waitingEl = null;                 // 重挂接重置等待指示（0829-2107-cvdn）
   pendingSends = {}; queueState = {steering: [], followUp: []};
@@ -397,7 +398,7 @@ function applyBaseline(doc, initial) {
   const branch = activeBranch(doc.entries || [], curLeafId);
   if (!initial) {
     $("stream").innerHTML = "";
-    curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null;
+    curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
     seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
     turnActive = false; waitingEl = null;               // 自愈重渲染重置（0829-2107-cvdn）
     pendingSends = {}; queueState = {steering: [], followUp: []};
@@ -405,6 +406,7 @@ function applyBaseline(doc, initial) {
     renderQueuedPanel();                                // 全量重渲染：待发/队列面板一并清除（0829-2115-zvti）
   }
   for (const e of branch) renderEntry(e);
+  curAssistantEl = null; curAssistantBuf = "";  // 基线内的插入锚点不外漏到实时流（0830-1047-ehzc）
   // 重建悬空 dialog（0830-0956-vk20 bug2）：extension_ui_request 不在 entries 里，
   // 离线/刷新期间触发的 ask_user 仅凭事件环收不到（续流游标在其后）——后端随基线
   // 下发权威快照，逐个重建（showDialog 同 id 幂等，不会叠框）。
@@ -465,19 +467,20 @@ function renderEntryMessage(m) {
   }
   if (role === "assistant") {
     const el = addDiv("role-assistant md", "");
+    curAssistantEl = el;                          // 基线插入锚点：turn 组定位于当前 assistant 元素之前（0830-1047-ehzc）
     const emsg = errMsgOf(m);                     // 基线回放中的模型错误 → 红框（0829-2131-pdop）
     let text = "";
     for (const p of m.content || []) {
       if (!p) continue;
       if (p.type === "thinking" && p.thinking) {
-        // 入组级折叠容器（基线回放 = 已完成 → 默认折叠，0830-1039-a6vy）
-        grpAddBlock(processGroup(el, false), thinkingDetails(p.thinking), false);
+        // 入 turn 级组容器（基线回放 = 已完成 → 默认折叠，0830-1039-a6vy；turn 粒度 = 0830-1047-ehzc）
+        grpAddBlock(processGroup(false), thinkingDetails(p.thinking), false);
       } else if (p.type === "text") {
         text += (text ? "\n" : "") + (p.text || "");
       } else if (p.type === "toolCall") {
         if (p.id && !seenToolIds.has(p.id)) {
           seenToolIds.add(p.id);
-          const blk = toolBlock(p.id, p.name, processGroup(el, false)); // 入组；结果由 toolResult 条目并入
+          const blk = toolBlock(p.id, p.name, processGroup(false)); // 入 turn 组；结果由 toolResult 条目并入
           blk.argsPre.textContent = fmtArgs(p.arguments);
           setToolPreview(blk, p.name, p.arguments);     // summary 参数预览
           if (m.timestamp != null) blk.t0 = m.timestamp;
@@ -664,7 +667,7 @@ function renderEvent(o) {
     const m = o.message || {};
     if (m.role === "user") {
       resolvePendingByMessage(m);             // 待发条目转正（0829-2115-zvti）
-      renderUserMessage(m);                     // 流式渲染：文本 + 图片缩略图（同一入口）
+      renderUserMessage(m);                     // 流式渲染：文本 + 图片缩略图（同一入口，内含 turnGroup 重置）
       curAssistantEl = null; curAssistantBuf = "";
       turnActive = true;                        // 回合开始：等模型首个产出（0829-2107-cvdn）
       showWaiting();
@@ -684,7 +687,7 @@ function renderEvent(o) {
       curAssistantBuf += ev.delta || "";
       scheduleMdRender();                               // 渐进 markdown（节流，每次过消毒）
     } else if (ev.type === "thinking_delta") {
-      // thinking 实时流：并入默认折叠块，块本身挂入组级折叠容器（处理中 → 组展开）
+      // thinking 实时流：并入默认折叠块，块本身挂入 turn 级组容器（处理中 → 组展开）
       // 标题固定 Thinking（pi-web 口径，无字数）
       let th = curAssistantEl._think;
       if (!th) {
@@ -694,7 +697,7 @@ function renderEvent(o) {
         s.textContent = "Thinking";
         const pre = document.createElement("pre");
         d.appendChild(s); d.appendChild(pre);
-        grpAddBlock(processGroup(curAssistantEl, true), d, false);  // 0830-1039-a6vy
+        grpAddBlock(processGroup(true), d, false);      // 0830-1039-a6vy；turn 粒度 = 0830-1047-ehzc
         th = curAssistantEl._think = {pre: pre, buf: ""};
       }
       th.buf += ev.delta || "";
@@ -704,8 +707,8 @@ function renderEvent(o) {
       if (tc.id) {
         if (seenToolIds.has(tc.id)) return;   // 基线已渲染（幂等）
         seenToolIds.add(tc.id);
-        // 建折叠块并入组级容器（处理中 → 组展开）；start/update/end 并入
-        const blk = toolBlock(tc.id, tc.name, processGroup(curAssistantEl, true));
+        // 建折叠块并入 turn 级组容器（处理中 → 组展开）；start/update/end 并入
+        const blk = toolBlock(tc.id, tc.name, processGroup(true));  // turn 粒度 = 0830-1047-ehzc
         blk.argsPre.textContent = fmtArgs(tc.arguments);
         setToolPreview(blk, tc.name, tc.arguments);     // summary 参数预览
       }
@@ -722,7 +725,7 @@ function renderEvent(o) {
       if (!curAssistantEl._think) {                     // 无流式 delta 的 thinking 兜底补入
         for (const p of m.content || [])
           if (p && p.type === "thinking" && p.thinking)
-            grpAddBlock(processGroup(curAssistantEl, true), thinkingDetails(p.thinking), false);
+            grpAddBlock(processGroup(true), thinkingDetails(p.thinking), false);  // turn 粒度 = 0830-1047-ehzc
       }
     }
     if (m.role === "assistant") {
@@ -866,14 +869,18 @@ function thinkingDetails(text) {
   d.appendChild(s); d.appendChild(pre);
   return d;
 }
-// 组级折叠容器（0830-1039-a6vy，参考 pi-web ProcessDetailsGroup）：每条 assistant
-// 消息的 thinking + 工具块收进一组，最终回答文本留在组外。懒创建：首个过程块
-// 到达才建组（纯文本消息不出空壳）；header 计数随块增加实时刷新。
-function processGroup(el, open) {
-  if (el._grp) return el._grp;
+// turn 级组级折叠容器（0830-1039-a6vy 引入；0830-1047-ehzc 粒度修订：从每条
+// assistant 消息一组 → 一个来回（turn）一组）：同一回合内所有 assistant 消息的
+// thinking + 工具块收进同一个组，最终回答文本留在各自 assistant div 内（组外）。
+// 组是 stream 顶层元素，懒创建：首个过程块到达才建组（纯文本消息不出空壳），
+// 插入到当前 assistant 元素之前（保证位于该回合所有文本之前；锚点缺失则 append）；
+// header 计数自然累计全回合。turnGroup 在 user message_start（renderUserMessage）
+// 与 attach/heal 清屏点重置。
+function processGroup(open) {
+  if (turnGroup) return turnGroup;
   const d = document.createElement("details");
   d.className = "process-group";
-  if (open) d.open = true;                              // 处理中展开；基线/自愈回放一律折叠传入 false
+  if (open) d.open = true;                              // 实时处理中展开；基线/自愈回放一律传 false 折叠
   const s = document.createElement("summary");
   const arrow = document.createElement("span");
   arrow.className = "pg-arrow"; arrow.textContent = "▶";
@@ -883,17 +890,20 @@ function processGroup(el, open) {
   const body = document.createElement("div");
   body.className = "pg-body";
   d.appendChild(s); d.appendChild(body);
-  el.insertBefore(d, el._md || null);                   // 组在最终文本（mdDiv）之前，点开即可见
+  // stream 顶层插入：当前 assistant 元素之前 = 该回合所有文本之前（0830-1047-ehzc）
+  if (curAssistantEl) $("stream").insertBefore(d, curAssistantEl);
+  else $("stream").appendChild(d);
   const grp = {det: d, body: body, label: label, n: 0, nTools: 0};
-  el._grp = grp;
-  lastProcessGroup = grp;
+  turnGroup = grp;
+  lastProcessGroup = grp;                               // 孤儿兜底语义保留（0830-1039-a6vy）
   return grp;
 }
 function grpAddBlock(grp, node, isTool) {
   grp.body.appendChild(node);
   grp.n++; if (isTool) grp.nTools++;
-  grp.label.textContent = "处理过程 · " + grp.n + " 过程块"
-    + (grp.nTools ? " · " + grp.nTools + " 工具调用" : "");
+  // header 文案英文口径（对齐 pi-web en.ts，0830-1047-ehzc）
+  grp.label.textContent = "Process details · " + grp.n + (grp.n === 1 ? " process block" : " process blocks")
+    + (grp.nTools ? " · " + grp.nTools + (grp.nTools === 1 ? " tool call" : " tool calls") : "");
 }
 function collapseProcessGroups() {
   // 回合完成（agent_end/agent_settled）自动折叠；幂等，可点 header 再手动展开。
@@ -1469,6 +1479,7 @@ function renderAttachBar() {
 
 // ---------------- 用户消息渲染（文本 + 图片缩略图；流式与基线共用） ----------------
 function renderUserMessage(m) {
+  turnGroup = null;                             // 回合起点 → turn 组重置（基线/实时共用此入口，0830-1047-ehzc）
   const txt = msgText(m);
   const imgs = (Array.isArray(m.content) ? m.content : [])
     .filter(p => p && p.type === "image" && p.data && p.mimeType);
