@@ -278,6 +278,7 @@ let curMsgCount = null;
 let curCompacting = null;
 let curGen = null;
 let curRestarts = null;
+let curCtx = null;            // 上下文占用（0830-1324-3qet）：get_session_stats 的 contextUsage{tokens,contextWindow,percent}
 let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
 let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
 let toolBlocks = {};          // toolCallId -> 折叠块引用
@@ -392,6 +393,7 @@ async function attach(name) {
   turnActive = false; waitingEl = null;                 // 重挂接重置等待指示（0829-2107-cvdn）
   pendingSends = {}; queueState = {steering: [], followUp: []};
   curMsgCount = null; curCompacting = null; curGen = null; curRestarts = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
+  curCtx = null;                                      // 上下文占用随重挂接重置（0830-1324-3qet）
   retryBoxEl = null; lastRenderedErrorMsg = null;       // 回合状态重置（0829-2131-pdop）
   renderQueuedPanel();                                  // 待发/队列面板随清屏重置（0829-2115-zvti）
   sysLine("Attaching " + name + ": fetching history baseline (get_entries)…");
@@ -428,6 +430,7 @@ function applyBaseline(doc, initial) {
   sysLine("Baseline " + (doc.entries || []).length + " entries (active branch "
     + branch.length + ")");
   sendGetState();                              // 基线完成 → 拉权威模型/思考强度（0830-1257-vwzb）
+  sendCtxStats();                              // 基线完成 → 拉上下文占用（0830-1324-3qet）
 }
 
 // 活跃分支：从 leafId 沿 parentId 走回根（含 pre-compaction 链）
@@ -1326,6 +1329,14 @@ function handleCmdResponse(o) {
     }
     return;
   }
+  if (o.command === "get_session_stats") {     // 上下文占用回执（0830-1324-3qet）
+    ctxStatsInFlight = false;
+    if (o.success && o.data) {                // 失败静默忽略（不闪 err）
+      curCtx = o.data.contextUsage || null;
+      refreshSlashNoticeIfVisible();
+    }
+    return;
+  }
   if (typeof o.id !== "string" || !(o.id in pendingSends)) return;
   const p = pendingSends[o.id];
   if (o.success) return;                       // 已入队：面板条目保留，等送达移除
@@ -1381,6 +1392,18 @@ function sendStatusQuery() {
       refreshSlashNoticeIfVisible();
     }
   }).catch(() => {}).finally(() => { statusQueryInFlight = false; });
+}
+// ---------------- 上下文占用查询（任务 0830-1324-3qet） ----------------
+// 只读查询会话统计（pi rpc get_session_stats → SessionStats.contextUsage，流式中发也
+// 安全）；时机与 sendGetState 同（attach 基线后 + 每次展示斜杠提示时）。防抖/静默失败
+// 口径同 get_state；成功由 handleCmdResponse 回填 curCtx。
+let ctxStatsInFlight = false;
+function sendCtxStats() {
+  if (!attached || ctxStatsInFlight) return;
+  ctxStatsInFlight = true;
+  api("cmd", {session: attached, cmd: JSON.stringify({type: "get_session_stats", id: uid()})})
+    .catch(() => {});                          // HTTP 失败静默（不闪 err）
+  setTimeout(() => { ctxStatsInFlight = false; }, 3000);  // 回执丢失时的兜底解锁
 }
 // 进程级 reload：直接经 op=reload 杀会话进程并从 session.jsonl resume 重拉（用户拍板
 // 去二次确认，任务 0830-1132-7yh5：/reload 直接执行，不再弹 window.confirm，与 /clear 同口径）。
@@ -1447,6 +1470,19 @@ function hideNotice() {
 // 斜杠提示 = 两行状态 + 命令表（任务 0830-1257-vwzb，多行口径见 inbox m2vt）：
 // 行 1 = model + thinking；行 2 = msgs/gen/restarts（isCompacting=true 时行尾追标）；
 // SLASH_HELP 另起一行；任一值缺失显示 ?。.notice 自带 pre-wrap，\n 直接换行。
+// 上下文占用行（0830-1324-3qet）：数据源 = get_session_stats 的 contextUsage
+// {tokens, contextWindow, percent}（pi 权威值，含系统提示+工具开销，不做客户端估算）。
+// k 格式化复用 fmtThinkingCount；percent 取整。tokens=null（compaction 后未响应前）
+// → "ctx≈? / <window>k"；curCtx 全空 → "ctx≈?"。
+function ctxStatusText() {
+  if (!curCtx) return "ctx\u2248?";
+  const wTxt = (typeof curCtx.contextWindow === "number") ? fmtThinkingCount(curCtx.contextWindow) : "?";
+  const t = curCtx.tokens;
+  if (t == null) return "ctx\u2248? / " + wTxt;
+  const pTxt = (typeof curCtx.percent === "number") ? Math.round(curCtx.percent) : "?";
+  return "ctx\u2248" + fmtThinkingCount(t) + " / " + wTxt
+    + " tok\uff08" + pTxt + "%\uff09";
+}
 function slashStatusLine() {
   const l1 = "model: " + (curProvider || "?") + "/" + (curModelId || "?")
     + " \u00b7 thinking: " + (curThinkingLevel || "?");
@@ -1454,7 +1490,7 @@ function slashStatusLine() {
     + " \u00b7 gen: " + (curGen == null ? "?" : curGen)
     + " \u00b7 restarts: " + (curRestarts == null ? "?" : curRestarts);
   if (curCompacting) l2 += " \u00b7 compacting\u2026";
-  return l1 + "\n" + l2;
+  return l1 + "\n" + l2 + "\n" + ctxStatusText();
 }
 function showSlashNotice() {
   showNotice(slashStatusLine() + "\n" + SLASH_HELP, "", true);
@@ -1650,7 +1686,7 @@ $("promptInput").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 120) + "px";
   // / 补全提示（简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
-  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); sendStatusQuery(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填
+  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); sendStatusQuery(); sendCtxStats(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填；0830-1324-3qet：上下文占用
   else hideNotice();
 });
 
