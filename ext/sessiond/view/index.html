@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>chat</title>
 <script type="application/javascript" src="/w/ext/markdown/deps/marked.min.js"></script>
 <style>
@@ -12,6 +12,11 @@
   --err: #cf222e; --line: #d0d7de;
 }
 * { box-sizing: border-box; }
+/* 手机高度适配（任务 0830-1142-tx6v）：html/body 锁满高 + 禁页面级滚动，
+   滚动只发生在 #stream 内；.layout 用 100dvh（动态视口，随浏览器工具栏/键盘
+   收缩），旧浏览器回退 100vh。不用 100svh：svh 键盘弹出时留一大段空白且部分
+   浏览器实现不稳；dvh + 下方 visualViewport JS 兜底覆盖面更完整。 */
+html, body { height: 100%; overflow: hidden; }
 body { margin: 0; background: var(--bg); color: var(--fg);
   font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
 /* flash 轻提示（任务 0829-2035-kyor：替代原顶部状态栏）：顶部居中浮层，自动隐藏；
@@ -27,7 +32,7 @@ button { background: var(--panel2); color: var(--fg); border: 1px solid var(--li
   border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
 button:hover { border-color: var(--acc); }
 button.primary { background: var(--acc); border-color: var(--acc); color: #ffffff; }
-.layout { display: flex; height: 100vh; }
+.layout { display: flex; height: 100vh; height: 100dvh; }
 main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .badge { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 11px;
   border: 1px solid var(--line); color: var(--dim); margin-left: 4px; }
@@ -1596,6 +1601,30 @@ function msgText(m) {
   return "";
 }
 function scrollStream() { const el = $("stream"); el.scrollTop = el.scrollHeight; }
+
+// ---------------- 手机软键盘高度适配（任务 0830-1142-tx6v） ----------------
+// iOS Safari 不支持 interactive-widget=resizes-content（键盘弹出为覆盖而非收缩），
+// 用 visualViewport 兜底：键盘弹出时把 .layout 高度压到可见高度，输入框保持可见。
+// 幂等：每次 resize 事件重算，只写 inline style.height；键盘收起/桌面窗口 resize 时
+// vv.height ≈ window.innerHeight（差值 < 120px）→ 清掉 inline 高度，回到 CSS 的
+// dvh/vh 原逻辑，桌面行为不受影响。Android Chrome 已由 meta resizes-content 收缩，
+// 此处逻辑同构叠加（二者给出相同高度，无冲突）。
+(function () {
+  const vv = window.visualViewport;
+  if (!vv) return;                                    // 极老浏览器：保持 CSS 行为，不报错
+  const layout = document.querySelector(".layout");
+  if (!layout) return;
+  const fit = () => {
+    const h = vv.height;
+    if (window.innerHeight - h < 120) {               // 无键盘：恢复 CSS 高度（桌面/收起态）
+      if (layout.style.height) layout.style.height = "";
+    } else {                                          // 键盘弹出：压到可见高度
+      layout.style.height = h + "px";
+      scrollStream();                                 // 最新消息回到视野（幂等）
+    }
+  };
+  vv.addEventListener("resize", fit);
+})();
 
 // ---------------- 启动：加载即按 URL 挂接对应会话 ----------------
 if (SESSION) {
