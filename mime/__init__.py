@@ -25,11 +25,22 @@ def _load():
             merge(os.path.join(_EXT_DIR, name, 'mime.frag'))
     return m
 
-def guess(path):
+def _ensure():
     global _map
     if _map is None:
         _map = _load()
-    for suffix, mime in _map.items():
+    return _map
+
+def guess_explicit(path):
+    """只查 frag 显式映射表（无 mimetypes/text-plain 回退），命中返回 mime，否则 None。
+    用途：缺失文件无法经 store.head 拿到 type 时，按显式映射兜底（0830-1924-ft6s）。"""
+    for suffix, mime in _ensure().items():
+        if path.endswith(suffix):
+            return mime
+    return None
+
+def guess(path):
+    for suffix, mime in _ensure().items():
         if path.endswith(suffix):
             return mime
     if path:

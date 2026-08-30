@@ -5,6 +5,7 @@ import cgi
 import re
 
 from vmap import build as vmap_build
+import mime
 
 def parse_post(ctype, post, post_size):
     if ctype.startswith('multipart/form-data'):
@@ -155,6 +156,12 @@ class Handler:
     def do_req(self, path, args):
         # logging.debug('HANDLE_REQ: path=%s args=%.200s', path, args)
         meta = get_meta(self.store, path)
+        # 文件缺失时无 type：若后缀有 frag 显式 mime 映射且该 mime 在 vmap 有视图，
+        # 则兜底渲染到对应视图（如 .jsonl → 聊天窗，0830-1924-ft6s）；未映射仍 404。
+        if not meta.get('type'):
+            em = mime.guess_explicit(meta['path'])
+            if em and self.vmap.get(em):
+                meta['type'] = em
         vmeta = copy.copy(meta)
         if 'v' in args: meta.update(type=args['v'])
         if 'v' in meta: meta.update(type=meta['v'])
