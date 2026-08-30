@@ -1340,19 +1340,14 @@ async function doReload() {
 }
 // Abort 按钮已移除（任务 0829-2228-zq1t inbox a8bt）：/abort 斜杠命令代替，
 // 走 op=cmd {"type":"abort"} 控制面，立即执行不进队列（见 handleSlash）。
-// 进程级 clear（任务 0829-2238-atnj）：确认后调 op=clear（杀会话进程→删 jsonl→
+// 进程级 clear（任务 0829-2238-atnj）：直接调 op=clear（杀会话进程→删 jsonl→
 // 立即重拉空起点），保留会话路径清空全部内容；成功后自行重挂接空基线 +
-// 英文 flash。healBusy 暂置抦住 SSE gen 变化的并发自愈（本处自接管重挂接，
-// 两者同为全量重拉，幂等）。
+// 英文 flash。（用户拍板去二次确认，任务 0830-1130-z9gb：/clear 直接执行，
+// 不再弹 window.confirm。）healBusy 暂置抦住 SSE gen 变化的并发自愈（本处自接管
+// 重挂接，两者同为全量重拉，幂等）。
 async function doClear() {
   if (!attached) { flash("Not attached to a session, cannot clear", "err"); return; }
   if (healBusy) return;
-  const okc = window.confirm("Clear session " + attached + "?\n"
-    + "The session process will be killed and the session file deleted, then the "
-    + "session restarts empty at the same path.\n"
-    + "ALL conversation history in this session is lost permanently. "
-    + "This cannot be undone.");
-  if (!okc) return;
   healBusy = true;
   flash("Clearing session…");
   try {
