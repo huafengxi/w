@@ -142,25 +142,30 @@
              }
          }
       }
-      function resize_all() {
-        if (layoutMode == 'tab') {
-             // tab mode: re-apply viewport-fill height (no content sizing)
-             for (var j = 0; j < items.length; j++) {
-                 var it = items[j];
-                 if (it.iframe.style.display != 'none') { applyHeight(it.iframe); }
-             }
-             return;
-        }
-        for(var iframe of $('iframe-list').childNodes) {
-             if (iframe.class == 'ifr') {
-             iframe.style.height = frameHeight(iframe) + 'px';
-             }
-        }
+      // flow-mode auto-fit (replaces the manual resize button): re-measure
+      // visible iframes, writing height only when it actually changed
+      // (avoids layout thrash on the 2s poll). Tab mode relies on the CSS
+      // calc viewport-fill and needs no re-measuring.
+      function refitFlow() {
+         if (layoutMode != 'flow' || document.hidden) return;
+         for (var j = 0; j < items.length; j++) {
+             var it = items[j];
+             if (it.iframe.style.display == 'none' || !iframeLoaded(it)) continue;
+             var h = frameHeight(it.iframe) + 'px';
+             if (it.iframe.style.height != h) { it.iframe.style.height = h; }
+         }
       }
+      // window resize → embedded pages reflow → heights go stale (debounced)
+      var resizeTimer = null;
+      window.addEventListener('resize', function () {
+         clearTimeout(resizeTimer);
+         resizeTimer = setTimeout(refitFlow, 200);
+      });
+      // poll for async content growth (lazy load, fold/expand, late render)
+      setInterval(refitFlow, 2000);
     </script>
   </head>
   <body onload="initApp()" style="margin:0">
-   <div style="float: left"><input type="button" value="resize" style="float: left" onclick="resize_all()"></div>
    <div style="float: left"><input type="button" id="btn-switch" value="→ tab" style="float: left" onclick="switchView()"></div>
    <div id="tab-bar"></div>
    <div id="check-list"></div>
