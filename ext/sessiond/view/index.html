@@ -896,7 +896,7 @@ function processGroup(open) {
   if (open) d.open = true;                              // 实时处理中展开；基线/自愈回放一律传 false 折叠
   const s = document.createElement("summary");
   const arrow = document.createElement("span");
-  arrow.className = "pg-arrow"; arrow.textContent = "▶";
+  arrow.className = "pg-arrow"; arrow.textContent = ">"; // 细线条 ">"，展开靠下方 rotate(90deg) 朝下（0830-1126-99zw：替换实心三角降噪）
   const label = document.createElement("span");
   label.className = "pg-label";
   s.appendChild(arrow); s.appendChild(label);
