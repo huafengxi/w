@@ -128,7 +128,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 事件 ID | 不透明 `<ns>:<seq>`；`ns` = 桥接建立时 8 位随机，`seq` 单调递增（重启不换桥，`ns` 不变） |
 | 入环 | `bridge.py:_ingest`：pi stdout 原始行 + 监督员生命周期帧统一入环 |
 | get_entries 响应瘦身 | 响应行照常入环，但 `entries` 列表替换为 `"<N entries omitted>"`（完整响应只交给等待者），避免巨型 SSE 负载 |
-| 挂起 dialog 登记 | `extension_ui_request` 且 `method ∈ {select, confirm, input, editor}` → 记入 `pending_dialogs`，随基线响应 `pendingDialogs` 下发（请求体不在会话 entries 里，前端刷新/重连后靠它重建对话框） |
+| 挂起 dialog 登记 | `extension_ui_request` 且 `method ∈ {select, confirm, input, editor}` → 记入 `pending_dialogs`，随基线响应 `pendingDialogs` 下发（请求体不在会话 entries 里，前端刷新/重连后靠它重建对话框）；请求带 `timeout` 字段（毫秒）者另记单调 deadline（`_dialog_deadline`），供超时清扫（见 §11.4） |
 
 ### 游标与订阅
 
@@ -144,9 +144,11 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 - `bridge.py:send(cmd_obj)`：命令拦截面 `BLOCKED_COMMANDS =
   {switch_session, set_session_name}`（会改绑 session_file/会话名，使监督登记
   失准）→ 返回错误串；`extension_ui_response` 校验必须有对应悬空
-  `pending_dialogs` id，否则拒绝并返回错误串；`abort` 特殊处理：把所有悬空
-  dialog 以 `cancelled` 代答（pi rpc dialog 是裸 Promise，`session.abort()`
-  触不到，不代答则回合永久阻塞），先发 abort 再串行发代答。
+  `pending_dialogs` id，否则拒绝并返回错误串，放行且转发成功后广播
+  `sessiond.dialog_resolved` 结算帧（§11.4 发射时机表）；`abort` 特殊处理：
+  把所有悬空 dialog 以 `cancelled` 代答（pi rpc dialog 是裸 Promise，
+  `session.abort()` 触不到，不代答则回合永久阻塞），先发 abort 再串行发代答，
+  并广播 `cancelled:true` 结算帧。应答/代答/`abort` 前均顺带清扫超时 dialog。
 - `bridge.py:get_entries(since=None, timeout=ENTRIES_TIMEOUT=20s)`：
   `ensure_started` + `wait_ready` → 发 `{type:"get_entries", id:"wbge-…"
   [, since]}` → 等配对响应行（响应行的事件 ID = `watermark` 水位）。
@@ -199,7 +201,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 |---|---|---|---|
 | `prompt` | Enter 且 **`turnActive == false`**（agent 空闲） | `message`, `id`, 可选 `images`（`[{type:"image", data:<b64>, mimeType}]`） | 新回合提示词；被拒语义见下 |
 | `follow_up` | Enter 且 **`turnActive == true`**（流式中自动排队）；及 prompt 被 "already processing" 拒后的自动转换 | 同 `prompt`（转换时仅重发文本，图片不可恢复） | 排队至 agent 完全停止后才投递；送达信号 = 对应 user `message_start`（文本匹配，幂等转正） |
-| `abort` | `/abort` | `id` | 立即执行、不进队列；后端对悬空 dialog 同步发 `cancelled` 代答（见 `bridge.py:send`），前端同步关闭本地 dialog |
+| `abort` | `/abort` | `id` | 立即执行、不进队列；后端对悬空 dialog 同步发 `cancelled` 代答并广播结算（见 `bridge.py:send`、§11.4），前端同步关闭本地 dialog |
 | `extension_ui_response` | dialog 应答/取消 | `id` + `{value}` / `{confirmed}` / `{cancelled}` | 应答悬空 dialog；无对应悬空 id → 403 |
 | `compact` | `/compact [自定义指令]` | `customInstructions?` | 请求压缩 |
 | `set_model` | `/model <provider>/<modelId>` | `provider`, `modelId` | 切换模型（provider 缺省取当前 `curProvider`） |
@@ -250,7 +252,7 @@ command, success}` 回执，经事件环回传，前端按 `id` 匹配 `pendingS
 | `#slashNotice` 斜杠提示条 | 输入框上方内联提示（`/` 支持表粘性展示、命令结果/用法错误） | 输入以 `/` 开头 → 粘性显示 `SLASH_HELP`；执行命令后非粘性 6s 自动隐藏；非 `/` 输入清除 |
 | `#queuedPanel` QUEUED 面板 | 「QUEUED · N」：后端权威队列（`queue_update`）+ 本地乐观补位（`pendingSends`，同文本不重复）；条目 = 徽标（`steer` 蓝色描边 / `follow-up` 灰色）+ 单行截断文本；被拒条目红色；**无 Recall 按钮**（pi rpc 协议无召回能力） | 有任一条目时显示，空则隐藏；`queue_update`/发送/送达/清屏时重渲染 |
 | `#attachBar` 附件条 | 输入栏上方待发送图片缩略图（粘贴取图，仅拦 `image/*`），单个移除 + Clear (N) | `pendingImages` 非空时显示；发送后清空隐藏 |
-| `#dialogBox` dialog 模态盒 | 右下固定浮层：标题（`dialog [method] id=…`）+ 正文 + 按 method 生成控件 + Cancel + 倒计时「Auto-settle in Ns」（250ms tick，到期由 pi 端超时结算） | 默认 `display:none`；`extension_ui_request` 到达且当前无其它框时显示；同框异 id 时仅登记排队（`showDialog` 同 id 幂等）；应答/`cancelled`/`sessiond.dialog_resolved`/`/abort` 时关闭并自动弹下一个排队框 |
+| `#dialogBox` dialog 模态盒 | 右下固定浮层：标题（`dialog [method] id=…`）+ 正文 + 按 method 生成控件 + Cancel + 倒计时「Auto-settle in Ns」（250ms tick，到期由 pi 端超时结算） | 默认 `display:none`；`extension_ui_request` 到达且当前无其它框时显示；同框异 id 时仅登记排队（`showDialog` 同 id 幂等）；应答/`cancelled`/`sessiond.dialog_resolved`/`/abort` 时关闭并自动弹下一个排队框；应答被服务端拒绝（如对端已结算的 `no pending dialog`）时 `replyDialog` catch 分支也本地关框（双保险，§11.4） |
 
 dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm` →
 Confirm(primary)/Reject；`input`/`editor`/未知 → 输入框（Enter 提交）+
@@ -333,7 +335,7 @@ id，全量重渲染是无重复的构造性保证；基线组默认折叠、`pe
 | `sessiond.session_restarted` | 新进程就位，带 `gen`/`pid` | flash；gen 变化 → 基线自愈 |
 | `sessiond.session_disabled` | 熔断（崩溃循环超限），监督停止 | flash 错误；清 `turnActive` 与 waiting |
 | `sessiond.error` | sessiond 错误通知 | flash 错误；后台时 notify 音 |
-| `sessiond.dialog_resolved` | dialog 已被他处应答 | 关闭本地对应对话框 |
+| `sessiond.dialog_resolved` | dialog 结算广播（`bridge.py:_broadcast_dialog_resolved`）：应答成功（无附加字段）/ abort 代答（`cancelled:true`）/ 超时清扫（`timeout:true`）/ 会话重启清表（`restarted:true`）；发射时机表见 §11.4 | 关闭本地对应框（查无 `pendingDialogs[id]` 幂等 no-op，应答端收自身广播安全） |
 
 ### 9.2 对话事件（`MAIN_EVENT_TYPES`，主流渲染）
 
@@ -415,10 +417,31 @@ id，全量重渲染是无重复的构造性保证；基线组默认折叠、`pe
 | 环节 | 行为 |
 |---|---|
 | 双端同弹 | `extension_ui_request` 经事件环多播到所有订阅者 → 各页签 `showDialog` 弹同一模态盒（同框异 id 排队登记）；刷新/重连后靠基线 `pendingDialogs` 重建（`bridge.py:pending_dialog_list`） |
-| 应答校验 | `bridge.py:send`：`extension_ui_response` 必须有对应悬空 id（`pending_dialogs`）才放行，放行即清该 id → 先到的一端生效，另一端再答被拒 403（前端「Dialog reply failed」） |
-| `sessiond.dialog_resolved` | 协议帧「dialog 已被他处应答」，前端事件循环收到即关对应框（`index.html`）。**注意：当前代码中无发射端**——`bridge.py:send` 清 `pending_dialogs` 时并不广播此帧（全树含 git 历史均无发射点）。实际效果：一端应答后另一端框**不会自动关闭**，需 Cancel/再次应答（403）/页面自愈重建后收敛；该帧是预留的跨端关框钩子 |
-| 超时结算 | 请求带 `timeout` 时由 pi 端到期以默认值结算、回合继续（pi rpc 的裸 Promise 超时 resolve）；前端倒计时「Auto-settle in Ns」仅展示，到期不自动关框 |
-| `/abort` | `bridge.py:send` 把所有悬空 dialog 以 `cancelled` 代答（否则回合永久阻塞）；发起端同步关本地框，另一端同 11.4 第 3 行现状 |
+| 应答校验 | `bridge.py:send`：`extension_ui_response` 必须有对应悬空 id（`pending_dialogs`）才放行，放行即清该 id 并在转发成功后广播结算（见下）→ 先到的一端生效，另一端再答被拒 403；前端 `index.html:replyDialog` 对服务端报错（如 `no pending dialog` = 对端已结算）在 catch 分支也本地 `closeDialog`（双保险，防非应答端 Cancel 永久卡死），与后端广播互为兜底 |
+| `sessiond.dialog_resolved` | dialog 结算广播帧：`bridge.py:_broadcast_dialog_resolved` 入事件环，多播到**所有订阅者**——一端结算、各端同步关框。含应答端自身：其前端已本地关框删表，`index.html` handler 查无 `pendingDialogs[id]` 幂等 no-op，安全；事件入环，晚到订阅者（since 回放）也能收到。发射时机见下表 |
+| 会话进程重启 | `bridge.py:_ingest` 收 `sessiond.session_restarted`：pi 侧 dialog Promise 全部失效，清空 `pending_dialogs`/`_dialog_deadline` 并对所有悬空 dialog 广播 `restarted:true` 结算——否则 attach 基线（`pendingDialogs`）会向各端重建已死 dialog |
+| `/abort` | `bridge.py:send` 把所有悬空 dialog 以 `cancelled` 代答（否则回合永久阻塞），并逐个广播 `cancelled:true` 结算 → 双端同步关框 |
+
+`sessiond.dialog_resolved` 发射时机表（均经 `bridge.py:_broadcast_dialog_resolved`，
+帧形 `{type:"sessiond.dialog_resolved", id[, 附加字段]}`）：
+
+| 时机 | 触发点 | 附加字段 |
+|---|---|---|
+| 应答成功 | `bridge.py:send`：`extension_ui_response` 转发 pi 成功后 | — |
+| abort 代答 | `bridge.py:send`：`abort` 把悬空 dialog 以 `cancelled` 代答后 | `cancelled:true` |
+| 超时清扫 | `bridge.py:_sweep_expired_dialogs_locked` 清出过期 dialog 后（清扫时机见下表） | `timeout:true` |
+| 会话重启清表 | `bridge.py:_ingest`：`sessiond.session_restarted` 清空 `pending_dialogs` 时 | `restarted:true` |
+
+timeout 清扫机制（0830-1104-eji4）：pi rpc-mode 的 dialog 超时是内部
+setTimeout、**不发任何事件**，桥接必须自己跟踪 deadline，否则
+`pending_dialogs` 永不清理、attach 基线会向新/刷新端重建已死 dialog。
+
+| 项 | 语义 |
+|---|---|
+| deadline 登记 | `bridge.py:_ingest` 登记带 `timeout` 字段（毫秒）的 dialog 时记单调 deadline（`time.monotonic()` + timeout，存 `_dialog_deadline`） |
+| 顺带清扫（无定时器） | `bridge.py:_sweep_expired_dialogs_locked` 在四类时机顺带清出过期 dialog：① 任意 pi 事件经 `_ingest`（含新 dialog 到达——pi 超时后必有后续事件流经这里，无需额外定时器）② 应答（`send` 的 `extension_ui_response`）③ `abort` ④ attach 基线（`pending_dialog_list`） |
+| pi 端结算语义 | 请求带 `timeout` 时到期由 pi 端以默认值结算、回合继续（裸 Promise 超时 resolve）；前端倒计时「Auto-settle in Ns」仅展示，关框靠桥接的 `timeout:true` 广播 |
+| 无 timeout 字段的 dialog | 不登记 deadline → 永久悬空直至应答/`abort`（与 pi 端一致：裸 Promise 仅 response/signal/timeout 可解，无 timeout 即永悬），**非 bug** |
 
 ### 11.5 后台 tab 提示音
 
