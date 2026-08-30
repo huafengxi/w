@@ -3,5 +3,6 @@
 /ARJ  Enc ARJ
 /dav  WebDav dav.env
 /report    Cmd w/ext/report/bin/lookup.py templates
+/api/agentd-report Cmd python3 w/ext/agentd/bin/agentd-report.py
 /sessiond	Dir	w/ext/sessiond
 /	Dir	.
