@@ -17,7 +17,7 @@ def make_wsgi_app(handlers):
             return dict(type='text/plain'), '%s %s\n'%(path, query)
     def err_handler(env, path, query, post):
         logging.debug("HANDLE_404: %s", path)
-        return dict(type='text/html'), open("w/view/404.html").read()
+        return dict(type='text/html', http_status='404 Not Found'), open("w/view/404.html").read()
     def try_these(handlers, env, path, query, post):
         for f in handlers:
             ret = f(env, path, query, post)
