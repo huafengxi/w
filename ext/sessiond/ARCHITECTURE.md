@@ -373,3 +373,80 @@ id，全量重渲染是无重复的构造性保证；基线组默认折叠、`pe
 | `SESSIOND_BRIDGE_RING` | 2000 | 事件环容量 |
 | `SESSIOND_BRIDGE_MAXSTREAMS` | 5 | 每会话 SSE 订阅上限 |
 | `SESSIOND_SESSION_FILE`（注入子进程） | — | 旧宿主识别标记（零文件方案） |
+
+---
+
+## 11. 多 tab / 多客户端并发
+
+同一 jsonl 被多个页签/多个浏览器同开时，模型是**同一桥接 + 同一会话进程上
+的多个独立订阅者**：会话级状态（进程、队列、悬空 dialog、事件环）天然一致，
+纯视图态各端独立、互不同步。
+
+### 11.1 会话进程唯一（单宿主）
+
+| 机制 | 说明 |
+|---|---|
+| 同进程多 tab 归一 | `bridge.py:get_bridge` 注册表键 = 解析后绝对路径：多页签命中**同一 `Bridge`**（同一事件环、同一 `proc.py:Supervisor`、同一 `pi --mode rpc` 子进程）。开新页签只做 attach + 订阅，不 spawn 进程 |
+| environ 标记 | spawn 注入 `SESSIOND_SESSION_FILE=<jsonl>`（`proc.py:HOST_MARKER`）；pi 会 setproctitle 重写 argv，cmdline 匹配不可行 |
+| `/proc` 扫描 | `proc.py:find_hosts` 扫 `/proc/*/environ` 精确匹配，定位同一 jsonl 的宿主进程 |
+| 双宿主清场 | `proc.py:_clear_stale_proc`（首次拉起时）：等旧宿主自然退出（stdin EOF，`ORPHAN_GRACE=15s`）→ SIGTERM → 3s → SIGKILL；主要面向 web 重启/跨进程场景；同一 web 进程内的多 tab 走注册表归一，不触发清场 |
+| `/agents/` 警示 | 前端启动时若会话路径含 `/agents/` 出红色 flash（可能被 8080 识别域外的宿主以 `pi --session` 同开），只警告不拦截（`index.html`） |
+
+### 11.2 每 tab = 全量基线 + 独立 SSE 订阅
+
+| 项 | 语义 |
+|---|---|
+| 基线 | 每页签各自 `op=attach` 取全量基线（`entries` + `pendingDialogs` + `watermark`），`attach` 是一次性 POST，**不占 SSE 订阅名额** |
+| 订阅 | 每页签一条独立 `GET stream.py?since=<本 tab 游标>`；游标、断线重连各自独立；事件环对所有订阅者多播同一条流 |
+| 订阅上限 | `bridge.py:MAX_STREAMS_PER_BRIDGE = 5`（env `SESSIOND_BRIDGE_MAXSTREAMS` 可覆盖）；查上限 + 占位在同一 `cond` 锁内原子完成（`stream.py:interp`），超限 → **429 `stream limit (5) reached for session …`**（防多页签/忘关页签耗尽 wsgiserver 线程池波及 8080 其它服务）；生成器 `finally` 退订 |
+| 第 6 个页签 | 页面照常打开、attach 正常，仅事件流建不起来（429）；已有页签不受影响 |
+
+### 11.3 双端发送语义（服务端排队兜底）
+
+| 场景 | 行为 |
+|---|---|
+| 各自本地判空闲 | `index.html:sendPrompt` 按本 tab `turnActive`：空闲 → `prompt` 直发；回合中 → `follow_up` 入 pi 端队列 |
+| 队列双端可见 | 队列是 pi 进程内的（服务端排队），`queue_update` 快照经事件环多播 → 两端 QUEUED 面板同步看到排队条目与续跑（`follow_up` 送达 = 对应 user `message_start` 转正） |
+| 竞态拒绝自动转排队 | 两端同瞬都判空闲、并发 `prompt` → 一条被 pi 接受，另一条回 `{success:false, error:"already processing"}`；`index.html:handleCmdResponse` 识别后**不标红、不标 rejected**，自动转 `follow_up` 重发入队，flash「Agent busy → queued as follow-up」→ 并发发送最终收敛于服务端队列，不丢消息 |
+| 其余拒绝 | 非 "already processing" 的拒绝 → flash 红色 + 面板条目 `rejected` 态（各端只见自己的发送结果） |
+
+### 11.4 dialog（extension_ui_request）双端同弹与结算
+
+| 环节 | 行为 |
+|---|---|
+| 双端同弹 | `extension_ui_request` 经事件环多播到所有订阅者 → 各页签 `showDialog` 弹同一模态盒（同框异 id 排队登记）；刷新/重连后靠基线 `pendingDialogs` 重建（`bridge.py:pending_dialog_list`） |
+| 应答校验 | `bridge.py:send`：`extension_ui_response` 必须有对应悬空 id（`pending_dialogs`）才放行，放行即清该 id → 先到的一端生效，另一端再答被拒 403（前端「Dialog reply failed」） |
+| `sessiond.dialog_resolved` | 协议帧「dialog 已被他处应答」，前端事件循环收到即关对应框（`index.html`）。**注意：当前代码中无发射端**——`bridge.py:send` 清 `pending_dialogs` 时并不广播此帧（全树含 git 历史均无发射点）。实际效果：一端应答后另一端框**不会自动关闭**，需 Cancel/再次应答（403）/页面自愈重建后收敛；该帧是预留的跨端关框钩子 |
+| 超时结算 | 请求带 `timeout` 时由 pi 端到期以默认值结算、回合继续（pi rpc 的裸 Promise 超时 resolve）；前端倒计时「Auto-settle in Ns」仅展示，到期不自动关框 |
+| `/abort` | `bridge.py:send` 把所有悬空 dialog 以 `cancelled` 代答（否则回合永久阻塞）；发起端同步关本地框，另一端同 11.4 第 3 行现状 |
+
+### 11.5 后台 tab 提示音
+
+| 触发 | 语义 |
+|---|---|
+| 回合起点 `message_start` | `document.hidden && !turnActive` → `beep("notify")`；判定先于渲染（`turnActive` 在渲染 user `message_start` 时才置 true），故回合起点恰好响一声 |
+| 回合内续写静默 | `turnActive == true` 时的 `message_start`（每次工具调用后模型续写开新 assistant message）不响，避免后台每个工具调用响一声 |
+| 其余后台 notify | `sessiond.error`、`extension_ui_request` 到达时后台同样响 notify |
+| 本地属性 | 声音开关/手势解锁/节流均本 tab 独立（见 11.7）；一端后台响铃不影响另一端 |
+
+### 11.6 reload / clear 是会话级操作
+
+| 项 | 语义 |
+|---|---|
+| 作用域 | `op=reload/clear` 作用于会话进程（`proc.py:reload`/`proc.py:clear` 共用 `_kill_and_restart`），不是页签级：任一 tab 发起，全会话生效 |
+| 双端同步路径 | 杀进程/重拉经事件环广播 `sessiond.session_restarting` → `sessiond.session_restarted{gen}` 到**所有订阅者**；各页签检测到 `gen` 变化各自 `heal()`：停流 → `attach` 全量基线 → 清屏全量重渲染 → 以新 `watermark` 重新开流 |
+| 流本身不断 | SSE 订阅挂在 bridge（不挂进程），进程被杀/重拉不断流；「断线重连」实为各端 `heal` 主动停流重建，双端最终渲染状态一致 |
+
+### 11.7 不同步的纯本地状态（各 tab 独立）
+
+| 状态 | 说明 |
+|---|---|
+| `/sound` 开关（`soundOn`） | 默认开，仅本 tab 的 `/sound [on\|off]` 切换，无 UI 开关、不跨端 |
+| 折叠态 | 过程组 / thinking 块 / 工具块的 `<details>` 展开折叠态为本地 DOM 状态；自动折叠事件（`agent_end`/`agent_settled`）双端各自执行，手动展开互不可见 |
+| flash / notice | `#flashNotice`、`#slashNotice`、sysLine 提示均为本端提示面 |
+| `pendingSends` | 本地乐观待送达跟踪（含 prompt 静默登记）；权威队列是 `queue_update`（双端可见），本地补位条目仅本端可见 |
+| 输入草稿与附件 | 输入框文本、`pendingImages` 待发送附件、`composing` 等纯输入侧状态 |
+| 游标/幂等集 | `streamCursor`/`seenEntryIds`/`seenToolIds` 等各端独立维护，只服务于本端渲染去重 |
+
+一致性总结：**会话态（进程/队列/dialog/事件环）由「注册表归一 + 事件环多播 +
+全量基线」保证跨端一致；上表为纯视图态，不影响会话本身的正确性。**
