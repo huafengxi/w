@@ -272,6 +272,12 @@ let curLeafId = null;         // 活跃分支叶
 let curProvider = null;       // 当前模型 provider/modelId（model_change 跟踪，/model 用）
 let curModelId = null;
 let curThinkingLevel = null;  // 当前思考强度（thinking_level_change + get_state 跟踪，0830-1257-vwzb）
+// 会话状态行 2（0830-1257-vwzb inbox 增项）：msgs/compacting 来自 get_state 响应，
+// gen/restarts 来自 op=status；缺失显 ?。
+let curMsgCount = null;
+let curCompacting = null;
+let curGen = null;
+let curRestarts = null;
 let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
 let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
 let toolBlocks = {};          // toolCallId -> 折叠块引用
@@ -385,6 +391,7 @@ async function attach(name) {
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
   turnActive = false; waitingEl = null;                 // 重挂接重置等待指示（0829-2107-cvdn）
   pendingSends = {}; queueState = {steering: [], followUp: []};
+  curMsgCount = null; curCompacting = null; curGen = null; curRestarts = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
   retryBoxEl = null; lastRenderedErrorMsg = null;       // 回合状态重置（0829-2131-pdop）
   renderQueuedPanel();                                  // 待发/队列面板随清屏重置（0829-2115-zvti）
   sysLine("Attaching " + name + ": fetching history baseline (get_entries)…");
@@ -1313,6 +1320,8 @@ function handleCmdResponse(o) {
       curProvider = m.provider || curProvider;
       curModelId = m.modelId || m.id || curModelId;
       curThinkingLevel = o.data.thinkingLevel || curThinkingLevel;
+      if (typeof o.data.messageCount === "number") curMsgCount = o.data.messageCount;  // inbox 增项：零额外请求自带
+      curCompacting = !!o.data.isCompacting;
       refreshSlashNoticeIfVisible();
     }
     return;
@@ -1358,6 +1367,20 @@ function sendGetState() {
   api("cmd", {session: attached, cmd: JSON.stringify({type: "get_state", id: uid()})})
     .catch(() => {});                          // HTTP 失败静默（不闪 err）
   setTimeout(() => { getStateInFlight = false; }, 3000);  // 回执丢失时的兜底解锁（正常由 response 帧提前清）
+}
+// gen/restarts 经现有 op=status 只读查询（0830-1257-vwzb inbox 增项）：展示斜杠提示时
+// 顺带刷新；失败静默。
+let statusQueryInFlight = false;
+function sendStatusQuery() {
+  if (!attached || statusQueryInFlight) return;
+  statusQueryInFlight = true;
+  api("status", {session: attached}).then(d => {
+    if (d && d.ok) {
+      curGen = (typeof d.gen === "number") ? d.gen : curGen;
+      curRestarts = (typeof d.restarts === "number") ? d.restarts : curRestarts;
+      refreshSlashNoticeIfVisible();
+    }
+  }).catch(() => {}).finally(() => { statusQueryInFlight = false; });
 }
 // 进程级 reload：直接经 op=reload 杀会话进程并从 session.jsonl resume 重拉（用户拍板
 // 去二次确认，任务 0830-1132-7yh5：/reload 直接执行，不再弹 window.confirm，与 /clear 同口径）。
@@ -1421,11 +1444,17 @@ function hideNotice() {
   slashNoticeOn = false;      // 0830-1257-vwzb
   $("slashNotice").classList.add("hidden");
 }
-// 斜杠提示 = 状态行 + 命令表（任务 0830-1257-vwzb）：任一值缺失显示 ?；
-// 状态初值来自基线/事件跟踪，权威值由 get_state 回执回填后刷新。
+// 斜杠提示 = 两行状态 + 命令表（任务 0830-1257-vwzb，多行口径见 inbox m2vt）：
+// 行 1 = model + thinking；行 2 = msgs/gen/restarts（isCompacting=true 时行尾追标）；
+// SLASH_HELP 另起一行；任一值缺失显示 ?。.notice 自带 pre-wrap，\n 直接换行。
 function slashStatusLine() {
-  return "model: " + (curProvider || "?") + "/" + (curModelId || "?")
+  const l1 = "model: " + (curProvider || "?") + "/" + (curModelId || "?")
     + " \u00b7 thinking: " + (curThinkingLevel || "?");
+  let l2 = "msgs: " + (curMsgCount == null ? "?" : curMsgCount)
+    + " \u00b7 gen: " + (curGen == null ? "?" : curGen)
+    + " \u00b7 restarts: " + (curRestarts == null ? "?" : curRestarts);
+  if (curCompacting) l2 += " \u00b7 compacting\u2026";
+  return l1 + "\n" + l2;
 }
 function showSlashNotice() {
   showNotice(slashStatusLine() + "\n" + SLASH_HELP, "", true);
@@ -1621,7 +1650,7 @@ $("promptInput").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 120) + "px";
   // / 补全提示（简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
-  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填
+  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); sendStatusQuery(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填
   else hideNotice();
 });
 
