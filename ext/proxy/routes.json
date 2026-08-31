@@ -1,5 +1,5 @@
 {
-  "_comment": "reverse proxy 路由规则（0831-0937-sh7l；多机扩展 r71ydk；/mac/ 反向隧道任务 xt2sj3）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port])、strip_prefix(可选，缺省 false)、timeout(可选，秒，缺省 10；对流式响应 = 空闲超时，SSE 路由须 > 上游 keep-alive 周期)。详见 w/design.md「reverse proxy」小节。upstream 用 IP：dev/nv2 真实主机名（obrde.dev-yi3/ob-ai-115）在 nv1 上不可 DNS 解析，ssh 别名仅存在于 ~/.ssh/config。/mac/ = mac 无公网可达，走 rsh 反向端口转发（hub nv1 0.0.0.0:8083 → mac 127.0.0.1:8080，env/rsh-forwards mac=3），upstream 固定本机回环。",
+  "_comment": "reverse proxy 路由规则（0831-0937-sh7l；多机扩展 r71ydk；/mac/ 反向隧道任务 xt2sj3）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port])、strip_prefix(可选，缺省 false)、timeout(可选，秒，缺省 10；对流式响应 = 空闲超时，SSE 路由须 > 上游 keep-alive 周期)。详见 w/design.md「reverse proxy」小节。upstream 用 IP：dev/nv2 真实主机名（obrde.dev-yi3/ob-ai-115）在 nv1 上不可 DNS 解析，ssh 别名仅存在于 ~/.ssh/config；/nv1/ 同口径（nv1 短名不可靠，用真实 IP 30.249.210.114，SSE 流式故 timeout=65）。/mac/ = mac 无公网可达，走 rsh 反向端口转发（hub nv1 0.0.0.0:8083 → mac 127.0.0.1:8080，env/rsh-forwards mac=3），upstream 固定本机回环。",
   "routes": [
     {
       "prefix": "/dev/",
@@ -12,6 +12,12 @@
       "upstream": "http://30.249.210.115:8080",
       "strip_prefix": true,
       "timeout": 10
+    },
+    {
+      "prefix": "/nv1/",
+      "upstream": "http://30.249.210.114:8080",
+      "strip_prefix": true,
+      "timeout": 65
     },
     {
       "prefix": "/mac/",
