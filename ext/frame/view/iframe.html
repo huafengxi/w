@@ -124,7 +124,10 @@
              var checkbox = appendIndex(checklist, iframe, name, link);
              var tab = appendTab(tabbar, name, items.length);
              items.push({ name: name, link: link, iframe: iframe, checkbox: checkbox, tab: tab, refreshSec: refreshSecOf(link), nextRefresh: 0 });
-             setIframeSrc(iframe, link);
+             // tab mode: lazy load — hidden tabs keep an empty src and are
+             // fetched only when first selected (selectTab()'s !iframeLoaded
+             // branch). Flow mode still loads every row up front.
+             if (layoutMode != 'tab') setIframeSrc(iframe, link);
          }
          // single-shot layout init by route mode (replaces the old runtime switch)
          if (layoutMode == 'tab') {
