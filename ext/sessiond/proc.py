@@ -17,10 +17,13 @@
 # 零文件（用户拍板 inform n0fx/p4id/s4fn）：除会话 jsonl 本身外不引入任何
 # 辅助文件——无账本、无进程 stderr 文件。
 #   - 子进程 stderr 继承 web 进程（并入 run/logs/web.log）。
-#   - 旧宿主识别 = environ 标记扫描：spawn 注入
+#   - 旧宿主识别 = environ 标记扫描 + 宿主身份交叉校验：spawn 注入
 #     `SESSIOND_SESSION_FILE=<jsonl 绝对路径>`；处置旧宿主时扫
 #     /proc/*/environ 精确匹配（用户 ask 拍板：pi 会 setproctitle 把 argv
-#     重写为裸 "pi"，cmdline 匹配不可行）。命中即旧宿主（无 starttime 校验，
+#     重写为裸 "pi"，cmdline 匹配不可行），且命中进程还须 comm=='pi'（改写后
+#     title）且 /proc/<pid>/exe 指向 node 二进制——仅凭 environ 标记会把带标记的
+#     旁观进程误杀（2026-08-31 scheduler 误杀事故；纵深防御任务 p0h6fk，口径经
+#     dispatcher inform p6fk/p6f2 两轮修正定稿）。命中即旧宿主（无 starttime 校验，
 #     s4fn）：等 stdin-EOF 自然退出，宽限后 SIGTERM→SIGKILL。
 # `dispatcher` 名允许（用户拍板 0829-1958-od0t）。
 #
@@ -92,11 +95,12 @@ STABLE_RESET = 120.0        # 存活超过该秒数 → 重置崩溃计数
 LINE_LIMIT = 16 * 1024 * 1024  # 单行 JSONL 上限，超限丢弃该行（口径沿用）
 ORPHAN_GRACE = 15.0         # 等待旧宿主自然退出的宽限（秒）
 
-# 剥除调度/任务身份与上游会话身份（PI_SESSION* 经 make 链泄漏会投毒子进程
-# 的会话归属，实测案例：任务环境 PI_SESSION_FILE 漏进会话进程）。
+# 剥除调度/任务身份与上游会话身份（PI_* 经 make 链泄漏会投毒子进程的会话归属，
+# 实测案例：任务环境 PI_SESSION_FILE 漏进会话进程；p0h6fk 起整族 PI_ 前缀剥除，
+# 口径同 svc/svc.py）。
 ENV_SCRUB_EXACT = {"AGENTD_TASK", "AGENT_SELF", "AGENT_HOME", "AGENT_ROOT",
                    "DISPATCH_TASK_ID"}
-ENV_SCRUB_PREFIXES = ("DISPATCH_TASK_", "PI_SESSION")
+ENV_SCRUB_PREFIXES = ("DISPATCH_TASK_", "PI_")
 
 
 def clean_env():
@@ -116,9 +120,29 @@ def pid_alive(pid):
     return True
 
 
+def is_pi_host(pid):
+    """宿主身份交叉校验（纵深防御，任务 p0h6fk）：environ 标记单独不构成宿主证据——
+    任何旁观进程只要 environ 带标记（如从带标记 shell 继承启动的 scheduler，
+    2026-08-31 事故）就会被误杀。真宿主还须同时满足：
+      ① comm == 'pi'（pi setproctitle 把 argv 重写为裸 'pi'，cmdline 不可用，
+         但 /proc/<pid>/comm 反映改写后 title）；
+      ② readlink /proc/<pid>/exe 指向 node 二进制（pi 是 node CLI）。
+    任一读取失败 → 拒绝认宿主（宁可漏杀不可误杀；合法孤儿宿主是 web 亲自
+    拉起的同用户进程，两项读取必然成功）。"""
+    try:
+        with open("/proc/%d/comm" % pid, "rb") as f:
+            if f.read().strip() != b"pi":
+                return False
+        exe = os.readlink("/proc/%d/exe" % pid)
+        return os.path.basename(exe) == "node"
+    except OSError:
+        return False
+
+
 def find_hosts(session_file):
     """零文件旧宿主识别（R2）：扫 /proc/*/environ，精确匹配
-    `SESSIOND_SESSION_FILE=<session_file>` 标记的进程 → pid 列表。"""
+    `SESSIOND_SESSION_FILE=<session_file>` 标记、且经 is_pi_host 交叉校验的进程
+    → pid 列表。带标记的旁观进程（comm != 'pi' 或 exe 非 node）一律不认宿主。"""
     marker = ("%s=%s" % (HOST_MARKER, session_file)).encode("utf-8")
     hosts = []
     self_pid = os.getpid()
@@ -137,7 +161,7 @@ def find_hosts(session_file):
                 env = f.read()
         except OSError:
             continue
-        if marker in env.split(b"\x00"):
+        if marker in env.split(b"\x00") and is_pi_host(pid):
             hosts.append(pid)
     return hosts
 
@@ -374,7 +398,7 @@ class Supervisor:
                 self._clear_error = str(e)
 
     def _clear_stale_proc(self):
-        """防双宿主清场（R2 零文件）：按 environ 标记扫出同一 jsonl 的旧宿主
+        """防双宿主清场（R2 零文件）：按 environ 标记 + is_pi_host 交叉校验扫出同一 jsonl 的旧宿主
         （典型来源：旧 web 的孤儿会话，其 stdin 已随旧 web 死亡 → pi 因 EOF
         自行优雅退出）；等待自然退出，宽限后 SIGTERM→SIGKILL。"""
         hosts = [p for p in find_hosts(self.session_file) if pid_alive(p)]
