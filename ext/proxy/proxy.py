@@ -124,11 +124,14 @@ def _req_headers(env, upstream_netloc):
 
 
 def _resp_headers(resp):
-    """上游响应头 → 透传列表（剔 hop-by-hop；Content-Type/Length 由 wsgi 层统一出）。"""
+    """上游响应头 → 透传列表（剔 hop-by-hop；Content-Type/Length 由 wsgi 层统一出）。
+    X-Content-Type-Options 亦剔除（任务 kqhweh，ogwtb4 评审建议 1）：wsgi 层对全部响应
+    统一加 nosniff（core/wsgi.py），上游（同为 w 服务）再带一个会出现重复头。"""
     out = []
     for k, v in resp.getheaders():
         lk = k.lower()
-        if lk in HOP_BY_HOP or lk in ('content-type', 'content-length'):
+        if lk in HOP_BY_HOP or lk in ('content-type', 'content-length',
+                                      'x-content-type-options'):
             continue
         out.append((k, v))
     return out
@@ -157,11 +160,15 @@ def forward(env, path, rule):
         ctype = resp.getheader('Content-Type') or ''
         # 流式判定（任务 xt2sj3）：SSE 明示，或无 Content-Length 的长响应体。
         # http.client 对 chunked 上游透明解块，读面统一按普通流读。
+        is_sse = ctype.split(';')[0].strip().lower() == 'text/event-stream'
         streaming = (
-            ctype.split(';')[0].strip().lower() == 'text/event-stream'
+            is_sse
             or (resp.getheader('Content-Length') is None
                 and resp.status not in (204, 304) and method != 'HEAD')
         )
+        # 日志标签按 ctype 细化（任务 kqhweh，ogwtb4 评审建议 2）：SSE 记 STREAM，
+        # 无 Content-Length 的普通响应（如 JSON rpc）记 CHUNKED，不再混称 STREAM。
+        stream_tag = 'PROXY STREAM' if is_sse else 'PROXY CHUNKED'
         if streaming:
             # 不设 content_len → wsgi 层出 Transfer-Encoding: chunked，逐块透传。
             # 连接由生成器生命周期接管（外层不 close）。
@@ -170,8 +177,8 @@ def forward(env, path, rule):
                 'http_status': '%d %s' % (resp.status, resp.reason or ''),
                 'extra_headers': _resp_headers(resp),
             }
-            logging.info('PROXY STREAM: %s %s -> %s://%s%s => %d',
-                         method, path, u.scheme, u.netloc, target, resp.status)
+            logging.info('%s: %s %s -> %s://%s%s => %d',
+                         stream_tag, method, path, u.scheme, u.netloc, target, resp.status)
 
             def gen():
                 nbytes = 0
@@ -187,8 +194,8 @@ def forward(env, path, rule):
                         yield chunk
                 except Exception as e:
                     # 响应头已出、无法再改状态码：断流 + 日志，前端自带重连兜底。
-                    logging.warning('PROXY STREAM CUT: %s %s -> %s://%s after %d bytes: %s',
-                                    method, path, u.scheme, u.netloc, nbytes, e)
+                    logging.warning('%s CUT: %s %s -> %s://%s after %d bytes: %s',
+                                    stream_tag, method, path, u.scheme, u.netloc, nbytes, e)
                 finally:
                     try:
                         conn.close()
@@ -225,5 +232,16 @@ def proxy_handler(env, path, query, post):
         return None
     rule = match_route(routes, path)
     if not rule:
+        # 裸前缀兜底（任务 kqhweh，ogwtb4 评审建议 3）：/mac（无尾斜杠）不匹配
+        # '/mac/' 前缀，会落回既有管线渲染兜底聊天页（易误导）。显式 302 重定向到
+        # 带尾斜杠的前缀，进入正常代理路由。
+        for r in routes:
+            p = r['prefix']
+            if p.endswith('/') and path == p.rstrip('/'):
+                logging.info('PROXY REDIRECT: %s -> %s', path, p)
+                return ({'type': 'text/html',
+                         'http_status': '302 Found',
+                         'extra_headers': [('Location', p)]},
+                        '<a href="%s">%s</a>' % (p, p))
         return None
     return forward(env, path, rule)
