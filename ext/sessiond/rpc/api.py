@@ -9,10 +9,11 @@
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→删 jsonl→立即重拉，
 #              0829-2238-atnj；返回 {ok, gen, pid}）
-#   op=agent   .agent 文件类型（任务 kcywpy）：session = 站内 /…*.agent 路径；
-#              读 agent 规格 JSON（host + workdir）→ 校验 → workdir 不存在则自动创建 →
-#              返回会话 jsonl 站内路径（= workdir/<name>.jsonl）。启动参数解析单点，
-#              host v1 仅保存/可见、不跨机拉起（见 design.md .agent 小节）。
+#   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/dir 拆分）：
+#              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 dir）→ 校验 →
+#              cwd = .agent 文件所在目录，会话目录 = dir（缺省 = cwd 目录，不存在自动创建）→
+#              返回会话 jsonl 站内路径（= <dir>/<name>.jsonl）与 cwd/dir。
+#              启动参数解析单点，host v1 仅保存/可见、不跨机拉起（见 design.md .agent 小节）。
 # 鉴权由 w 全局 BasicAuth 承担；路径校验非法 → 400。
 import json as _json
 import logging as _logging
@@ -59,20 +60,31 @@ def _baseline_doc(b, r):
             "watermark": r.get("watermark")}
 
 
-# ---------------- .agent 文件类型（任务 kcywpy） ----------------
-# xxx.agent = agent 规格 JSON（字段参考 ~/m/agents/ 任务 spec.json 风格，最小集 =
-# host + workdir，多余字段宽容）。访问 /xxx.agent → 聊天视图，会话启动参数改从该
-# JSON 读取：会话工作目录 = workdir，会话 jsonl = workdir/<agent名>.jsonl（每 agent
-# 一会话、可重连续聊，类比 /assistant/dispatcher.jsonl 的组织）。本函数 = 启动参数
-# 解析单点：将来加 host 跨机路由（反向通道/各机 8080 代理）只改这里。
+# ---------------- .agent 文件类型（任务 kcywpy；fw2ll1 cwd/dir 拆分） ----------------
+# xxx.agent = agent 规格 JSON（字段参考 ~/m/agents/ 任务 spec.json 风格，多余字段宽容）。
+# 访问 /xxx.agent → 聊天视图，会话启动参数改从该 JSON 读取（用户拍板 2026-08-31）：
+#   - 字段只留 `host` + 可选 `dir`；旧 `workdir` 不再识别（读到忽略并日志提示）。
+#   - 会话进程 cwd = .agent 文件所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展，
+#     如 ~/m/assistant/*.agent → cwd=~/m/assistant → 命中 assistant/.pi 全套扩展）。
+#   - dir = 会话目录（会话 jsonl 落盘处，也是跨机可观测的 participant 目录，经
+#     agents-sync 四机同步）；缺省 = cwd 目录（会话文件落在 .agent 旁边）。
+#   - 会话 jsonl = <dir>/<agent名>.jsonl（每 agent 一会话、可重连续聊，类比
+#     /assistant/dispatcher.jsonl 的组织）。.jsonl 直开路径不走本约定（cwd 仍 = dirname）。
+# 本函数 = 启动参数解析单点，将来加 host 跨机路由（反向通道/各机 8080 代理）只改这里。
 # host v1 边界：仅持久化保存（存于 .agent 文件）+ 随响应返回 + 聊天页可见；
-# 会话一律在本 8080 实例本地拉起（sessiond 现状即本地监督），不做跨机拉起。
+# 会话一律在本 8080 实例所在机器本地拉起（sessiond 现状即本地监督），不做跨机拉起。
+# 警示：跨机打开他人 .agent 会在本机另起会话写同一同步文件，host 路由落地前勿在
+# 其它机器打开非本机 host 的 .agent（见 design.md）。
 
 
 def _resolve_agent(store, session):
     """解析 .agent 规格。成功返回响应元组（200 + 规格文档），失败返回错误元组：
-    文件缺失 → 404；路径非法/坏 JSON/缺字段/workdir 逃逸 ~/m → 400（对齐 w 既有
-    缺失/错误处理口径）。"""
+    字段约定（任务 fw2ll1，用户拍板 2026-08-31）：只留 `host` + 可选 `dir`；
+    cwd 隐含 = .agent 文件所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展）；
+    dir = 会话目录（jsonl 落盘处，可观测层，缺省 = cwd 目录）；旧 `workdir`
+    字段不再识别（读到忽略并日志提示）。成功返回响应元组（200 + 规格文档），
+    失败返回错误元组：文件缺失 → 404；路径非法/坏 JSON/缺 host/dir 非法或逃逸 ~/m → 400
+    （对齐 w 既有缺失/错误处理口径）。"""
     if not session:
         return _j({"ok": False, "error": "missing required param: session"},
                   '400 Bad Request')
@@ -107,7 +119,7 @@ def _resolve_agent(store, session):
         return _j({"ok": False,
                    "error": "agent file %s: top-level must be a JSON object" % p},
                   '400 Bad Request')
-    missing = [k for k in ("host", "workdir")
+    missing = [k for k in ("host",)
                if not isinstance(spec.get(k), str) or not spec.get(k).strip()]
     if missing:
         return _j({"ok": False,
@@ -115,28 +127,54 @@ def _resolve_agent(store, session):
                             % (p, ", ".join(missing))},
                   '400 Bad Request')
     host = spec["host"].strip()
-    workdir = _os.path.expanduser(spec["workdir"].strip())
-    # workdir 安全红线：与会话路径同一根集（~/m + run 运行时区），防穿越/逃逸。
-    real = _os.path.realpath(workdir)
-    roots = [_proc.WS_REAL,
-             _os.path.realpath(_os.path.join(_proc.WS, "run"))]
-    if not any(real == r or real.startswith(r + _os.sep) for r in roots):
+    # 旧 workdir 字段（kcywpy v1）不再识别：忽略并日志提示，不报错（用户拍板）。
+    if "workdir" in spec:
+        _log.info("agent %s: legacy 'workdir' field ignored "
+                  "(cwd = directory containing the .agent file)", name)
+    # cwd = .agent 文件所在目录（站内路径已校验在 ~/m 内；resolve_cwd 再过一道）。
+    cwd_site_dir = _posixpath.dirname(p)
+    cwd_src = (_proc.WS if cwd_site_dir in ("", "/")
+               else _os.path.join(_proc.WS, cwd_site_dir.lstrip("/")))
+    try:
+        cwd = _proc.resolve_cwd(cwd_src)
+    except ValueError as e:
         return _j({"ok": False,
-                   "error": "agent file %s: workdir escapes workspace: %s"
-                            % (p, spec["workdir"])},
+                   "error": "agent file %s: agent dir rejected as cwd: %s"
+                            % (p, e)},
                   '400 Bad Request')
-    # workdir 不存在 → 自动创建（含 participant/ 中间层），创建行为记日志。
-    if not _os.path.isdir(workdir):
+    # dir = 会话目录：可选字段；缺省 = cwd 目录（会话文件落在 .agent 旁边）。
+    dir_val = spec.get("dir")
+    if dir_val is None:
+        sess_dir = cwd
+    else:
+        if not isinstance(dir_val, str) or not dir_val.strip():
+            return _j({"ok": False,
+                       "error": "agent file %s: 'dir' must be a non-empty "
+                                "string when present" % p},
+                      '400 Bad Request')
+        sess_dir = _os.path.expanduser(dir_val.strip())
+        # dir 安全红线：与会话路径同一根集（~/m + run 运行时区），防穿越/逃逸。
+        real = _os.path.realpath(sess_dir)
+        roots = [_proc.WS_REAL,
+                 _os.path.realpath(_os.path.join(_proc.WS, "run"))]
+        if not any(real == r or real.startswith(r + _os.sep) for r in roots):
+            return _j({"ok": False,
+                       "error": "agent file %s: dir escapes workspace: %s"
+                                % (p, dir_val)},
+                      '400 Bad Request')
+        sess_dir = real
+    # dir 不存在 → 自动创建（含 participant/ 中间层），创建行为记日志。
+    if not _os.path.isdir(sess_dir):
         try:
-            _os.makedirs(workdir, exist_ok=True)
+            _os.makedirs(sess_dir, exist_ok=True)
         except OSError as e:
             return _j({"ok": False,
-                       "error": "agent file %s: cannot create workdir %s: %s"
-                                % (p, workdir, e)},
+                       "error": "agent file %s: cannot create dir %s: %s"
+                                % (p, sess_dir, e)},
                       '500 Internal Server Error')
-        _log.info("agent %s: auto-created workdir %s", name, workdir)
-    # 会话 = workdir/<name>.jsonl（每 agent 一会话）；站内路径经既有校验再过一道。
-    rel_dir = _os.path.relpath(workdir, _proc.WS)
+        _log.info("agent %s: auto-created dir %s", name, sess_dir)
+    # 会话 = <dir>/<name>.jsonl（每 agent 一会话）；站内路径经既有校验再过一道。
+    rel_dir = _os.path.relpath(sess_dir, _proc.WS)
     site_jsonl = "/" + _posixpath.normpath(_posixpath.join(rel_dir, name + ".jsonl"))
     try:
         session_file = _proc.resolve_session_path(site_jsonl)
@@ -145,8 +183,12 @@ def _resolve_agent(store, session):
                    "error": "agent file %s: derived session path rejected: %s"
                             % (p, e)},
                   '400 Bad Request')
-    return _j({"ok": True, "name": name, "host": host, "workdir": workdir,
-               "session": site_jsonl, "session_file": session_file,
+    # 登记显式 cwd（任务 fw2ll1）：该会话路径懒建桥接时按此 cwd 拉起，
+    # 不再恒等于 dirname(session_file)。
+    _b.set_session_cwd(site_jsonl, cwd)
+    return _j({"ok": True, "name": name, "host": host, "cwd": cwd,
+               "dir": sess_dir, "session": site_jsonl,
+               "session_file": session_file,
                "hostRouting": "v1: session spawns locally on this 8080 host; "
                               "host is stored for future cross-host routing"})
 

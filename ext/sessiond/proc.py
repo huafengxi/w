@@ -10,8 +10,9 @@
 # URL 路径路由（用户拍板 inform p4th）：会话 = ~/m 下任意 `.jsonl` 路径，
 # `/assistant/<name>.jsonl?v=chat`、`/foo/bar/x.jsonl?v=chat` 均可；不同目录
 # 的同名文件 = 不同会话，可并存。路径校验锁定 ~/m 内（防穿越/逃逸）。
-# 会话工作目录 = 其 jsonl 所在目录（用户拍板 inform cwd1；cwd 决定 pi 加载
-# 哪个工作区的 AGENTS/扩展——预期行为，不特判）。
+# 会话工作目录（任务 fw2ll1 cwd/dir 拆分）：缺省 = 其 jsonl 所在目录（.jsonl 直开，
+# 用户拍板 inform cwd1）；.agent 会话由调用方（rpc/api.py op=agent）显式传入，
+# 可与会话文件所在目录不同（cwd 决定 pi 加载哪个工作区的 AGENTS/扩展）。
 #
 # 零文件（用户拍板 inform n0fx/p4id/s4fn）：除会话 jsonl 本身外不引入任何
 # 辅助文件——无账本、无进程 stderr 文件。
@@ -69,6 +70,19 @@ def resolve_session_path(path):
 def display_name(real_path):
     """会话展示名 / pi --name：basename 去 .jsonl 后缀。"""
     return os.path.basename(real_path)[:-len(".jsonl")]
+
+
+def resolve_cwd(cwd):
+    """显式 cwd 校验（任务 fw2ll1）：与会话路径同一根集（~/m + run 运行时区），
+    realpath 前缀校验防穿越/符号链接逃逸；非法抛 ValueError（调用方回 400）。
+    返回解析后的绝对路径（目录可以尚不存在，_spawn 时 makedirs）。"""
+    if not isinstance(cwd, str) or not cwd.strip() or "\x00" in cwd:
+        raise ValueError("invalid cwd %r" % (cwd,))
+    real = os.path.realpath(os.path.expanduser(cwd.strip()))
+    roots = [WS_REAL, os.path.realpath(os.path.join(WS, "run"))]
+    if not any(real == r or real.startswith(r + os.sep) for r in roots):
+        raise ValueError("cwd escapes workspace: %r" % (cwd,))
+    return real
 
 
 BACKOFF_MAX = 30.0          # 崩溃重启退避上限（秒）
@@ -140,7 +154,7 @@ class Supervisor:
     调用方（bridge）负责入环/多播。
     """
 
-    def __init__(self, session_path, on_event):
+    def __init__(self, session_path, on_event, cwd=None):
         # 兼容站内路径（如 `/assistant/foo.jsonl`）与已解析绝对路径传入。
         if os.path.isabs(session_path) and session_path.endswith(".jsonl"):
             rp = os.path.realpath(session_path)
@@ -152,7 +166,9 @@ class Supervisor:
         else:
             self.session_file = resolve_session_path(session_path)
         self.name = display_name(self.session_file)
-        self.cwd = os.path.dirname(self.session_file)   # cwd = jsonl 所在目录（cwd1）
+        # cwd 由调用方显式传入（任务 fw2ll1：.agent cwd/dir 拆分，经 bridge 转交）；
+        # 缺省 = jsonl 所在目录（.jsonl 直开路径行为不变，cwd1）。
+        self.cwd = resolve_cwd(cwd) if cwd else os.path.dirname(self.session_file)
         self.on_event = on_event
         self.proc = None
         self.pid = None

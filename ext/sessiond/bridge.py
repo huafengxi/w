@@ -40,7 +40,7 @@ DIALOG_METHODS = {"select", "confirm", "input", "editor"}
 class Bridge:
     """单个会话路径的进程内事件环 + 命令通道（按路径注册，见 get_bridge）。"""
 
-    def __init__(self, session_path):
+    def __init__(self, session_path, cwd=None):
         # 站内路径（如 /assistant/foo.jsonl）；解析/校验在 Supervisor 内。
         self._site_path = session_path
         self.session = None      # 展示名，待监督员解析后回填
@@ -59,7 +59,8 @@ class Bridge:
         # 桥接不清理会让 attach 基线向新 tab 重建已死 dialog → 按 deadline 清理）
         self._dialog_deadline = {}
         self.subscribers = 0                 # 当前 SSE 流订阅数
-        self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest)
+        self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest,
+                                    cwd=cwd)
         self.session = self.sup.name         # 展示名以监督员解析为准
 
     # ---- 监督侧事件入口 ----
@@ -284,16 +285,41 @@ class Bridge:
 _BRIDGES = {}                     # resolved path -> Bridge（按需多会话）
 _BRIDGES_LOCK = threading.Lock()
 
+# 会话显式 cwd 登记（任务 fw2ll1：.agent cwd/dir 拆分）：
+# op=agent 解析成功后先登记「会话文件 → 显式 cwd（= .agent 文件所在目录）」，
+# 之后该会话路径懒建桥接时按登记把 cwd 显式传给 Supervisor（不再恒等于
+# dirname(session_file)）。web 重启后登记随进程消失——前端打开 .agent 页必先经
+# op=agent 解析再 attach，登记自然重建；.jsonl 直开无登记 → cwd 缺省 dirname。
+_CWD_OVERRIDES = {}               # resolved session_file -> cwd
+_CWD_OVERRIDES_LOCK = threading.Lock()
+
+
+def set_session_cwd(session_path, cwd):
+    """登记会话的显式 cwd（任务 fw2ll1，调用方 = rpc/api.py op=agent）。
+    session_path 经会话路径校验，cwd 经 proc.resolve_cwd 校验；非法抛 ValueError
+    （调用方回 400）。重复登记以最后一次为准；已存在桥接不受影响（桥接生命周期内
+    cwd 不变）。"""
+    key = _proc.resolve_session_path(session_path)
+    _CWD_OVERRIDES_LOCK.acquire()
+    try:
+        _CWD_OVERRIDES[key] = _proc.resolve_cwd(cwd)
+    finally:
+        _CWD_OVERRIDES_LOCK.release()
+
 
 def get_bridge(session_path):
     """按路径取桥接；首次访问创建并拉起该会话的监督员（懒拉起）。
     注册表键 = 解析后的绝对路径（`/./x` 等变体归一）。
+    建桥时查 _CWD_OVERRIDES：命中则把显式 cwd 传给 Supervisor（.agent 会话），
+    未命中缺省 = jsonl 所在目录（.jsonl 直开，行为不变）。
     非法路径抛 ValueError（调用方回 400）。"""
     key = _proc.resolve_session_path(session_path)
     with _BRIDGES_LOCK:
         b = _BRIDGES.get(key)
         if b is None:
-            b = Bridge(session_path)
+            with _CWD_OVERRIDES_LOCK:
+                cwd = _CWD_OVERRIDES.get(key)
+            b = Bridge(session_path, cwd=cwd)
             _BRIDGES[key] = b
             b.sup.ensure_started()
         return b

@@ -1859,9 +1859,10 @@ async function resolveAgentAndAttach() {
   try {
     const doc = await api("agent", {session: AGENT});
     await attach(doc.session);   // attach 开头清屏，可见性信息须在其后落行
-    // host/workdir 可见性（需求 4/5）：attach 后一行系统消息（host v1 = 仅保存/可见，
+    // host/cwd/dir 可见性（任务 fw2ll1）：attach 后一行系统消息（host v1 = 仅保存/可见，
     // 会话在本 8080 主机本地拉起；跨机路由为后续能力，见 design.md）。
-    sysLine("agent " + doc.name + ": host=" + doc.host + " · workdir=" + doc.workdir
+    sysLine("agent " + doc.name + ": host=" + doc.host + " · cwd=" + doc.cwd
+      + " · dir=" + doc.dir
       + " (v1: session spawned locally on this 8080 host)");
   } catch (e) {
     sysLine("Cannot open agent " + AGENT + ": " + e.message, "err");
