@@ -57,7 +57,13 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .badge.run { color: var(--ok); border-color: var(--ok); }
 .badge.off { color: var(--dim); } .badge.dis { color: var(--err); border-color: var(--err); }
 #stream { flex: 1; overflow-y: auto; padding: 12px 16px; }
-.ev { margin-bottom: 8px; }
+/* 视口外块跳过布局/绘制（任务 bw333x）：大历史会话（1.3MB 基线/676KB DOM 文本）
+   下，任何强制同步布局（输入框高度自适应、粘底滚动）与切回 tab 的重绘都从全量
+   DOM 降到视口量级；`auto` 关键字记住上次实际尺寸，滚动高度估算贴近真实。
+   不支持的浏览器（iOS Safari<18 等）属性忽略，零影响。 */
+.ev { margin-bottom: 8px; content-visibility: auto;
+  contain-intrinsic-size: 60px;                 /* 回退：不认 auto 关键字的旧 Chrome（85-97） */
+  contain-intrinsic-size: auto 60px; }
 /* 用户消息靠右（聊天惯例）：浅蓝底区分；无粗边条（任务 0829-2131-pdop
    inbox r3gt：整页所有消息块统一普通 1px 圆角边框） */
 .role-user { background: #ddf4ff; border: 1px solid #b6e3ff;
@@ -332,6 +338,17 @@ let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件
 let toolBlocks = {};          // toolCallId -> 折叠块引用
 let healBusy = false;
 let healFails = 0;
+// 基线分片渲染（任务 bw333x）：大历史（675 entries/1.3MB）同步一次渲染会阻塞主线程
+// 秒级（且每 addDiv 触发 scrollStream 强制布局，近二次方）。改时间切片渲染：
+// baselineGen = 渲染代际号（attach/heal/clear 重入 → 旧分片循环放弃）；
+// batchDepth > 0 时 scrollStream 直接返回（抑制逐条强制布局），渲染完成一次性回底。
+let baselineGen = 0;
+let batchDepth = 0;
+// 工具输出流节流（任务 bw333x）：tool_execution_update 是累积值整段替换，冗长工具
+// （子任务大输出）帧率高时持续抢占主线程 → 按 toolCallId 合并、150ms 节流，
+// 只写最新值；tool_execution_end 立即落地不丢终值。
+let toolUpdatePending = {};
+let toolUpdateTimer = null;
 // 流式渐进 markdown：text_delta 累积后节流重渲染，每次渲染都过消毒；
 // message_end 最终收尾渲染一次。
 let mdRenderTimer = null;
@@ -435,11 +452,13 @@ async function attach(name) {
   if (attached === name && streamAlive) return;
   stopStream();
   clearPendingDialogs();
+  baselineGen++;                                    // 旧基线分片渲染立即作废（bw333x）
   $("stream").innerHTML = "";
   curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
   turnActive = false; waitingEl = null;                 // 重挂接重置等待指示（0829-2107-cvdn）
   pendingSends = {}; queueState = {steering: [], followUp: []};
+  toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重挂接丢弃（bw333x）
   curMsgCount = null; curCompacting = null; curGen = null; curRestarts = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
   curCtx = null;                                      // 上下文占用随重挂接重置（0830-1324-3qet）
   retryBoxEl = null; lastRenderedErrorMsg = null;       // 回合状态重置（0829-2131-pdop）
@@ -452,41 +471,66 @@ async function attach(name) {
   applyBaseline(doc, true);
 }
 
-// 基线落盘：渲染活跃分支、记游标/水位、开流
+// 基线落盘：渲染活跃分支、记游标/水位、开流（任务 bw333x 改分片渲染）
 function applyBaseline(doc, initial) {
   lastGen = doc.gen !== undefined ? doc.gen : lastGen;
   curLeafId = doc.leafId || null;
   const branch = activeBranch(doc.entries || [], curLeafId);
   if (!initial) {
+    baselineGen++;                                  // 旧分片循环作废（先于清屏，防旧渲染回填新流）
     $("stream").innerHTML = "";
     curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
     seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
     turnActive = false; waitingEl = null;               // 自愈重渲染重置（0829-2107-cvdn）
     pendingSends = {}; queueState = {steering: [], followUp: []};
+    toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重渲染丢弃（bw333x）
     retryBoxEl = null; lastRenderedErrorMsg = null;     // 回合状态重置（0829-2131-pdop）
     renderQueuedPanel();                                // 全量重渲染：待发/队列面板一并清除（0829-2115-zvti）
   }
-  for (const e of branch) renderEntry(e);
   curAssistantEl = null; curAssistantBuf = "";  // 基线内的插入锚点不外漏到实时流（0830-1047-ehzc）
-  // 重建悬空 dialog（0830-0956-vk20 bug2）：extension_ui_request 不在 entries 里，
-  // 离线/刷新期间触发的 ask_user 仅凭事件环收不到（续流游标在其后）——后端随基线
-  // 下发权威快照，逐个重建（showDialog 同 id 幂等，不会叠框）。
-  for (const d of doc.pendingDialogs || []) showDialog(d);
-  // 队列快照基线直出（任务 0830-1457-a57d）：刷新后不等下一次 queue_update 事件，
-  // 基线带权威队列态直接落地渲染（环内最近一次 queue_update）。
-  if (doc.queue) {
-    queueState = {steering: Array.isArray(doc.queue.steering) ? doc.queue.steering : [],
-                  followUp: Array.isArray(doc.queue.followUp) ? doc.queue.followUp : []};
-    renderQueuedPanel();
-  }
   streamCursor = doc.watermark || "";
   lastEidNum = eidNum(streamCursor);
-  openStream();
-  sysLine("Baseline " + (doc.entries || []).length + " entries (active branch "
-    + branch.length + ")");
-  stickyBottom = true; scrollStream(true);       // attach/heal 基线落地 → 强制回底并恢复跟随（0830-1544-q9rr）
-  sendGetState();                              // 基线完成 → 拉权威模型/思考强度（0830-1257-vwzb）
-  sendCtxStats();                              // 基线完成 → 拉上下文占用（0830-1324-3qet）
+  renderBranchSliced(branch, doc);
+}
+
+// 分片渲染活跃分支（任务 bw333x）：~10ms 预算/片，超时让出主线程（打字/切 tab 可插队）；
+// 切片期间 batchDepth>0 抑制 scrollStream 的逐条强制布局（原 ~660 次 → 完成后 1 次）；
+// 全部落地后才开流——与旧版同步渲染同序，避免实时事件插进历史中间。
+// 代际防护：新一轮基线（attach/heal/clear）使 baselineGen 递增，旧循环下一片即放弃。
+function renderBranchSliced(branch, doc) {
+  const gen = ++baselineGen;
+  batchDepth++;
+  let i = 0;
+  const finish = () => {
+    // 重建悬空 dialog（0830-0956-vk20 bug2）：extension_ui_request 不在 entries 里，
+    // 离线/刷新期间触发的 ask_user 仅凭事件环收不到（续流游标在其后）——后端随基线
+    // 下发权威快照，逐个重建（showDialog 同 id 幂等，不会叠框）。
+    for (const d of doc.pendingDialogs || []) showDialog(d);
+    // 队列快照基线直出（任务 0830-1457-a57d）：刷新后不等下一次 queue_update 事件，
+    // 基线带权威队列态直接落地渲染（环内最近一次 queue_update）。
+    if (doc.queue) {
+      queueState = {steering: Array.isArray(doc.queue.steering) ? doc.queue.steering : [],
+                    followUp: Array.isArray(doc.queue.followUp) ? doc.queue.followUp : []};
+      renderQueuedPanel();
+    }
+    openStream();
+    sysLine("Baseline " + (doc.entries || []).length + " entries (active branch "
+      + branch.length + ")");
+    stickyBottom = true; scrollStream(true);       // attach/heal 基线落地 → 强制回底并恢复跟随（0830-1544-q9rr）
+    sendGetState();                              // 基线完成 → 拉权威模型/思考强度（0830-1257-vwzb）
+    sendCtxStats();                              // 基线完成 → 拉上下文占用（0830-1324-3qet）
+  };
+  const slice = () => {
+    // 进入时 batchDepth 已为 1（入口/续片保持），渲染全程维持 → scrollStream 被抑制；
+    // 只在放弃/完成时递减，收支平衡。
+    if (gen !== baselineGen) { batchDepth--; return; }   // 被新基线顶替 → 放弃（新循环自带清屏/重置）
+    const t0 = Date.now();
+    while (i < branch.length && Date.now() - t0 < 10) renderEntry(branch[i++]);
+    if (i < branch.length) { setTimeout(slice, 0); return; }
+    batchDepth--;
+    finish();
+  };
+  slice();
 }
 
 // 活跃分支：从 leafId 沿 parentId 走回根（含 pre-compaction 链）
@@ -870,19 +914,21 @@ function renderEvent(o) {
     scrollStream(); return;
   }
   if (t === "tool_execution_update") {
-    // 流式行并入所属工具块；partialResult 是累积值 → 整段替换
+    // 流式行并入所属工具块；partialResult 是累积值 → 整段替换；
+    // 150ms 节流合帧（任务 bw333x）：冗长工具输出高频整段替换会抢占主线程导致输入卡顿，
+    // 按 toolCallId 只留最新值、定时器统一落地（scrollStream 也在落地时统一做）。
     const id = o.toolCallId;
     if (id && seenToolIds.has("r:" + id)) return;       // 基线已收尾（幂等）
-    let blk = id ? toolBlocks[id] : null;
-    if (!blk) blk = toolBlock(id, o.toolName);
-    blk.outPre.textContent = resultText(o.partialResult);
-    scrollStream(); return;
+    toolUpdatePending[id || "?"] = o;
+    if (!toolUpdateTimer) toolUpdateTimer = setTimeout(flushToolUpdates, 150);
+    return;
   }
   if (t === "tool_execution_end") {
     if (o.toolCallId) {
       const key = "r:" + o.toolCallId;
       if (seenToolIds.has(key)) return;       // 基线已渲染（幂等）
       seenToolIds.add(key);
+      delete toolUpdatePending[o.toolCallId]; // 终值直接落地，丢弃节流中的中间值（bw333x）
     }
     let blk = o.toolCallId ? toolBlocks[o.toolCallId] : null;
     if (!blk) blk = toolBlock(o.toolCallId, o.toolName);
@@ -1067,7 +1113,7 @@ function setToolStatus(blk, status) {
 function fmtArgs(args) {
   if (args == null) return "";
   const s = typeof args === "string" ? args : JSON.stringify(args, null, 2);
-  return trunc(s, 20000);
+  return trunc(s, 8000);                            // 展示截断（20000→8000，任务 bw333x：降 DOM 体量）
 }
 // summary 参数预览：按工具类型取关键参数——
 // bash→command、read/write/edit→path、grep/find→pattern、dispatch→name、
@@ -1096,7 +1142,20 @@ function resultText(res) {
   let txt = "";
   for (const c of (res && res.content) || [])
     if (c && c.type === "text") txt += c.text;
-  return trunc(txt.trim(), 50000);                      // 展示截断，防巨型输出卡顿
+  return trunc(txt.trim(), 20000);                      // 展示截断，防巨型输出卡顿（50000→20000，任务 bw333x）
+}
+// 工具输出节流落地（任务 bw333x）：定时器到期把每个 toolCallId 的最新累积值写入其块；
+// scrollStream 统一在此做一次（替代原每帧一滚）。
+function flushToolUpdates() {
+  toolUpdateTimer = null;
+  const ids = Object.keys(toolUpdatePending);
+  for (const id of ids) {
+    const o = toolUpdatePending[id]; delete toolUpdatePending[id];
+    let blk = toolBlocks[id] || null;
+    if (!blk) blk = toolBlock(id === "?" ? null : id, o.toolName);
+    blk.outPre.textContent = resultText(o.partialResult);
+  }
+  if (ids.length) scrollStream();
 }
 
 // ---------------- markdown 渲染 + 极简语法高亮 ----------------
@@ -1778,9 +1837,19 @@ $("promptInput").addEventListener("keydown", e => {
     e.preventDefault(); sendPrompt();
   }
 });
+// 高度自适应 rAF 合帧（任务 bw333x）：原来每次按键同步写/读 scrollHeight = 两次强制
+// 布局，大 DOM 下每键都贵；合并到下一帧一次做完，按键手感不被布局阻塞。
+let inputFitScheduled = false;
 $("promptInput").addEventListener("input", function () {
-  this.style.height = "auto";
-  this.style.height = Math.min(this.scrollHeight, 120) + "px";
+  const el = this;
+  if (!inputFitScheduled) {
+    inputFitScheduled = true;
+    requestAnimationFrame(() => {
+      inputFitScheduled = false;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    });
+  }
   // / 补全提示（简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
   if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); sendStatusQuery(); sendCtxStats(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填；0830-1324-3qet：上下文占用
   else hideNotice();
@@ -1819,6 +1888,7 @@ function msgText(m) {
 // wheel/touchmove 上滚手势同步置非粘底，防止 scroll 事件到达前先被下一帧拉回。
 let stickyBottom = true;
 function scrollStream(force) {
+  if (batchDepth > 0) return;              // 基线分片渲染中：抑制逐条强制布局，完成时一次性回底（bw333x）
   const el = $("stream");
   if (!force && !stickyBottom) return;     // 非粘底：增量渲染不强制拉底（0830-1544-q9rr）
   el.scrollTop = el.scrollHeight;
