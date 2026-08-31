@@ -10,8 +10,8 @@
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
 #   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/sessionDir 拆分）：
-#              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 sessionDir）→ 校验 →
-#              cwd = .agent 文件所在目录，会话目录 = sessionDir（缺省 = cwd 目录，不存在自动创建）→
+#              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 cwd/sessionDir）→ 校验 →
+#              cwd = 显式 `cwd` 字段（缺省 = .agent 文件所在目录），会话目录 = sessionDir（缺省 = cwd 目录，不存在自动创建）→
 #              返回会话 jsonl 站内路径（= <sessionDir>/<name>.jsonl）与 cwd/sessionDir。
 #              启动参数解析单点，host v1 仅保存/可见、不跨机拉起（见 design.md .agent 小节）。
 # 鉴权由 w 全局 BasicAuth 承担；路径校验非法 → 400。
@@ -63,8 +63,9 @@ def _baseline_doc(b, r):
 # ---------------- .agent 文件类型（任务 kcywpy；fw2ll1 cwd/sessionDir 拆分） ----------------
 # xxx.agent = agent 规格 JSON（字段参考 ~/m/agents/ 任务 spec.json 风格，多余字段宽容）。
 # 访问 /xxx.agent → 聊天视图，会话启动参数改从该 JSON 读取（用户拍板 2026-08-31）：
-#   - 字段只留 `host` + 可选 `sessionDir`；旧 `workdir` 不再识别（读到忽略并日志提示）。
-#   - 会话进程 cwd = .agent 文件所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展，
+#   - 字段只留 `host` + 可选 `cwd`/`sessionDir`；旧 `workdir` 不再识别（读到忽略并日志提示）。
+#   - 会话进程 cwd = 显式 `cwd` 字段（~/ 展开，安全红线同 sessionDir；2026-08-31 用户拍板，
+#     票 7t0ufv）；缺省回退 = .agent 文件所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展，
 #     如 ~/m/assistant/*.agent → cwd=~/m/assistant → 命中 assistant/.pi 全套扩展）。
 #   - sessionDir = 会话目录（会话 jsonl 落盘处，也是跨机可观测的 participant 目录，经
 #     agents-sync 四机同步）；缺省 = cwd 目录（会话文件落在 .agent 旁边）。
@@ -80,8 +81,10 @@ def _baseline_doc(b, r):
 
 def _resolve_agent(store, session):
     """解析 .agent 规格。成功返回响应元组（200 + 规格文档），失败返回错误元组：
-    字段约定（任务 fw2ll1，用户拍板 2026-08-31）：只留 `host` + 可选 `sessionDir`；
-    cwd 隐含 = .agent 文件所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展）；
+    字段约定（任务 fw2ll1，用户拍板 2026-08-31；2026-08-31 票 7t0ufv 加显式 `cwd`）：
+    只留 `host` + 可选 `cwd`/`sessionDir`；
+    cwd = 显式 `cwd` 字段（~/ 展开，不得逃逸 ~/m + run 运行时区），缺省回退 = .agent 文件
+    所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展）；
     sessionDir = 会话目录（jsonl 落盘处，可观测层，缺省 = cwd 目录）；旧 `workdir`
     字段不再识别（读到忽略并日志提示）。成功返回响应元组（200 + 规格文档），
     失败返回错误元组：文件缺失 → 404；路径非法/坏 JSON/缺 host/sessionDir 非法或逃逸 ~/m → 400
@@ -131,16 +134,34 @@ def _resolve_agent(store, session):
     # 旧 workdir 字段（kcywpy v1）不再识别：忽略并日志提示，不报错（用户拍板）。
     if "workdir" in spec:
         _log.info("agent %s: legacy 'workdir' field ignored "
-                  "(cwd = directory containing the .agent file)", name)
-    # cwd = .agent 文件所在目录（站内路径已校验在 ~/m 内；resolve_cwd 再过一道）。
-    cwd_site_dir = _posixpath.dirname(p)
-    cwd_src = (_proc.WS if cwd_site_dir in ("", "/")
-               else _os.path.join(_proc.WS, cwd_site_dir.lstrip("/")))
+                  "(cwd = 显式 cwd 字段，缺省 .agent 所在目录)", name)
+    # cwd：优先显式 `cwd` 字段（2026-08-31 用户拍板，票 7t0ufv：cwd 不再靠文件位置隐含表达；
+    # 支持 ~/ 展开；安全红线同 sessionDir = 不得逃出 ~/m + run 运行时区）；
+    # 缺省回退 = .agent 文件所在目录（站内路径已校验在 ~/m 内；resolve_cwd 再过一道）。
+    cwd_val = spec.get("cwd")
+    if cwd_val is not None:
+        if not isinstance(cwd_val, str) or not cwd_val.strip():
+            return _j({"ok": False,
+                       "error": "agent file %s: 'cwd' must be a non-empty "
+                                "string when present" % p},
+                      '400 Bad Request')
+        cwd_src = _os.path.realpath(_os.path.expanduser(cwd_val.strip()))
+        roots = [_proc.WS_REAL,
+                 _os.path.realpath(_os.path.join(_proc.WS, "run"))]
+        if not any(cwd_src == r or cwd_src.startswith(r + _os.sep) for r in roots):
+            return _j({"ok": False,
+                       "error": "agent file %s: cwd escapes workspace: %s"
+                                % (p, cwd_val)},
+                      '400 Bad Request')
+    else:
+        cwd_site_dir = _posixpath.dirname(p)
+        cwd_src = (_proc.WS if cwd_site_dir in ("", "/")
+                   else _os.path.join(_proc.WS, cwd_site_dir.lstrip("/")))
     try:
         cwd = _proc.resolve_cwd(cwd_src)
     except ValueError as e:
         return _j({"ok": False,
-                   "error": "agent file %s: agent dir rejected as cwd: %s"
+                   "error": "agent file %s: cwd rejected: %s"
                             % (p, e)},
                   '400 Bad Request')
     # sessionDir = 会话目录：可选字段；缺省 = cwd 目录（会话文件落在 .agent 旁边）。
