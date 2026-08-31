@@ -31,6 +31,7 @@
 # 已 flush）→ web 死后会话自行退出；新 web 首次访问某会话时按 environ 标记扫
 # 出仍存的旧宿主，等其自然退出（宽限后杀之——防同一 jsonl 双宿主），随后从
 # 该 .jsonl resume 重拉。聊天历史不丢。仅 python3 标准库。
+import grp
 import json
 import logging
 import os
@@ -108,6 +109,30 @@ def clean_env():
     return {k: v for k, v in os.environ.items()
             if k not in ENV_SCRUB_EXACT
             and not any(k.startswith(p) for p in ENV_SCRUB_PREFIXES)}
+
+
+def _claim_origin(path):
+    """去 replica 标记、升格本机原件（任务 4l3de8）：agents-sync 属组闸门下，
+    replica 组文件不受 pull 黑名单保护——本机若把它当活文件继续写，会被远端旧副本
+    随时覆盖（且本机改动也不会进 push 白名单）。宿主 = 单写者，认领会话文件时若发现
+    它是 replica（被 pull 落盘的副本），chown 回本进程 uid/gid 去标记升格为本机原件，
+    此后 push 会把本机内容收敛到远端。本机无 `replica` 组（grp.getgrnam KeyError）或
+    文件不存在/非 replica → 跳过。"""
+    try:
+        gr = grp.getgrnam("replica")
+    except KeyError:
+        return
+    try:
+        st = os.stat(path)
+    except OSError:
+        return
+    if st.st_gid != gr.gr_gid:
+        return
+    try:
+        os.chown(path, os.getuid(), os.getgid())
+        log.info("claimed origin (dropped replica tag) for %s", path)
+    except OSError as e:
+        log.error("claim origin failed for %s: %s", path, e)
 
 
 def pid_alive(pid):
@@ -201,8 +226,8 @@ class Supervisor:
         self.state = "idle"         # idle/starting/running/restarting/disabled
         self.disabled = False       # 熔断标记（reload 解除）
         self._reloading = False     # 主动 reload：退出不计崩溃/不排退避
-        self._clearing = False      # 主动 clear（0829-2238-atnj）：重拉前先删 jsonl
-        self._clear_error = None    # clear 删文件失败信息（由监督循环回填）
+        self._clearing = False      # 主动 clear（0829-2238-atnj）：重拉前先把 jsonl 截断到 0
+        self._clear_error = None    # clear 截断文件失败信息（由监督循环回填）
         self._crash_ts = []
         self._spawned_at = None
         self._stdin_lock = threading.Lock()
@@ -259,7 +284,7 @@ class Supervisor:
         """杀当前会话进程（SIGTERM 宽限→SIGKILL，经自有 Popen 句柄，无 pid
         复用风险；不计崩溃/不排退避）并等监督循环重拉；返回 {ok, gen, pid}。
         extra_flags 在杀前随锁置位（如 _reloading/_clearing），监督循环据此决定
-        重拉前是否删 jsonl。reload/clear 共用。"""
+        重拉前是否截断 jsonl。reload/clear 共用。"""
         with self._cond:
             p = self.proc
             gen0 = self.gen               # 先记世代：重拉极快，杀后读会读到新值导致永等
@@ -303,13 +328,17 @@ class Supervisor:
         return self._kill_and_restart((), timeout)
 
     def clear(self, timeout=20.0):
-        """/clear（0829-2238-atnj）：保留会话路径、清空全部内容。顺序 =
-        ① 杀当前会话进程（同 reload 口径）→ ② 删该会话 jsonl（监督循环内、
-        旧进程死透后、重拉前执行，同线程无竞态，防旧进程把内存历史回写）→
-        ③ 立即重拉（resume 空起点；文件不存在时 pi 自行新建）。必须「删除」
-        而非截断成空文件：对已存在的 jsonl，pi 懒落盘走 openSync(wx) 会
-        EEXIST（pdop 踩坑记录）。environ 标记 SESSIOND_SESSION_FILE 不变
-        （路径不变）。返回 {ok, gen, pid}。"""
+        """/clear（0829-2238-atnj；4l3de8 翻案改截断）：保留会话路径、清空全部内容。
+        顺序 = ① 杀当前会话进程（同 reload 口径）→ ② 把该会话 jsonl **截断到 0**
+        （不存在则创建空文件）并去 replica 标记（监督循环内、旧进程死透后、重拉前执行，
+        同线程无竞态，防旧进程把内存历史回写）→ ③ 立即重拉（pi≥0.84.1 对已存在的空文件走
+        _setSessionFile size==0 分支：newSession + _rewriteFile('w') + flushed=true，
+        不碰 openSync(wx)，安全）。翻案：旧口径「必须删除而非截断（pdop EEXIST）」是旧版
+        pi 的踩坑，已失效——删除在跨机同步树下有复活竞态：agents-sync 不开 --delete，
+        远端旧副本会被 pull 秒级拉回（带 replica 组）→ pi 判新会话首写 wx 撞 EEXIST
+        （2026-08-31 mac-dispatcher 事故实证）。截断 + 去标记后本机升格原件，push 收敛
+        远端 replica，无竞态。environ 标记 SESSIOND_SESSION_FILE 不变（路径不变）。
+        返回 {ok, gen, pid}。"""
         with self._cond:
             self._clear_error = None
         r = self._kill_and_restart(("_clearing",), timeout)
@@ -317,7 +346,7 @@ class Supervisor:
             with self._cond:
                 self._clear_error = None
             return {"ok": False,
-                    "error": "session respawned but jsonl removal failed: %s"
+                    "error": "session respawned but jsonl truncate failed: %s"
                              % r["clear_error"]}
         if r.get("ok"):
             return {"ok": True, "gen": r["gen"], "pid": r["pid"]}
@@ -335,7 +364,7 @@ class Supervisor:
     def _run_loop(self):
         self._clear_stale_proc()        # 首次拉起：清场旧宿主（防双宿主）
         while True:
-            self._apply_clear()         # clear：重拉前先删 jsonl（旧进程已死透）
+            self._apply_clear()         # clear：重拉前先把 jsonl 截断到 0（旧进程已死透）
             try:
                 self._spawn()
             except Exception:
@@ -378,22 +407,33 @@ class Supervisor:
             time.sleep(delay)
 
     def _apply_clear(self):
-        """clear 落地（0829-2238-atnj）：监督循环内、_spawn 之前执行——此刻旧进程
-        必然已死透（proc.wait() 已返回或崩溃退避刚结束），删除 jsonl 与重拉同线程，
-        无竞态。必须是「删除」而非截断成空文件：对已存在的 jsonl，pi 懒落盘走
-        openSync(wx) 会 EEXIST（pdop 踩坑记录）；文件不存在时 pi 重拉后自行新建。"""
+        """clear 落地（0829-2238-atnj；4l3de8 翻案改截断）：监督循环内、_spawn 之前
+        执行——此刻旧进程必然已死透（proc.wait() 已返回或崩溃退避刚结束），截断 jsonl
+        与重拉同线程，无竞态。落地 = 「确保文件存在、size==0、非 replica」：不存在 →
+        创建空文件；存在 → truncate(0)；随后 _claim_origin 去 replica 标记升格本机原件。
+        翻案：旧口径「必须删除而非截断（pi 懒落盘 openSync(wx) 撞 EEXIST，pdop 踩坑）」
+        针对旧版 pi，已失效——pi≥0.84.1 对已存在空文件走 _setSessionFile size==0 分支
+        （newSession + _rewriteFile(openSync 'w') + flushed=true），不碰 wx。而删除在跨机
+        同步树下有复活竞态：agents-sync 不开 --delete，pull 会把远端旧副本秒级拉回 →
+        pi 判新会话首写 wx 撞复活的旧文件 EEXIST（2026-08-31 mac-dispatcher 事故实证）。
+        截断 + 升格原件后，本机写入随 push 收敛远端，无竞态。"""
         with self._cond:
             if not self._clearing:
                 return
             self._clearing = False
         try:
-            os.remove(self.session_file)
-            log.info("clear: removed session file %s before respawn",
-                     self.session_file)
-        except FileNotFoundError:
-            log.info("clear: session file %s already absent", self.session_file)
+            if os.path.exists(self.session_file):
+                with open(self.session_file, "r+") as f:
+                    f.truncate(0)
+                log.info("clear: truncated session file %s to 0 before respawn",
+                         self.session_file)
+            else:
+                open(self.session_file, "a").close()
+                log.info("clear: created empty session file %s before respawn",
+                         self.session_file)
+            _claim_origin(self.session_file)
         except OSError as e:
-            log.error("clear: failed to remove %s: %s", self.session_file, e)
+            log.error("clear: failed to truncate %s: %s", self.session_file, e)
             with self._cond:
                 self._clear_error = str(e)
 
@@ -434,6 +474,11 @@ class Supervisor:
 
     def _spawn(self):
         os.makedirs(self.cwd, exist_ok=True)
+        # 接管 replica 文件（任务 4l3de8）：不经 clear 直接托管的会话文件可能是被远端
+        # pull 复活的副本（组=replica，如 2026-08-31 mac-dispatcher 事故现场）——宿主是
+        # 单写者，拉起前升格本机原件，否则活文件会被远端旧副本覆盖、本机写入也不进 push。
+        if os.path.exists(self.session_file):
+            _claim_origin(self.session_file)
         # 稳定期重置（上轮存活超 STABLE_RESET → 崩溃计数清零）
         if (self._spawned_at and time.monotonic() - self._spawned_at
                 > STABLE_RESET):

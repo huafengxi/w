@@ -7,8 +7,8 @@
 #   op=attach  建桥 + 经 pi rpc get_entries 返回消息基线（全量）
 #   op=cmd     上行单条 pi 命令
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
-#   op=clear   保留会话路径、清空全部内容（杀会话进程→删 jsonl→立即重拉，
-#              0829-2238-atnj；返回 {ok, gen, pid}）
+#   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
+#              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
 #   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/sessionDir 拆分）：
 #              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 sessionDir）→ 校验 →
 #              cwd = .agent 文件所在目录，会话目录 = sessionDir（缺省 = cwd 目录，不存在自动创建）→
@@ -237,7 +237,7 @@ def interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "gen": r.get("gen"), "pid": r.get("pid")})
     if op == 'clear':
-        # 保留会话路径、清空全部内容：杀会话进程→删 jsonl→立即重拉（顺序在
+        # 保留会话路径、清空全部内容：杀会话进程→截断 jsonl 到 0 + 去 replica 标记→立即重拉（顺序在
         # Supervisor.clear 内保证：先杀透再删，防旧进程把内存历史回写）。
         r = b.sup.clear()
         if not r.get("ok"):

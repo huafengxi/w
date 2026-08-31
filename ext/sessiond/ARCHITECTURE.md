@@ -93,7 +93,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | op | 语义 | 顺序保证 |
 |---|---|---|
 | `reload` | 杀会话进程（SIGTERM→3s→SIGKILL）→ 立即从该 jsonl resume 重拉；不计崩溃、不排退避、解除熔断 | — |
-| `clear` | 保留会话路径、清空全部内容 | ① 杀进程 → ② 监督循环内、旧进程死透后**删除**（非截断，截断空文件会让 pi 懒落盘 `openSync(wx)` EEXIST）jsonl → ③ 立即重拉（空起点，文件不存在时 pi 自建） |
+| `clear` | 保留会话路径、清空全部内容 | ① 杀进程 → ② 监督循环内、旧进程死透后把 jsonl **截断到 0**（不存在则创建空文件）并去 `replica` 标记升格本机原件（4l3de8 翻案：旧口径「必须删除，截断会让 pi 懒落盘 `openSync(wx)` EEXIST」是旧版 pi 踩坑，已失效——pi≥0.84.1 对已存在空文件走 `_setSessionFile` size==0 分支，不碰 `wx`；而删除在跨机同步树下会被 agents-sync pull 复活远端旧副本 → 首写 `wx` 撞 EEXIST，2026-08-31 mac-dispatcher 事故实证）→ ③ 立即重拉（空起点；升格原件后 push 收敛远端） |
 
 **路径安全红线**（`proc.py:resolve_session_path`）：必须 `/` 开头的站内路径、`.jsonl` 后缀；normpath 折叠 `..`/`.` 后与 `~/m` 拼接，再 `realpath` 前缀校验（白名单根 = `~/m` 与 `~/m/run`），双保险防符号链接逃逸；非法抛 `ValueError`（调用方回 400）。注册表键 = 解析后绝对路径。
 
