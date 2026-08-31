@@ -1,7 +1,8 @@
 # -*- type=script -*-
 # tickets 只读查询端点（任务 0830-1649-2y1k：仪表板第三 tab「Tickets」）。
-# 扫描 ~/m/agents/ 下两布局的票目录（2026-08-31 布局分层，任务 tu7z3q：
-# 新布局 agents/ticket/<rand6>/ ∪ 存量扁平 ticket.*/epic.* 目录；文件式
+# 扫描 ~/m/agents/ticket/ 下票目录（单布局；2026-08-31 布局分层任务 tu7z3q，
+# 去扁平兼容任务 2fq9a8：原存量扁平 ticket.*/epic.* 扫描已移除——存量票已迁
+# ticket/<后缀>/，扁平残留已经 GC delete-list 清理；文件式
 # ticket 系统设计定稿 0829-1243-izl9）：每票 = ticket.json（静态元数据）
 # + status.json（动态状态）+ events/*.ev（逐次一文件的变迁记录）。本端点只读，绝不写 agents/ 树。
 #   op=list（默认）  全部票的摘要数组：未终结在前，各按 updatedAt 倒序；
@@ -131,15 +132,9 @@ def _scan_one(d):
 
 
 def _list_tickets():
-    """双布局扫描（任务 tu7z3q）：新布局 agents/ticket/*（id 读 ticket.json）
-    ∪ 存量扁平 ticket.*/epic.* 前缀目录（id = 目录名）；按 id 去重。"""
+    """单布局扫描（任务 2fq9a8 去扁平兼容）：agents/ticket/*（id 读 ticket.json）。"""
     out = []
     seen = set()
-    try:
-        names = os.listdir(AGENTS_DIR)
-    except OSError as e:
-        return None, _j({"ok": False, "error": "cannot list agents dir: %s" % e},
-                        "500 Internal Server Error")
 
     def _push(d, fallback_id):
         item = _scan_one(d)
@@ -153,26 +148,19 @@ def _list_tickets():
         item.pop("body", None)   # list 摘要不带正文，避免轮询载荷膨胀
         out.append(item)
 
-    # 新布局：agents/ticket/<rand6>/（kind 由 ticket.json 区分：ticket 与 epic 同入）
+    # agents/ticket/<rand6>/（kind 由 ticket.json 区分：ticket 与 epic 同入）
     layout = os.path.join(AGENTS_DIR, _LAYOUT_DIR)
     try:
         sub = sorted(os.listdir(layout)) if os.path.isdir(layout) else []
-    except OSError:
-        sub = []
+    except OSError as e:
+        return None, _j({"ok": False, "error": "cannot list ticket dir: %s" % e},
+                        "500 Internal Server Error")
     for name in sub:
         if name.startswith("."):
             continue
         d = os.path.join(layout, name)
         if os.path.isdir(d):
             _push(d, None)
-    # 存量扁平：ticket.*/epic.* 前缀目录（不迁移，读侧全兼容）
-    for name in names:
-        if not (name.startswith("ticket.") or name.startswith("epic.")):
-            continue
-        d = os.path.join(AGENTS_DIR, name)
-        if not os.path.isdir(d):
-            continue
-        _push(d, name)
     # 未终结（非 resolved/cancelled）在前；各组内按 updatedAt 倒序
     # （ISO 时间串字典序 = 时间序；缺失视为最旧排组内最后）
     out.sort(key=lambda t: (t["status"] in _TERMINAL,
@@ -191,17 +179,14 @@ def _detail(ticket_id):
     if not ticket_id or not _ID_RE.match(ticket_id):
         return None, _j({"ok": False, "error": "invalid ticket id: %r" % (ticket_id,)},
                         "400 Bad Request")
-    # 双候选寻址（任务 tu7z3q，存在性判定新先旧后）：新布局 agents/ticket/<后缀>、
-    # 存量扁平 agents/<票 id>；两候选均做 realpath 防穿越校验。
+    # 单布局寻址（任务 2fq9a8 去扁平兼容）：agents/ticket/<后缀>；
+    # realpath 防穿越校验。
     suffix = ticket_id.split(".", 1)[1]
     d = None
-    for cand in (os.path.join(AGENTS_DIR, _LAYOUT_DIR, suffix),
-                 os.path.join(AGENTS_DIR, ticket_id)):
-        rp = os.path.realpath(cand)
-        if rp != cand or not os.path.isdir(cand):
-            continue
+    cand = os.path.join(AGENTS_DIR, _LAYOUT_DIR, suffix)
+    rp = os.path.realpath(cand)
+    if rp == cand and os.path.isdir(cand):
         d = rp
-        break
     if d is None:
         return None, _j({"ok": False, "error": "no such ticket: %r" % (ticket_id,)},
                         "404 Not Found")
