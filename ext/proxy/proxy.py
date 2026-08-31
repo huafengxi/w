@@ -10,7 +10,11 @@
 # - 保留原方法与请求体；透传请求头（剔除 hop-by-hop），补 X-Forwarded-For /
 #   X-Forwarded-Proto，Host 改写为上游；
 # - 上游响应的 status/头/体原样回传（同样剔除 hop-by-hop）；
-# - 响应体一次性读完中转（不做流式透传，见 design.md 限制）；
+# - 流式透传（任务 xt2sj3）：上游响应 Content-Type 为 text/event-stream 或无
+#   Content-Length 时，按块生成器透传（不设 content_len → wsgi 层走 chunked），
+#   SSE/长连接不被憋住；其余响应保持一次性读完中转（原语义零回归）；
+# - timeout 为 socket 级每操作超时：对流式连接即空闲超时（每次 recv 独立计时），
+#   SSE 类长连接路由应配大于上游 keep-alive 周期的值（如 /mac/ 65s > 15s ping）；
 # - 上游不可达/超时 → 502 Bad Gateway；上游返回什么就透传什么。
 #
 # 插入点：本 handler 挂在管线第一个业务位（echo 调试器之后、主路由之前），
@@ -146,10 +150,53 @@ def forward(env, path, rule):
     conn_cls = http.client.HTTPSConnection if u.scheme == 'https' else http.client.HTTPConnection
     conn = conn_cls(u.hostname, u.port or (443 if u.scheme == 'https' else 80),
                     timeout=rule['timeout'])
+    streaming = False
     try:
         conn.request(method, target, body=body, headers=headers)
         resp = conn.getresponse()
-        data = resp.read()  # 简化：一次性读完中转（见 design.md 限制）
+        ctype = resp.getheader('Content-Type') or ''
+        # 流式判定（任务 xt2sj3）：SSE 明示，或无 Content-Length 的长响应体。
+        # http.client 对 chunked 上游透明解块，读面统一按普通流读。
+        streaming = (
+            ctype.split(';')[0].strip().lower() == 'text/event-stream'
+            or (resp.getheader('Content-Length') is None
+                and resp.status not in (204, 304) and method != 'HEAD')
+        )
+        if streaming:
+            # 不设 content_len → wsgi 层出 Transfer-Encoding: chunked，逐块透传。
+            # 连接由生成器生命周期接管（外层不 close）。
+            meta = {
+                'type': ctype or 'application/octet-stream',
+                'http_status': '%d %s' % (resp.status, resp.reason or ''),
+                'extra_headers': _resp_headers(resp),
+            }
+            logging.info('PROXY STREAM: %s %s -> %s://%s%s => %d',
+                         method, path, u.scheme, u.netloc, target, resp.status)
+
+            def gen():
+                nbytes = 0
+                # read1：至多一次底层 recv（http.client 的 read(n) 会缓冲到凑满 n，
+                # 对 SSE 会憋帧；read1 有数据即返，保持增量；chunked 上游透明解块）。
+                rd = getattr(resp, 'read1', resp.read)
+                try:
+                    while True:
+                        chunk = rd(65536)
+                        if not chunk:
+                            break
+                        nbytes += len(chunk)
+                        yield chunk
+                except Exception as e:
+                    # 响应头已出、无法再改状态码：断流 + 日志，前端自带重连兜底。
+                    logging.warning('PROXY STREAM CUT: %s %s -> %s://%s after %d bytes: %s',
+                                    method, path, u.scheme, u.netloc, nbytes, e)
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+            return meta, gen()
+        data = resp.read()  # 非流式：一次性读完中转（原语义）
         meta = {
             'type': resp.getheader('Content-Type') or 'application/octet-stream',
             'http_status': '%d %s' % (resp.status, resp.reason or ''),
@@ -164,10 +211,11 @@ def forward(env, path, rule):
         msg = '502 Bad Gateway: upstream %s://%s unreachable (%s)' % (u.scheme, u.netloc, e)
         return {'type': 'text/plain', 'http_status': '502 Bad Gateway'}, msg
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if not streaming:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def proxy_handler(env, path, query, post):

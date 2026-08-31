@@ -100,7 +100,11 @@ def do_view(store, path, meta, args):
         return run_script(store, path, args)
     elif mime == 'text/html':
         if range_req: raise Exception('not support range request: %s'%(path))
-        return meta, [safe_sub(store.read(path), QUERY_ARGS=repr(args))]
+        # ARGS_JSON（任务 xt2sj3）：以 JSON 注入全量 args（含 vmap 写入的 src），
+        # 供视图感知代理前缀（浏览器 location.pathname 与 src 求差）。
+        # '</' 转义防 JSON 内容内嵌 </script> 逃逸。
+        return meta, [safe_sub(store.read(path), QUERY_ARGS=repr(args),
+                               ARGS_JSON=json.dumps(args, default=str).replace('</', '<\\/'))]
     else:
         return response_part_file(store, path, meta, range_req)
 

@@ -4,7 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>chat</title>
-<script type="application/javascript" src="/w/ext/markdown/deps/marked.min.js"></script>
+<script>
+// 代理前缀感知（任务 xt2sj3）：服务端注入 ARGS_JSON（含 src = 上游看到的原始路径，
+// 代理已剥前缀）；浏览器 location.pathname 带代理前缀 → 前缀 = pathname 去掉 src
+// 尾巴的差。无前缀直开时 src == pathname → __PREFIX__ = ""，行为零变化。
+// 双宿主防线：API/STREAM/静态资源一律带前缀 → RPC 必达 .agent 所属宿主机的 8080，
+// 不会误打到代理入口机本地 sessiond（见 w/design.md .agent 节跨机警示）。
+window.__SRCPATH__ = "";
+try {
+  var __args__ = $ARGS_JSON;
+  if (__args__ && typeof __args__.src === "string") window.__SRCPATH__ = __args__.src;
+} catch (e) { /* 注入缺失/损坏 → 退化为无前缀（本机直开行为） */ }
+(function () {
+  var p = location.pathname, s = window.__SRCPATH__ || "";
+  window.__PREFIX__ = (s && p.length > s.length && p.slice(p.length - s.length) === s)
+    ? p.slice(0, p.length - s.length) : "";
+  var pre = window.__PREFIX__;
+  document.write('<script src="' + pre + '/w/ext/markdown/deps/marked.min.js"><\/script>');
+})();
+</script>
 <style>
 :root {
   --bg: #ffffff; --panel: #f4f6f8; --panel2: #e9edf2; --fg: #1a1f26;
@@ -246,17 +264,22 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 // 从该 jsonl resume）。不同目录的同名文件 = 不同会话。
 // vmap 翻译是服务端行为，浏览器 location.pathname 仍是原始路径 → 直接解析。
 const $ = id => document.getElementById(id);
-const API = "/sessiond/rpc/api.py";
-const STREAM = "/sessiond/rpc/stream.py";
+// 代理前缀感知（任务 xt2sj3）：PREFIX 由 head 内联脚本求出（浏览器 pathname 与服务端
+// 注入 src 的差值）；API/STREAM 带前缀 → 经反代抵达 .agent 宿主机；无前缀时为 ""，
+// 与历史行为完全一致。PAGEPATH = 去前缀后的站内路径，用于会话/.agent 解析。
+const PREFIX = window.__PREFIX__ || "";
+const PAGEPATH = PREFIX ? location.pathname.slice(PREFIX.length) : location.pathname;
+const API = PREFIX + "/sessiond/rpc/api.py";
+const STREAM = PREFIX + "/sessiond/rpc/stream.py";
 // 会话路径解析：站内任意 /…*.jsonl（后端另有 ~/m 锁定校验）
 function parseSessionFromUrl() {
-  const p = location.pathname;
+  const p = PAGEPATH;
   return (/^\/.*[^\/]\.jsonl$/.test(p)) ? p : null;
 }
 // .agent 文件类型（任务 kcywpy）：/xxx.agent = agent 规格 JSON（host + workdir），
 // 复用本聊天界面；会话启动参数经 op=agent 单点解析（会话 = workdir/<xxx>.jsonl）。
 function parseAgentFromUrl() {
-  const p = location.pathname;
+  const p = PAGEPATH;
   return (/^\/.*[^\/]\.agent$/.test(p)) ? p : null;
 }
 const SESSION = parseSessionFromUrl();

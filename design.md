@@ -204,7 +204,10 @@ Connection/Keep-Alive/Transfer-Encoding/TE/Trailers/Upgrade/Proxy-Auth* 等）�
 status/头/体原样回传（同样剔 hop-by-hop）。上游不可达/超时 → 502 Bad Gateway；
 上游返回什么就透传什么。
 
-**限制**：响应体一次性读完中转，不做流式透传（大文件会占内存、延迟到完整才回包）；
+**限制**：非流式响应一次性读完中转（大文件会占内存、延迟到完整才回包）；
+流式响应（Content-Type=text/event-stream 或无 Content-Length）按块生成器透传，
+wsgi 层出 chunked（任务 xt2sj3，SSE 聊天流经代理嵌入的前提）；`timeout` 对流式连接
+即空闲超时（每操作独立计时），SSE 类路由须配大于上游 keep-alive 周期的值；
 无连接池复用，每请求新建到上游的连接；不支持 WebSocket 等协议升级。
 请求头按规范透传（含客户端 `Authorization`，非 hop-by-hop）——因此上游只应配给可信目标，
 避免把本站凭据带到不可信第三方。
