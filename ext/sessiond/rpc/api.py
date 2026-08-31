@@ -11,7 +11,7 @@
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
 #   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/sessionDir 拆分）：
 #              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 cwd/sessionDir）→ 校验 →
-#              cwd = 显式 `cwd` 字段（缺省 = .agent 文件所在目录），会话目录 = sessionDir（缺省 = cwd 目录，不存在自动创建）→
+#              cwd = 显式 `cwd` 字段（缺省 = .agent 文件所在目录），会话目录 = sessionDir（缺省 = .agent 所在目录，不存在自动创建）→
 #              返回会话 jsonl 站内路径（= <sessionDir>/<name>.jsonl）与 cwd/sessionDir。
 #              启动参数解析单点，host v1 仅保存/可见、不跨机拉起（见 design.md .agent 小节）。
 # 鉴权由 w 全局 BasicAuth 承担；路径校验非法 → 400。
@@ -67,8 +67,8 @@ def _baseline_doc(b, r):
 #   - 会话进程 cwd = 显式 `cwd` 字段（~/ 展开，安全红线同 sessionDir；2026-08-31 用户拍板，
 #     票 7t0ufv）；缺省回退 = .agent 文件所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展，
 #     如 ~/m/assistant/*.agent → cwd=~/m/assistant → 命中 assistant/.pi 全套扩展）。
-#   - sessionDir = 会话目录（会话 jsonl 落盘处，也是跨机可观测的 participant 目录，经
-#     agents-sync 四机同步）；缺省 = cwd 目录（会话文件落在 .agent 旁边）。
+#   - sessionDir = 会话目录（会话 jsonl 落盘处，宿主本地运行时状态，*.jsonl 全局 gitignore；
+#     经 2026-08-31 票 7t0ufv 拍板不再共享参与方同步目录）；缺省 = .agent 文件所在目录。
 #   - 会话 jsonl = <sessionDir>/<agent名>.jsonl（每 agent 一会话、可重连续聊，如
 #     nv1-dispatcher.agent → participant/dispatcher/nv1-dispatcher.jsonl，任务 7pwnpa）。
 #     .jsonl 直开路径不走本约定（cwd 仍 = dirname）。
@@ -85,7 +85,7 @@ def _resolve_agent(store, session):
     只留 `host` + 可选 `cwd`/`sessionDir`；
     cwd = 显式 `cwd` 字段（~/ 展开，不得逃逸 ~/m + run 运行时区），缺省回退 = .agent 文件
     所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展）；
-    sessionDir = 会话目录（jsonl 落盘处，可观测层，缺省 = cwd 目录）；旧 `workdir`
+    sessionDir = 会话目录（jsonl 落盘处，宿主本地运行时状态，缺省 = .agent 文件所在目录）；旧 `workdir`
     字段不再识别（读到忽略并日志提示）。成功返回响应元组（200 + 规格文档），
     失败返回错误元组：文件缺失 → 404；路径非法/坏 JSON/缺 host/sessionDir 非法或逃逸 ~/m → 400
     （对齐 w 既有缺失/错误处理口径）。"""
@@ -164,10 +164,15 @@ def _resolve_agent(store, session):
                    "error": "agent file %s: cwd rejected: %s"
                             % (p, e)},
                   '400 Bad Request')
-    # sessionDir = 会话目录：可选字段；缺省 = cwd 目录（会话文件落在 .agent 旁边）。
+    # sessionDir = 会话目录：可选字段；缺省 = .agent 文件所在目录（2026-08-31 用户拍板，
+    # 票 7t0ufv：会话 jsonl = 宿主本地运行时状态，落 agent 自家目录，不共享 cwd 工作区/
+    # 参与方同步目录；扩展侧声明者回落同口径，core.ts findAgentDeclarerForSession）。
     dir_val = spec.get("sessionDir")
     if dir_val is None:
-        sess_dir = cwd
+        agent_site_dir = _posixpath.dirname(p)
+        sess_dir_src = (_proc.WS if agent_site_dir in ("", "/")
+                        else _os.path.join(_proc.WS, agent_site_dir.lstrip("/")))
+        sess_dir = _os.path.realpath(sess_dir_src)
     else:
         if not isinstance(dir_val, str) or not dir_val.strip():
             return _j({"ok": False,
