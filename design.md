@@ -66,6 +66,33 @@ view 文件本身分布在 `core/view/` 与各 `ext/<feature>/view/` 目录。
 缺失路径（`.md`/`.org`/`.itab` 等）都从 404 页变为视图渲染；未映射后缀（如 `.txt`、
 `.svg`）缺失仍走 404 语义。排障时见到「缺失文件却渲染了视图」先对照本节，勿当 bug。
 
+## .agent 文件类型（任务 kcywpy）
+
+`xxx.agent` 是 **agent 规格文件**：JSON，字段风格参考 `~/m/agents/` 任务 spec.json，
+最小集 = `host` + `workdir`（解析对多余字段宽容；缺字段/坏 JSON 有明确错误提示）。
+文件放 web 根（~/m）下，如 `~/m/alice.agent`；agent 名 = 文件名 `alice`。
+
+- **视图映射**：`mime.frag` `.agent → application/x-sessiond-agent`，vmap 指向聊天视图
+  （同 `?v=chat`，另有 `?v=agent` 别名）——复用现有聊天界面与监督机制，仅会话启动参数来源不同。
+- **启动参数解析单点**：`ext/sessiond/rpc/api.py` `op=agent`（`_resolve_agent`）：
+  读规格 → 校验 → **workdir 不存在自动 `mkdir -p`（含 participant/ 中间层）+ 记日志** →
+  返回会话路径。会话 = **`<workdir>/<agent名>.jsonl`**（每 agent 一会话、可重连续聊，
+  类比 `/assistant/dispatcher.jsonl` 的组织），会话进程 cwd = workdir，
+  后续完全走既有 .jsonl 会话链路（桥接/监督/重连）。
+- **安全**：workdir `expanduser` 后 realpath 必须落在会话路径同一根集（~/m 与
+  ~/m/run 实路径）内，逃逸 → 400；推导出的会话路径再经 `resolve_session_path`
+  二次校验。错误语义：文件缺失 → 404；路径非法/坏 JSON/缺字段/workdir 逃逸 → 400。
+  缺失 .agent 依本节上方兜底语义渲染聊天页，由页内展示友好错误（非裸 404 页）。
+- **host 字段 v1 边界**：仅持久化保存（存于 .agent 文件）+ 随 `op=agent` 响应返回 +
+  聊天页 attach 后一行系统消息可见；**会话一律在本 8080 实例所在机器本地拉起**
+  （sessiond 现状即本地监督），不做跨机会话拉起。后续跨机路由路径：按 host 把请求经
+  反向通道/各机 8080 代理转发到目标机的同名端点（配套：三机 8080 + /dev//nv2/ 代理
+  + rsh 端口转发），只需改 `_resolve_agent` 单点与其返回的路由指示。
+- **UI 约定**：会话名/页标题 = agent 名（文件名）；`/agents/participant/` 下会话豁免
+  双宿主盲区警示（该目录是 .agent 会话的约定归属地，sessiond 自家拉起）。
+- **冷面提醒**：后缀→mime 映射表与 vmap 在 web 进程启动时构建一次，新增 `.agent`
+  映射需重启 web 生效（重启前 `/xxx.agent` 返回原文，`?v=chat` 路径不受影响）。
+
 ## script
 
 只有 mime type 为 `script` 的 python 文件才会被当作 RPC 执行。

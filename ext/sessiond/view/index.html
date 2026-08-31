@@ -253,9 +253,19 @@ function parseSessionFromUrl() {
   const p = location.pathname;
   return (/^\/.*[^\/]\.jsonl$/.test(p)) ? p : null;
 }
+// .agent 文件类型（任务 kcywpy）：/xxx.agent = agent 规格 JSON（host + workdir），
+// 复用本聊天界面；会话启动参数经 op=agent 单点解析（会话 = workdir/<xxx>.jsonl）。
+function parseAgentFromUrl() {
+  const p = location.pathname;
+  return (/^\/.*[^\/]\.agent$/.test(p)) ? p : null;
+}
 const SESSION = parseSessionFromUrl();
+const AGENT = SESSION ? null : parseAgentFromUrl();   // 两者互斥（后缀不同）
+const AGENT_NAME = AGENT ? AGENT.replace(/^\//, "").replace(/\.agent$/, "") : null;
 if (SESSION) {
   document.title = SESSION.replace(/\.jsonl$/, "") + " · chat";
+} else if (AGENT) {
+  document.title = AGENT_NAME + " · chat";   // 会话名 = agent 名（文件名）
 }
 let attached = null;          // 当前挂接会话名（= URL 解析出的 SESSION）
 let uidSeq = 0;
@@ -1844,20 +1854,39 @@ function backToBottom() {
   vv.addEventListener("resize", fit);
 })();
 
+// ---------------- .agent 启动（任务 kcywpy）：规格解析 → 推导会话路径 → 正常挂接 ----------------
+async function resolveAgentAndAttach() {
+  try {
+    const doc = await api("agent", {session: AGENT});
+    await attach(doc.session);   // attach 开头清屏，可见性信息须在其后落行
+    // host/workdir 可见性（需求 4/5）：attach 后一行系统消息（host v1 = 仅保存/可见，
+    // 会话在本 8080 主机本地拉起；跨机路由为后续能力，见 design.md）。
+    sysLine("agent " + doc.name + ": host=" + doc.host + " · workdir=" + doc.workdir
+      + " (v1: session spawned locally on this 8080 host)");
+  } catch (e) {
+    sysLine("Cannot open agent " + AGENT + ": " + e.message, "err");
+  }
+}
+
 // ---------------- 启动：加载即按 URL 挂接对应会话 ----------------
-if (SESSION) {
+if (AGENT) {
+  resolveAgentAndAttach();
+} else if (SESSION) {
   // 双宿主盲区警示（任务 0829-2052-rnfe）：/agents/ 下的 .jsonl 可能是其它机制以
   // pi --session 打开的活跃会话（如子任务会话）；8080 的 SESSIOND_SESSION_FILE
   // 识别域看不见外部宿主，继续操作可能对同一文件再起进程。只警告不拦截。
-  if (SESSION.split("/").includes("agents")) {
+  // 豁免（任务 kcywpy）：/agents/participant/ 是 .agent 会话的约定归属地，
+  // 由 sessiond 自家拉起，无外部宿主风险，不闪警告。
+  if (SESSION.split("/").includes("agents")
+      && !SESSION.startsWith("/agents/participant/")) {
     flash("⚠ This session lives under /agents/ and may be an active session owned by "
       + "another host (e.g. a subtask). 8080 cannot see external hosts; continuing may "
       + "double-host the same session file — proceed with care.", "err");
   }
   attach(SESSION);
 } else {
-  sysLine("No session recognized: open /<site-path>.jsonl?v=chat (current: "
-    + location.pathname + ")", "err");
+  sysLine("No session recognized: open /<site-path>.jsonl?v=chat or /<name>.agent "
+    + "(current: " + location.pathname + ")", "err");
 }
 </script>
 </body>

@@ -7,3 +7,9 @@ chat: /sessiond/view/index.html
 # .jsonl 默认 chat（任务 0829-2103-dpe4）：mime.frag 把 .jsonl 映射到该
 # 专用 mime，无 ?v= 直接打开任意 .jsonl 即聊天窗；?v= 显式覆盖不受影响。
 application/x-sessiond-jsonl: /sessiond/view/index.html
+
+# .agent 文件类型（任务 kcywpy）：xxx.agent = agent 规格 JSON（host + workdir），
+# 复用聊天视图；会话启动参数（cwd=workdir）经 rpc/api.py op=agent 单点解析。
+?v=agent 别名同视图。
+application/x-sessiond-agent: /sessiond/view/index.html
+agent: /sessiond/view/index.html
