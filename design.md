@@ -124,6 +124,42 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 作为本地覆盖；例如 `ext/report` 的 `ido_report_cmd` 需要 `ido_root` 环境
 变量指向 ido 根目录，未设置时会向 stderr 报错并返回 1，没有默认值。
 
+## reverse proxy
+
+路径前缀 → 上游的反向代理，规则声明在 **`ext/proxy/routes.json`**（本节是权威口径）。
+规则文件按 mtime 热加载（每请求检查 stat，变更才重读），改规则不用重启服务。
+实现：`ext/proxy/proxy.py`（纯标准库 `http.client`，零三方依赖）。
+
+规则格式（顶层 `routes` 数组，也可直接写数组）：
+
+```json
+{"routes": [{"prefix": "/proxy/demo", "upstream": "http://127.0.0.1:18099",
+             "strip_prefix": false, "timeout": 10}]}
+```
+
+- `prefix`：以 `/` 开头的路径前缀；多条规则取**最长前缀**匹配（朴素
+  `startswith` 语义，不强制路径段边界）。
+- `upstream`：`http(s)://host[:port]`；`strip_prefix` 缺省 false；`timeout` 缺省 10 秒。
+- 文件缺失/为空/解析失败 = 代理功能整体关闭（不影响既有管线）；解析失败记 warning。
+
+**插入点与安全**：`proxy_handler` 挂在管线第一个业务位（`core/server.py`，
+echo 调试器之后、主路由 `Handler.handle_req` 之前），位于 `BasicAuth` 包裹之内——
+**未认证请求到不了代理**（认证在 `core/wsgi.py:run_wsgi` 最外层）。命中规则则转发，
+否则返回 None 落回既有管线，未命中行为零变化；若代理前缀与既有路径重叠，代理优先。
+
+**转发语义**：保留原方法与请求体；请求头透传（剔除 hop-by-hop：
+Connection/Keep-Alive/Transfer-Encoding/TE/Trailers/Upgrade/Proxy-Auth* 等），
+补 `X-Forwarded-For`（追加）/`X-Forwarded-Proto`，`Host` 改写为上游；上游响应的
+status/头/体原样回传（同样剔 hop-by-hop）。上游不可达/超时 → 502 Bad Gateway；
+上游返回什么就透传什么。
+
+**限制**：响应体一次性读完中转，不做流式透传（大文件会占内存、延迟到完整才回包）；
+无连接池复用，每请求新建到上游的连接；不支持 WebSocket 等协议升级。
+请求头按规范透传（含客户端 `Authorization`，非 hop-by-hop）——因此上游只应配给可信目标，
+避免把本站凭据带到不可信第三方。
+响应面由 `handle_request` 统一出头的约定不破：代理把上游头放入 `meta['extra_headers']`
+由 wsgi 层追加（0831-0937-sh7l）。
+
 ## playback state broadcast
 
 `servers/timestamp-server.py` 独立启动，监听 TCP 23554。

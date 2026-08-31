@@ -37,7 +37,7 @@ def make_wsgi_app(handlers):
         if not meta.get('type'):
             meta['type'] = ''
         mime = meta['type']
-        if mime.startswith('text'): mime = '%s; charset=%s'%(mime, meta.get('encoding', 'utf-8'))
+        if mime.startswith('text') and 'charset=' not in mime: mime = '%s; charset=%s'%(mime, meta.get('encoding', 'utf-8'))
         headers = [('Content-Type', mime)]
         headers.append(("X-Content-Type-Options", "nosniff"))
         headers.append(('Accept-Ranges', 'bytes'))
@@ -45,6 +45,9 @@ def make_wsgi_app(handlers):
         content_len, range_resp_header = meta.get('content_len'), meta.get('range_resp_header')
         if content_len: headers.append(('Content-Length', '%d'%(content_len)))
         if range_resp_header: headers.append(range_resp_header)
+        # extra_headers：handler 要求透传的额外响应头（reverse proxy 上游响应头，
+        # 0831-0937-sh7l），hop-by-hop 由产生方自行剔除。
+        headers += meta.get('extra_headers') or []
         return (meta.get('http_status') or '200 OK', headers), content
     def wsgi_app(env, response):
         env.setdefault('QUERY_STRING', '')

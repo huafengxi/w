@@ -61,6 +61,7 @@ def set_logging(log_file=''):
 
 from core.wsgi import run_wsgi, make_wsgi_app
 from core.handler import Handler
+from ext.proxy.proxy import proxy_handler
 from stores.store import build_root_store
 
 def main():
@@ -78,7 +79,9 @@ def main():
     set_logging(log_file)
     root = build_root_store('w/stores/fstab')
     handler = Handler(root).handle_req
-    app = make_wsgi_app([handler])
+    # 代理挂管线第一个业务位（主路由之前）：位于全局 BasicAuth 之内，
+    # 未命中规则返回 None 落回既有管线（见 design.md「reverse proxy」）。
+    app = make_wsgi_app([proxy_handler, handler])
     logging.info("listen at: %s", listen_addr)
     host_port = listen_addr.split(':')
     if len(host_port) == 2:

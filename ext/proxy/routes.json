@@ -1,0 +1,11 @@
+{
+  "_comment": "reverse proxy 路由规则（0831-0937-sh7l）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port])、strip_prefix(可选，缺省 false)、timeout(可选，秒，缺省 10)。详见 w/design.md「reverse proxy」小节。",
+  "routes": [
+    {
+      "prefix": "/proxy/demo",
+      "upstream": "http://127.0.0.1:18099",
+      "strip_prefix": false,
+      "timeout": 10
+    }
+  ]
+}
