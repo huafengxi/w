@@ -1,10 +1,16 @@
 {
-  "_comment": "reverse proxy 路由规则（0831-0937-sh7l）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port])、strip_prefix(可选，缺省 false)、timeout(可选，秒，缺省 10)。详见 w/design.md「reverse proxy」小节。",
+  "_comment": "reverse proxy 路由规则（0831-0937-sh7l；多机扩展 r71ydk）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port])、strip_prefix(可选，缺省 false)、timeout(可选，秒，缺省 10)。详见 w/design.md「reverse proxy」小节。upstream 用 IP：dev/nv2 真实主机名（obrde.dev-yi3/ob-ai-115）在 nv1 上不可 DNS 解析，ssh 别名仅存在于 ~/.ssh/config。",
   "routes": [
     {
-      "prefix": "/proxy/demo",
-      "upstream": "http://127.0.0.1:18099",
-      "strip_prefix": false,
+      "prefix": "/dev/",
+      "upstream": "http://6.12.232.57:8080",
+      "strip_prefix": true,
+      "timeout": 10
+    },
+    {
+      "prefix": "/nv2/",
+      "upstream": "http://30.249.210.115:8080",
+      "strip_prefix": true,
       "timeout": 10
     }
   ]
