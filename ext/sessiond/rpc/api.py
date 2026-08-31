@@ -68,8 +68,9 @@ def _baseline_doc(b, r):
 #     如 ~/m/assistant/*.agent → cwd=~/m/assistant → 命中 assistant/.pi 全套扩展）。
 #   - sessionDir = 会话目录（会话 jsonl 落盘处，也是跨机可观测的 participant 目录，经
 #     agents-sync 四机同步）；缺省 = cwd 目录（会话文件落在 .agent 旁边）。
-#   - 会话 jsonl = <sessionDir>/<agent名>.jsonl（每 agent 一会话、可重连续聊，类比
-#     /assistant/dispatcher.jsonl 的组织）。.jsonl 直开路径不走本约定（cwd 仍 = dirname）。
+#   - 会话 jsonl = <sessionDir>/<agent名>.jsonl（每 agent 一会话、可重连续聊，如
+#     nv1-dispatcher.agent → participant/dispatcher/nv1-dispatcher.jsonl，任务 7pwnpa）。
+#     .jsonl 直开路径不走本约定（cwd 仍 = dirname）。
 # 本函数 = 启动参数解析单点，将来加 host 跨机路由（反向通道/各机 8080 代理）只改这里。
 # host v1 边界：仅持久化保存（存于 .agent 文件）+ 随响应返回 + 聊天页可见；
 # 会话一律在本 8080 实例所在机器本地拉起（sessiond 现状即本地监督），不做跨机拉起。
