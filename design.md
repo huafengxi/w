@@ -103,9 +103,11 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
   缺 host/sessionDir 非法 → 400。缺失 .agent 依本节上方兜底语义渲染聊天页，由页内展示友好错误。
 - **可观测设计**：`sessionDir` 指向 `agents/participant/<名字>/` 时，会话文件经
   agents-sync 四机同步——一台机器可观测另一台机器上 participant 的会话/收件状态。
-  **⚠ 跨机警示：v1 仍本地拉起。在其它机器打开非本机 host 的 .agent 会在本机另起
-  会话进程写同一同步文件（双宿主）。host 路由落地前，勿在其它机器打开非本机 host
-  的 .agent。**
+  **跨宿主守卫（任务 8nherl 最小版）**：.agent 声明 host 的会话只能被声明机实体化——
+  守卫单点在 `proc.py host_guard`（Supervisor 创建 = 建桥接/spawn 唯一咽喉）：目标会话文件命中
+  声明者推导（`<sessionDir>/<agent名>.jsonl`，assistant/** 递归同口径）且声明 host ≠ 本机 →
+  拒绝并提示「请通过 <host> 的服务访问」；本机身份不可得（env/host-id 缺失/未命中）= 配置错误，
+  对命中声明者拒绝放行；无声明者会话零波及。
 - **host 跨机路由（后续）**：按 host 把请求经反向通道/各机 8080 代理转发到目标机的
   同名端点（配套：多机 8080 + 代理 + rsh 端口转发），只需改 `_resolve_agent` 单点与
   其返回的路由指示。

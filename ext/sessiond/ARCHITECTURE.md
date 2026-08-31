@@ -97,6 +97,8 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 **路径安全红线**（`proc.py:resolve_session_path`）：必须 `/` 开头的站内路径、`.jsonl` 后缀；normpath 折叠 `..`/`.` 后与 `~/m` 拼接，再 `realpath` 前缀校验（白名单根 = `~/m` 与 `~/m/run`），双保险防符号链接逃逸；非法抛 `ValueError`（调用方回 400）。注册表键 = 解析后绝对路径。
 
+**跨宿主守卫**（`proc.py:host_guard`，任务 8nherl 最小版）：唯一守卫点 = `Supervisor.__init__`（建桥接即建监督员，是会话进程在本机被拉起的唯一咽喉）。目标会话文件命中某 `.agent` 声明者推导（`<sessionDir>/<agent名>.jsonl`，`assistant/**` 递归，与 `_resolve_agent` 同口径）且声明 `host` ≠ 本机（`env/host-id` 查表）→ `ValueError` 拒绝（经 `get_bridge` 传播，api/stream 回 400 + 「请通过 <host> 的服务访问」指引）；本机身份不可得 = 配置错误，命中声明者拒绝放行；无声明者会话零波及。
+
 ---
 
 ## 3. 桥接层（bridge.py）

@@ -38,6 +38,7 @@ import os
 import posixpath
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -135,6 +136,78 @@ def _claim_origin(path):
         log.error("claim origin failed for %s: %s", path, e)
 
 
+# ---- 跨宿主守卫（任务 8nherl，最小版）----
+# .agent 声明 host 的会话只能被声明机实体化（建桥接/拉起进程）。唯一守卫点 =
+# Supervisor.__init__（桥接创建即监督员创建，是所有会话进程在本机被拉起的必经处，
+# 见 bridge.get_bridge 单一建桥入口）。判定口径与扩展侧/replica-tag 同源：
+# 声明者扫描面 = assistant/** 递归（唯一约定位置），推导会话文件 =
+# <sessionDir realpath>/<agent名>.jsonl（sessionDir 缺省 = .agent 所在目录），
+# 与 rpc/api.py _resolve_agent 的推导口径一致。本机身份 = env/host-id 查表；
+# 缺失/未命中 = 配置错误，对命中声明者会话拒绝放行（不猜测），无声明者会话零波及。
+
+
+def _scan_agent_declarations():
+    """递归扫 assistant/**/*.agent，yield (agent名, host, 推导会话文件 realpath)。
+    坏文件/缺 host 宽容跳过（守卫只拦可判定的声明者）。"""
+    for dirpath, _dirnames, filenames in os.walk(os.path.join(WS, "assistant")):
+        for fn in filenames:
+            if not fn.endswith(".agent"):
+                continue
+            try:
+                with open(os.path.join(dirpath, fn)) as f:
+                    spec = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(spec, dict):
+                continue
+            host = spec.get("host")
+            if not isinstance(host, str) or not host.strip():
+                continue
+            name = fn[:-len(".agent")]
+            sd = spec.get("sessionDir")
+            base = (os.path.realpath(os.path.expanduser(sd.strip()))
+                    if isinstance(sd, str) and sd.strip() else dirpath)
+            yield name, host.strip(), os.path.realpath(
+                os.path.join(base, name + ".jsonl"))
+
+
+def _self_host():
+    """本机规范名：env/host-id 查表（格式同 agentd/agentctl.py
+    local_canonical_host：每行 `<hostname> <空白> <规范名>`，# 注释）。
+    文件缺失/不可读/本机 hostname 未命中 → None（调用方报配置错误，不猜测）。"""
+    try:
+        with open(os.path.join(WS, "env", "host-id")) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    hn = socket.gethostname()
+    for line in lines:
+        parts = line.strip().split()
+        if len(parts) > 1 and parts[0] == hn and not parts[0].startswith("#"):
+            return parts[1]
+    return None
+
+
+def host_guard(session_file):
+    """跨宿主守卫（唯一守卫点）：目标会话文件若命中某 .agent 声明者推导的会话文件，
+    且声明者 host ≠ 本机 → ValueError 拒绝（消息含声明机访问指引）；命中声明者但本机
+    身份不可得 → ValueError 配置错误；无声明者（普通会话）→ 放行，零影响。"""
+    for name, host, derived in _scan_agent_declarations():
+        if derived != session_file:
+            continue
+        me = _self_host()
+        if me is None:
+            raise ValueError(
+                "host guard: env/host-id missing or no entry for this hostname; "
+                "cannot determine local host, refusing to materialize session %r "
+                "(declared host=%s). Fix env/host-id." % (name, host))
+        if host != me:
+            raise ValueError(
+                "该会话声明者宿主=%s，请通过 %s 的服务访问（本机=%s）"
+                % (host, host, me))
+        return
+
+
 def pid_alive(pid):
     try:
         os.kill(pid, 0)
@@ -215,6 +288,7 @@ class Supervisor:
         else:
             self.session_file = resolve_session_path(session_path)
         self.name = display_name(self.session_file)
+        host_guard(self.session_file)   # 跨宿主守卫唯一守卫点（任务 8nherl）
         # cwd 由调用方显式传入（任务 fw2ll1：.agent cwd/dir 拆分，经 bridge 转交）；
         # 缺省 = jsonl 所在目录（.jsonl 直开路径行为不变，cwd1）。
         self.cwd = resolve_cwd(cwd) if cwd else os.path.dirname(self.session_file)
