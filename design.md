@@ -66,19 +66,19 @@ view 文件本身分布在 `core/view/` 与各 `ext/<feature>/view/` 目录。
 缺失路径（`.md`/`.org`/`.itab` 等）都从 404 页变为视图渲染；未映射后缀（如 `.txt`、
 `.svg`）缺失仍走 404 语义。排障时见到「缺失文件却渲染了视图」先对照本节，勿当 bug。
 
-## .agent 文件类型（任务 kcywpy；fw2ll1 cwd/dir 拆分）
+## .agent 文件类型（任务 kcywpy；fw2ll1 cwd/sessionDir 拆分）
 
 `xxx.agent` 是 **agent 规格文件**：JSON，字段风格参考 `~/m/agents/` 任务 spec.json，
 多余字段宽容；缺字段/坏 JSON 有明确错误提示。文件放 ~/m 服务树内（如
 `~/m/assistant/dispatcher.agent`）；agent 名 = 文件名。
 
-**字段（2026-08-31 用户拍板最终形态）**：只留 `host` + 可选 `dir`——
+**字段（2026-08-31 用户拍板最终形态）**：只留 `host` + 可选 `sessionDir`——
 
 - **cwd（隐含）= .agent 文件所在目录**：会话进程的 pi 工作目录，决定加载哪个
   工作区的 AGENTS/扩展（如 `~/m/assistant/*.agent` → cwd=`~/m/assistant` → 命中
   `assistant/.pi` 全套扩展与 `assistant/AGENTS.md`）。天然在 ~/m 服务树内，无逃逸问题。
-- **`dir`（可选）= 会话目录**：会话 jsonl 的落盘处，也是跨机可观测的 participant
-  目录。缺省 = cwd 目录（会话文件落在 .agent 旁边，最朴素形态）。
+- **`sessionDir`（可选）= 会话目录**：会话 jsonl 的落盘处，也是跨机可观测的
+  participant 目录。缺省 = cwd 目录（会话文件落在 .agent 旁边，最朴素形态）。
 - **`host` v1 边界**：仅持久化保存（存于 .agent 文件）+ 随 `op=agent` 响应返回 +
   聊天页可见；不做跨机拉起。
 - **旧 `workdir` 字段（kcywpy v1）不再识别**：读到忽略并记日志提示，不报错。
@@ -88,27 +88,27 @@ view 文件本身分布在 `core/view/` 与各 `ext/<feature>/view/` 目录。
 - **视图映射**：`mime.frag` `.agent → application/x-sessiond-agent`，vmap 指向聊天视图
   （同 `?v=chat`，另有 `?v=agent` 别名）——复用现有聊天界面与监督机制，仅会话启动参数来源不同。
 - **启动参数解析单点**：`ext/sessiond/rpc/api.py` `op=agent`（`_resolve_agent`）：
-  读规格 → 校验 → **dir 不存在自动 `mkdir -p`（含 participant/ 中间层）+ 记日志** →
-  登记显式 cwd（`bridge.set_session_cwd`）→ 返回会话路径与 cwd/dir。
-  会话 = **`<dir>/<agent名>.jsonl`**（每 agent 一会话、可重连续聊，类比
+  读规格 → 校验 → **sessionDir 不存在自动 `mkdir -p`（含 participant/ 中间层）+ 记日志** →
+  登记显式 cwd（`bridge.set_session_cwd`）→ 返回会话路径与 cwd/sessionDir。
+  会话 = **`<sessionDir>/<agent名>.jsonl`**（每 agent 一会话、可重连续聊，类比
   `/assistant/dispatcher.jsonl` 的组织），之后完全走既有 .jsonl 会话链路（桥接/监督/重连）。
 - **cwd 显式传递**（fw2ll1）：`proc.Supervisor(session_path, on_event, cwd=None)` ——
   cwd 由调用方显式传入；缺省 = jsonl 所在目录。`.jsonl` 直开路径无登记 → 走缺省，
   **行为零变化**（含现网 `/assistant/dispatcher.jsonl`）。
-- **安全**：dir `expanduser` 后 realpath、cwd（.agent 所在目录）均必须落在会话路径
-  同一根集（~/m 与 ~/m/run 实路径）内，逃逸 → 400；推导出的会话路径再经
+- **安全**：sessionDir `expanduser` 后 realpath、cwd（.agent 所在目录）均必须落在
+  会话路径同一根集（~/m 与 ~/m/run 实路径）内，逃逸 → 400；推导出的会话路径再经
   `resolve_session_path` 二次校验。错误语义：文件缺失 → 404；路径非法/坏 JSON/
-  缺 host/dir 非法 → 400。缺失 .agent 依本节上方兜底语义渲染聊天页，由页内展示友好错误。
-- **可观测设计**：`dir` 指向 `agents/participant/<名字>/` 时，会话文件经 agents-sync
-  四机同步——一台机器可观测另一台机器上 participant 的会话/收件状态。
+  缺 host/sessionDir 非法 → 400。缺失 .agent 依本节上方兜底语义渲染聊天页，由页内展示友好错误。
+- **可观测设计**：`sessionDir` 指向 `agents/participant/<名字>/` 时，会话文件经
+  agents-sync 四机同步——一台机器可观测另一台机器上 participant 的会话/收件状态。
   **⚠ 跨机警示：v1 仍本地拉起。在其它机器打开非本机 host 的 .agent 会在本机另起
   会话进程写同一同步文件（双宿主）。host 路由落地前，勿在其它机器打开非本机 host
   的 .agent。**
 - **host 跨机路由（后续）**：按 host 把请求经反向通道/各机 8080 代理转发到目标机的
   同名端点（配套：多机 8080 + 代理 + rsh 端口转发），只需改 `_resolve_agent` 单点与
   其返回的路由指示。
-- **存量约定**：`assistant/dispatcher.agent`（dir=`~/m/agents/participant/dispatcher`）、
-  `assistant/operator.agent`（dir=`~/m/agents/participant/operator`；operator 的 cwd
+- **存量约定**：`assistant/dispatcher.agent`（sessionDir=`~/m/agents/participant/dispatcher`）、
+  `assistant/operator.agent`（sessionDir=`~/m/agents/participant/operator`；operator 的 cwd
   随之为 `~/m/assistant`，会话文件位置不变，将加载 assistant 扩展——约定自然结果）。
 - **UI 约定**：会话名/页标题 = agent 名（文件名）；`/agents/participant/` 下会话豁免
   双宿主盲区警示（该目录是 .agent 会话的约定归属地，sessiond 自家拉起）。
