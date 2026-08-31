@@ -315,6 +315,10 @@ let lastGen = null;           // 会话进程世代（gen 变化检测 → 基�
 let curLeafId = null;         // 活跃分支叶
 let curProvider = null;       // 当前模型 provider/modelId（model_change 跟踪，/model 用）
 let curModelId = null;
+// .agent 会话宿主可见性（任务 8k7awi）：op=agent 回执保存，斜杠提示条第 4 行展示；缺失显 ?
+let agentHost = null;
+let agentWorkDir = null;
+let agentSessionDir = null;
 let curThinkingLevel = null;  // 当前思考强度（thinking_level_change + get_state 跟踪，0830-1257-vwzb）
 // 会话状态行 2（0830-1257-vwzb inbox 增项）：msgs/compacting 来自 get_state 响应，
 // gen/restarts 来自 op=status；缺失显 ?。
@@ -1573,7 +1577,10 @@ function slashStatusLine() {
     + " \u00b7 gen: " + (curGen == null ? "?" : curGen)
     + " \u00b7 restarts: " + (curRestarts == null ? "?" : curRestarts);
   if (curCompacting) l2 += " \u00b7 compacting\u2026";
-  return l1 + "\n" + l2 + "\n" + ctxStatusText();
+  // 第 4 行（任务 8k7awi）：.agent 会话宿主信息，数据源 = op=agent 回执（见 resolveAgentAndAttach）
+  const l4 = "host: " + (agentHost || "?") + " \u00b7 workDir: " + (agentWorkDir || "?")
+    + " \u00b7 sessionDir: " + (agentSessionDir || "?");
+  return l1 + "\n" + l2 + "\n" + ctxStatusText() + "\n" + l4;
 }
 function showSlashNotice() {
   showNotice(slashStatusLine() + "\n" + SLASH_HELP, "", true);
@@ -1882,6 +1889,8 @@ function backToBottom() {
 async function resolveAgentAndAttach() {
   try {
     const doc = await api("agent", {session: AGENT});
+    // 保存宿主信息到模块级变量（任务 8k7awi），供斜杠提示条第 4 行展示
+    agentHost = doc.host; agentWorkDir = doc.cwd; agentSessionDir = doc.sessionDir;
     await attach(doc.session);   // attach 开头清屏，可见性信息须在其后落行
     // host/cwd/sessionDir 可见性（任务 fw2ll1）：attach 后一行系统消息（host v1 = 仅保存/可见，
     // 会话在本 8080 主机本地拉起；跨机路由为后续能力，见 design.md）。
