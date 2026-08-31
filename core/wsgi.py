@@ -70,8 +70,25 @@ def get_socket_timeout():
     t = int(t if t else '60')
     return None if t < 0 else t
 
+def patch_wsgiserver_nonascii_uri():
+    # wsgiserver 1.3 的 parse_request_uri() 直接对请求行原始 bytes 调 urlparse()，
+    # 未编码的非 ASCII 字节（如裸中文路径）ascii 解码崩溃 → 500 裸抛（票 ticket.1apqq4）。
+    # 解析前把非 ASCII 字节逐字节 percent-encode（ASCII 原样保留，不动既有 % 序列），
+    # 之后走既有 unquote_to_bytes + WSGI utf-8 解码管线 → 正常 404/静态解析。
+    import wsgiserver
+    orig = wsgiserver.HTTPRequest.parse_request_uri
+    def parse_request_uri(self, uri):
+        if isinstance(uri, bytes):
+            try:
+                uri.decode('ascii')
+            except UnicodeDecodeError:
+                uri = b''.join(bytes([b]) if b < 128 else ('%%%02X' % b).encode('ascii') for b in uri)
+        return orig(self, uri)
+    wsgiserver.HTTPRequest.parse_request_uri = parse_request_uri
+
 def run_use_wsgiserver(app, host, port, daemon):
     if not host: host ='0.0.0.0'
+    patch_wsgiserver_nonascii_uri()
     from wsgiserver import WSGIServer
     cert, keyfile = os.path.expanduser('~/.auth/fullchain.pem'), os.path.expanduser('~/.auth/privkey.pem')
     if os.getenv('nossl') == '1':
