@@ -174,7 +174,20 @@ def _resolve_agent(store, session):
                       '500 Internal Server Error')
         _log.info("agent %s: auto-created sessionDir %s", name, sess_dir)
     # 会话 = <sessionDir>/<name>.jsonl（每 agent 一会话）；站内路径经既有校验再过一道。
+    # 站内相对路径推导（任务 kqhweh，ticket.gwj1xr ②）：sess_dir 已是 realpath，若 .agent/
+    # sessionDir 经 ~/m/run 软链（→ /data/…/run）落在运行时区，relpath(sess_dir, WS) 会产出
+    # `../…` 畸形站内路径（旧代码未拦，session_file 解析成不存在位置）。先试 WS 锚定，逃逸则
+    # 回退 run 软链锚定（还原为 /run/… 站内路径）；两者都逃逸 → 400。
     rel_dir = _os.path.relpath(sess_dir, _proc.WS)
+    if rel_dir == ".." or rel_dir.startswith(".." + _os.sep):
+        run_real = _os.path.realpath(_os.path.join(_proc.WS, "run"))
+        rel_run = _os.path.relpath(sess_dir, run_real)
+        if rel_run == ".." or rel_run.startswith(".." + _os.sep):
+            return _j({"ok": False,
+                       "error": "agent file %s: sessionDir %s escapes the site root "
+                                "(rel to %s = %s)" % (p, sess_dir, _proc.WS, rel_dir)},
+                      '400 Bad Request')
+        rel_dir = _posixpath.normpath(_posixpath.join("run", rel_run))
     site_jsonl = "/" + _posixpath.normpath(_posixpath.join(rel_dir, name + ".jsonl"))
     try:
         session_file = _proc.resolve_session_path(site_jsonl)
