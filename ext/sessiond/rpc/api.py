@@ -7,6 +7,11 @@
 #   op=attach  建桥 + 经 pi rpc get_entries 返回消息基线（全量）
 #   op=cmd     上行单条 pi 命令
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
+#   op=stop    杀会话进程且监督员不再重拉（熔断形态停机，任务 7pwnpa epic.f0j2a1 A1 改名手术）：
+#              锁内预置崩溃计数满额 → 杀进程 → 监督循环崩溃分支必触发熔断（>FAIL_LIMIT/窗口）
+#              → state=disabled、监督线程退出；恢复 = 对本路径再发 op=reload。
+#              注：Supervisor 本无 stop 方法（正化到 proc.py 需 web 重启生效），本实现为
+#              script 型热生效的内部态操纵，注释留痕待正化。
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
 #   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/sessionDir 拆分）：
@@ -19,6 +24,7 @@ import json as _json
 import logging as _logging
 import os as _os
 import posixpath as _posixpath
+import time as _time
 from ext.sessiond import bridge as _b
 from ext.sessiond import proc as _proc
 
@@ -206,6 +212,48 @@ def _resolve_agent(store, session):
                               "host is stored for future cross-host routing"})
 
 
+def _stop_session(b, timeout=15.0):
+    """op=stop 落地（任务 7pwnpa）：杀会话进程 + 监督员熔断停机（不再重拉）。
+
+    Supervisor 无原生 stop（run_loop 仅在熔断时退出），而 proc.py 加方法需 web 重启
+    才生效（模块型）——本函数是 script 型热生效实现：锁内把 _crash_ts 预置满额，
+    随后杀进程；监督循环崩溃路径把本次退出计入后必超 FAIL_LIMIT → disabled +
+    广播 session_disabled + 线程退出。恢复路径 = 对本会话路径再发 op=reload
+    （_kill_and_restart 重置熔断）。正化方向（遗留票）：proc.py Supervisor.stop()。
+    """
+    sup = b.sup
+    with sup._cond:
+        if sup.disabled and (sup.proc is None or sup.proc.poll() is not None):
+            return {"ok": True, "state": "disabled", "pid": None,
+                    "gen": sup.gen, "note": "already stopped"}
+        # 预置崩溃计数满额（现时刻全部在窗口内）：本次退出后必触发熔断。
+        sup._crash_ts = [_time.monotonic()] * (_proc.FAIL_LIMIT + 1)
+        p = sup.proc
+    if p is not None and p.poll() is None:
+        try:
+            p.terminate()
+        except OSError:
+            pass
+        try:
+            p.wait(timeout=3.0)
+        except Exception:
+            try:
+                p.kill()
+            except OSError:
+                pass
+    # 等监督循环走到熔断态（proc.wait 返回 → 崩溃分支 → disabled）。
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        with sup._cond:
+            if sup.disabled:
+                return {"ok": True, "state": "disabled", "pid": sup.pid,
+                        "gen": sup.gen}
+        _time.sleep(0.2)
+    with sup._cond:
+        return {"ok": False, "error": "stop timed out waiting for breaker",
+                "state": sup.state, "pid": sup.pid, "gen": sup.gen}
+
+
 def interp(store, op='', session='', cmd='', **kw):
     if op == 'agent':
         # .agent 规格解析（任务 kcywpy）：不走会话桥接——会话路径由规格文件推导，
@@ -236,6 +284,13 @@ def interp(store, op='', session='', cmd='', **kw):
                       '502 Bad Gateway')
         return _j({"ok": True, "session": b.session,
                    "gen": r.get("gen"), "pid": r.get("pid")})
+    if op == 'stop':
+        r = _stop_session(b)
+        if not r.get("ok"):
+            return _j({"ok": False, "session": b.session,
+                       "error": r.get("error"), "state": r.get("state")},
+                      '502 Bad Gateway')
+        return _j({"ok": True, "session": b.session, **r})
     if op == 'clear':
         # 保留会话路径、清空全部内容：杀会话进程→截断 jsonl 到 0 + 去 replica 标记→立即重拉（顺序在
         # Supervisor.clear 内保证：先杀透再删，防旧进程把内存历史回写）。
