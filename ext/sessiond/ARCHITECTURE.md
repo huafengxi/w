@@ -99,6 +99,22 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 **跨宿主守卫**（`proc.py:host_guard`，任务 8nherl 最小版）：唯一守卫点 = `Supervisor.__init__`（建桥接即建监督员，是会话进程在本机被拉起的唯一咽喉）。目标会话文件命中某 `.agent` 声明者推导（`<sessionDir>/<agent名>.jsonl`，`assistant/**` 递归，与 `_resolve_agent` 同口径）且声明 `host` ≠ 本机（`env/host-id` 查表）→ `ValueError` 拒绝（经 `get_bridge` 传播，api/stream 回 400 + 「请通过 <host> 的服务访问」指引）；本机身份不可得 = 配置错误，命中声明者拒绝放行；无声明者会话零波及。
 
+### resident 常驻会话（任务 02mi7r，票 su068s）
+
+背景：会话原本仅懒拉起（首次访问建桥接时 spawn）——夜间无人开页则会话进程不存在，会话内扩展（如调度员 receiver）不运行，`participant/<名>/inbox` 通知积压。resident = 声明即常驻：
+
+| 项 | 语义 |
+|---|---|
+| 声明 | `.agent` JSON 可选字段 `"resident": true`（仅布尔 true 生效）；且须声明 `host` == 本机规范名 |
+| 启动时机 | web 启动 ready 钩子：`core/wsgi.py:run_use_wsgiserver` 在 `fork_as_daemon` **之后**、`server.start()` 之前调 `resident.py:bootstrap()`（fork 前创建的监督线程不进子进程，故钩子必须在 fork 后；懒导入 + try/except，失败不阻塞服务） |
+| 扫描面 | `resident.py:_mount_roots` 解析 `w/stores/fstab`（与 build_root_store 同口径）取 Dir/Enc 类型挂载的本地根（去重、剔除被包含子根），`os.walk` 不跟随符号链接、剪枝 `.git`/`node_modules`/`__pycache__`，找全部 `*.agent` |
+| 入选条件 | `resident is True` 且 `host == _self_host()`（env/host-id 查表）；本机身份不可得 → 整体跳过不猜测（与 host_guard 同口径）。他机 web 启动扫到同一 .agent（~/m 跨机同步）但 host ≠ 本机 → 不拉起 |
+| 启动参数 | 与 `rpc/api.py:_resolve_agent` 同口径：会话文件 = `<sessionDir 缺省 .agent 所在目录>/<名>.jsonl`（含 run 软链区站内路径还原）；cwd = 显式 `cwd` 字段，缺省 = .agent 所在目录；先 `set_session_cwd` 登记再 `get_bridge`（建桥即过 host_guard 守卫点）→ `ensure_started` 起监督线程 → `_spawn`。**无 attach / get_entries、不等待** |
+| 自拉起 | 零新代码：监督循环既有崩溃退避重拉（2^n，≤30s）天然覆盖——resident = 监督线程常驻不退出；熔断行为与普通会话一致（仅 reload/clear 解除，无专属自恢复）。本无用户 stop 操作；reload/clear 杀后重拉语义不变 |
+| 幂等 | `bootstrap()` 模块级一次性标志；每会话失败只记日志跳过，不影响其它会话与服务 |
+| 零波及 | 非 resident `.agent` 与 `.jsonl` 直开的懒拉起语义完全不变；重启竞态由既有 `_clear_stale_proc` 旧宿主清场兜底 |
+| 现网声明 | 仅 `assistant/dev-dispatcher/dev-dispatcher.agent`（主调度员单点常驻）；`nv1-dispatcher` 后备实例保持懒拉起（用户拍板 02mi7r） |
+
 ---
 
 ## 3. 桥接层（bridge.py）
