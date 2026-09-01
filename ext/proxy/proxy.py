@@ -114,6 +114,28 @@ def rewrite_local(path):
     return rest
 
 
+def redirect_to_local_prefix(path):
+    """无前缀请求重定向到本机规范名前缀（任务 se6t32：路由始终带宿主前缀）。
+    - 命中任一 route 前缀 → None（不重定向；裸前缀如 '/mac' == p.rstrip('/')
+      返回带尾斜杠的 p，规整一跳）；
+    - 未命中且存在 '/<本机规范名>/' 前缀规则 → 返回 '/<规范名>' + path；
+    - 本机规范名无对应前缀规则（未知宿主）→ None，维持旧行为防重定向死循环。
+    由 wsgi 层在进管线前调用；返回 None 表示无需重定向。"""
+    routes = load_routes()
+    if not routes:
+        return None
+    for r in routes:
+        p = r['prefix']
+        if p.endswith('/') and path == p.rstrip('/'):
+            return p
+    if match_route(routes, path):
+        return None
+    me = self_host()
+    if not any(r['prefix'] == '/%s/' % me for r in routes):
+        return None
+    return '/%s%s' % (me, path)
+
+
 def load_routes():
     """按 mtime 缓存读取规则文件。缺失/空/解析失败 → 返回 []（代理关闭）。"""
     try:

@@ -56,10 +56,20 @@ def make_wsgi_app(handlers):
             pi = (pi.encode('latin-1') if isinstance(pi, str) else pi).decode('utf-8', errors='replace')
         except Exception as e:
             logging.warning('PATH_INFO decode failed: %r %s', pi, e)
-        # local_on 重写：命中本机规范名的代理前缀剥掉改本地直读（见 ext/proxy），
+        # 路由始终带宿主规范名前缀（任务 se6t32）：无前缀请求 302 到 /<本机规范名><路径>；
+        # 随后 local_on 重写：命中本机规范名的代理前缀剥掉改本地直读（见 ext/proxy），
         # 让 itab/链接可以固定带 /dev//mac/ 等前缀、四机任意入口同址可达。
         try:
-            from ext.proxy.proxy import rewrite_local
+            from ext.proxy.proxy import rewrite_local, redirect_to_local_prefix
+            redir = redirect_to_local_prefix(pi)
+            if redir is not None:
+                qs = env.get('QUERY_STRING', '')
+                location = '%s?%s' % (redir, qs) if qs else redir
+                logging.info('PREFIX REDIRECT: %s -> %s', pi, location)
+                response('302 Found', [('Location', location),
+                                       ('Content-Type', 'text/html')])
+                body = '<a href="%s">%s</a>' % (location, location)
+                return [body.encode()]
             pi = rewrite_local(pi)
         except Exception as e:
             logging.warning('rewrite_local failed: %r %s', pi, e)
