@@ -546,6 +546,50 @@ class Supervisor:
             except OSError:
                 pass
 
+    def _sync_header_cwd(self):
+        """会话文件首帧 cwd 对齐（任务 53yjuc，receiver-load-debug）：pi resume 时
+        项目资源（含 .pi/extensions 扩展）发现用会话文件**首帧记录的 cwd**（创建时值，
+        SessionManager.open 无 cwdOverride：pi dist/core/session-manager.js open()；
+        扩展发现只查 <cwd>/.pi 无向上回溯：dist/core/package-manager.js projectBaseDir）——
+        首帧 cwd 与宿主拉起 cwd 不一致时（典型：文件由旧代码在子目录创建、.agent 后改
+        显式 cwd）扩展整个不加载（2026-09-01 dev-dispatcher 事故：agentd 不加载 →
+        receiver/dispatch 工具全无）。拉起前把首帧 cwd 改写为 self.cwd（其余行不动，
+        临时文件+rename 原子落盘）。调用时机 = _run_loop 内、旧宿主已清场、本线程独占，
+        无并发写者。.jsonl 直开（缺省 cwd=dirname）首帧本就等于 dirname，无行为变化。"""
+        try:
+            with open(self.session_file, "rb") as f:
+                first = f.readline()
+                rest = f.read()
+        except OSError:
+            return
+        if not first:
+            return
+        try:
+            header = json.loads(first.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return
+        if not isinstance(header, dict) or header.get("type") != "session":
+            return
+        if header.get("cwd") == self.cwd:
+            return
+        old = header.get("cwd")
+        header["cwd"] = self.cwd
+        tmp = self.session_file + ".hdr-tmp"
+        try:
+            with open(tmp, "wb") as f:
+                f.write((json.dumps(header, ensure_ascii=False) + "\n").encode("utf-8"))
+                f.write(rest)
+            os.replace(tmp, self.session_file)
+        except OSError as e:
+            log.error("header cwd sync failed for %s: %s", self.session_file, e)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return
+        log.info("header cwd synced %r -> %r for %s", old, self.cwd,
+                 self.session_file)
+
     def _spawn(self):
         os.makedirs(self.cwd, exist_ok=True)
         # 接管 replica 文件（任务 4l3de8）：不经 clear 直接托管的会话文件可能是被远端
@@ -553,6 +597,7 @@ class Supervisor:
         # 单写者，拉起前升格本机原件，否则活文件会被远端旧副本覆盖、本机写入也不进 push。
         if os.path.exists(self.session_file):
             _claim_origin(self.session_file)
+            self._sync_header_cwd()   # 首帧 cwd 对齐（任务 53yjuc）
         # 稳定期重置（上轮存活超 STABLE_RESET → 崩溃计数清零）
         if (self._spawned_at and time.monotonic() - self._spawned_at
                 > STABLE_RESET):
