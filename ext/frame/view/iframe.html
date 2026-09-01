@@ -63,7 +63,9 @@
              iframe.style.height = frameHeight(iframe) + 'px';
          }
       }
-      var items = [];        // {name, link, iframe, checkbox, tab, refreshSec, nextRefresh}
+      var items = [];        // {name, link, active, standby, standbyTimer, pendingSwap, checkbox, tab, refreshSec, nextRefresh}
+                             // 双缓冲（任务 24ha97）：active = 当前显示的 iframe；
+                             // standby = 隐藏的预加载 iframe（加载完成后无闪换入），任一时刻每行 ≤2 个。
       var currentTab = -1;   // last selected tab index in tab layout
       // Per-row auto-refresh（任务 0830-1829-xfxl：type=script 直服形态下内容视图
       // 无自轮询，容器统一承担刷新职责）：行内 URL 带 ?refresh=N/&refresh=N 时，
@@ -76,7 +78,56 @@
       function reloadSrc(link) {
          return link + (link.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
       }
-      function appendIndex(checklist, iframe, name, link) {
+      // ---- 双缓冲刷新（任务 24ha97）：不再直接改可见 iframe 的 src（会白屏），
+      // 而是先在隐藏 standby iframe 里加载，加载完成且内容非空白才 swap 换入。----
+      // standby 就绪校验：同源可读 + readyState=complete + body 有内容/
+      // scrollHeight>0，防把空白页换上来。跨源/不可读视为未就绪（不换）。
+      function standbyReady(sb) {
+         try {
+             var doc = sb.contentWindow && sb.contentWindow.document;
+             if (!doc || doc.readyState != 'complete' || !doc.body) return false;
+             return doc.body.scrollHeight > 0 && doc.body.childNodes.length > 0;
+         } catch (e) { return false; }
+      }
+      function discardStandby(it) {
+         if (it.standbyTimer) { clearTimeout(it.standbyTimer); it.standbyTimer = null; }
+         var sb = it.standby;
+         it.standby = null;
+         if (sb) {
+             sb.onload = null; sb.onerror = null;
+             if (sb.parentNode) sb.parentNode.removeChild(sb);
+         }
+      }
+      function startStandby(it) {
+         var sb = document.createElement('iframe');
+         sb.style.display = 'none';
+         $("iframe-list").appendChild(sb);
+         it.standby = sb;
+         // 30s 超时兜底：丢弃 standby 保留旧内容，下个周期重试（防 onload 永不触发挂死）
+         it.standbyTimer = setTimeout(function () { if (it.standby === sb) discardStandby(it); }, 30000);
+         sb.onerror = function () { if (it.standby === sb) discardStandby(it); }; // 加载失败：丢弃 standby 保留旧内容
+         sb.onload = function () {
+             if (it.standby !== sb) return; // 已被丢弃/取代的过期回调
+             clearTimeout(it.standbyTimer); it.standbyTimer = null;
+             if (document.hidden) { it.pendingSwap = true; return; } // 页面隐藏：推迟到可见后
+             if (!standbyReady(sb)) { discardStandby(it); return; }  // 空白/未就绪：保留旧内容，下个周期重试
+             swap(it);
+         };
+         sb.src = reloadSrc(it.link);
+      }
+      // standby 换入为 active：继承旧帧显隐状态，旧帧移除（每行 DOM 中 iframe ≤2 且无泄漏）。
+      function swap(it) {
+         var sb = it.standby;
+         if (!sb) return;
+         it.standby = null;
+         var old = it.active;
+         sb.style.display = old.style.display;
+         it.active = sb;
+         old.onload = null;
+         if (old.parentNode) old.parentNode.removeChild(old);
+         applyHeight(sb);
+      }
+      function appendIndex(checklist, item, name, link) {
              var div = document.createElement('div');
              checklist.appendChild(div)
              var checkbox = document.createElement('input');
@@ -85,7 +136,11 @@
              checkbox.type = 'checkbox';
              checkbox.name = name;
              checkbox.checked = true;
-             checkbox.onclick = function () { if (checkbox.checked) { setIframeSrc(iframe, link); } else { iframe.style.display = 'none'; } }
+             // 双缓冲适配：off 隐藏 active 并取消 standby 加载；on 恢复 active（必要时重载）
+             checkbox.onclick = function () {
+                 if (checkbox.checked) { setIframeSrc(item.active, link); }
+                 else { item.active.style.display = 'none'; discardStandby(item); }
+             }
              div.appendChild(document.createTextNode(name));
              return checkbox;
       }
@@ -121,13 +176,14 @@
              var name = name_and_link[0];
              var link = name_and_link[1] || name;
              var iframe = appendIframe(body);
-             var checkbox = appendIndex(checklist, iframe, name, link);
              var tab = appendTab(tabbar, name, items.length);
-             items.push({ name: name, link: link, iframe: iframe, checkbox: checkbox, tab: tab, refreshSec: refreshSecOf(link), nextRefresh: 0 });
+             var item = { name: name, link: link, active: iframe, standby: null, standbyTimer: null, pendingSwap: false, checkbox: null, tab: tab, refreshSec: refreshSecOf(link), nextRefresh: 0 };
+             item.checkbox = appendIndex(checklist, item, name, link);
+             items.push(item);
              // tab mode: lazy load — hidden tabs keep an empty src and are
              // fetched only when first selected (selectTab()'s !iframeLoaded
              // branch). Flow mode still loads every row up front.
-             if (layoutMode != 'tab') setIframeSrc(iframe, link);
+             if (layoutMode != 'tab') setIframeSrc(item.active, link);
          }
          // single-shot layout init by route mode (replaces the old runtime switch)
          if (layoutMode == 'tab') {
@@ -151,7 +207,7 @@
       function iframeLoaded(item) {
          // indexOf (not endsWith): container-level refresh appends a ?t=<ts>
          // cache-buster to the src, so the abs URL no longer ends with the link
-         return item.iframe.src && item.iframe.src.indexOf(item.link) >= 0;
+         return item.active.src && item.active.src.indexOf(item.link) >= 0;
       }
       function selectTab(idx) {
          currentTab = idx;
@@ -160,14 +216,14 @@
              if (j == idx) {
                  it.tab.className = 'tab selected';
                  if (!iframeLoaded(it)) {
-                     setIframeSrc(it.iframe, it.link);  // lazy load; onload sets height
+                     setIframeSrc(it.active, it.link);  // lazy load; onload sets height
                  } else {
-                     it.iframe.style.display = 'block';
-                     applyHeight(it.iframe);
+                     it.active.style.display = 'block';
+                     applyHeight(it.active);
                  }
              } else {
                  it.tab.className = 'tab';
-                 it.iframe.style.display = 'none';
+                 it.active.style.display = 'none';
              }
          }
       }
@@ -179,9 +235,10 @@
          if (layoutMode != 'flow' || document.hidden) return;
          for (var j = 0; j < items.length; j++) {
              var it = items[j];
-             if (it.iframe.style.display == 'none' || !iframeLoaded(it)) continue;
-             var h = frameHeight(it.iframe) + 'px';
-             if (it.iframe.style.height != h) { it.iframe.style.height = h; }
+             // 只测 active（standby 隐藏且未换入，不参与布局）
+             if (it.active.style.display == 'none' || !iframeLoaded(it)) continue;
+             var h = frameHeight(it.active) + 'px';
+             if (it.active.style.height != h) { it.active.style.height = h; }
          }
       }
       // fullscreen toggle (tab mode): Android Chrome has no browser-level
@@ -201,7 +258,7 @@
          var btn = $('fs-toggle');
          if (btn) btn.textContent = document.fullscreenElement ? '✕' : '⛶';
          // dvh shifts when the status bar hides; recompute the visible iframe
-         if (layoutMode == 'tab' && items[currentTab]) applyHeight(items[currentTab].iframe);
+         if (layoutMode == 'tab' && items[currentTab]) applyHeight(items[currentTab].active);
       });
       // window resize → embedded pages reflow → heights go stale (debounced)
       var resizeTimer = null;
@@ -212,22 +269,36 @@
       // poll for async content growth (lazy load, fold/expand, late render)
       setInterval(refitFlow, 2000);
       // container-level per-row refresh: reload each row's iframe on its own
-      // cadence (only rows whose link carries refresh=N)
+      // cadence (only rows whose link carries refresh=N). 双缓冲：到期只创建/复用
+      // 隐藏 standby 预加载，可见 active 不动；standby 就绪后 swap，全程无白屏。
       function refreshAll() {
          if (document.hidden) return; // paused while page hidden; resumes next tick
          var now = Date.now();
          for (var j = 0; j < items.length; j++) {
              var it = items[j];
              if (it.refreshSec <= 0 || !iframeLoaded(it)) continue;
-             if (it.iframe.style.display == 'none') {
+             if (it.active.style.display == 'none') {
                 it.nextRefresh = now + it.refreshSec * 1000; // hidden: reschedule, no fetch
                 continue;
              }
              if (now < it.nextRefresh) continue;
              it.nextRefresh = now + it.refreshSec * 1000;
-             it.iframe.src = reloadSrc(it.link);
+             if (it.standby) continue; // 上一个 standby 还在加载（30s 超时兜底丢弃后下周期重试）
+             startStandby(it);
          }
       }
+      // 页面恢复可见：执行被推迟的 swap（standby onload 时页面隐藏的情形），
+      // 然后 refreshAll 下一 tick 自然恢复周期。
+      document.addEventListener('visibilitychange', function () {
+         if (document.hidden) return;
+         for (var j = 0; j < items.length; j++) {
+             var it = items[j];
+             if (it.pendingSwap && it.standby) {
+                 it.pendingSwap = false;
+                 if (standbyReady(it.standby)) swap(it); else discardStandby(it);
+             }
+         }
+      });
       setInterval(refreshAll, 1000);
     </script>
   </head>
