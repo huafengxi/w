@@ -781,7 +781,15 @@ function handleEvent(o) {
   if (document.hidden && t === "message_start" && !turnActive) beep("notify");
   if (document.hidden && (t === "sessiond.error" || t === "extension_ui_request")) beep("notify");
   if (t === "agent_settled") { beep("done"); collapseProcessGroups(); }  // 回合彻底落定 → 组折叠（0830-1039-a6vy）
-  if (t === "turn_end") hideWaiting();                  // 子回合边界：仅清等待指示，不清 turnActive（0830-1029-urgg）
+  // turn_end 真实发射时序（pi-agent-core/dist/agent-loop.js:131）：toolResults 已入上下文之后、
+  // 下一次模型调用之前发射，事件携带 toolResults 字段。因此非空 = 子回合以工具调用结束、
+  // 模型即将再调（此刻起进入下一轮 TTFT 空白）→ showWaiting 保持/恢复等待指示；
+  // 空 = 纯文本子回合（其后只可能接 agent_end）→ hideWaiting。
+  // 旧版无条件 hideWaiting 把指示器恰好在 TTFT 空白开始前移除（任务 c6ue7q 修复）。
+  if (t === "turn_end") {
+    if (o.toolResults && o.toolResults.length > 0) showWaiting();
+    else hideWaiting();                                 // 仅清等待指示，不清 turnActive（0830-1029-urgg）
+  }
   if (t === "agent_end") {
     turnActive = false; hideWaiting();
     collapseProcessGroups();                            // agent run 结束 → 自动折叠过程组（0830-1039-a6vy）
