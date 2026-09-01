@@ -197,12 +197,17 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 
 ```json
 {"routes": [{"prefix": "/proxy/demo", "upstream": "http://127.0.0.1:18099",
-             "strip_prefix": false, "timeout": 10}]}
+             "strip_prefix": false, "timeout": 10,
+             "local_on": ["dev"]}]}
 ```
 
 - `prefix`：以 `/` 开头的路径前缀；多条规则取**最长前缀**匹配（朴素
   `startswith` 语义，不强制路径段边界）。
 - `upstream`：`http(s)://host[:port]`；`strip_prefix` 缺省 false；`timeout` 缺省 10 秒。
+- `local_on`：可选，规范名列表（规范名 = `~/m/env/host-id` 映射，未命中回退 hostname）。
+  本机命中时该前缀**不走代理**：wsgi 层在进管线前剥前缀改本地直读
+  （`core/wsgi.py` 调 `rewrite_local`），本机服务自己的前缀不必绕自己一跳——
+  让 itab/链接可固定带 `/dev//mac//nv1/` 前缀、四机任意入口同址可达。
 - 文件缺失/为空/解析失败 = 代理功能整体关闭（不影响既有管线）；解析失败记 warning。
 
 **插入点与安全**：`proxy_handler` 挂在管线第一个业务位（`core/server.py`，

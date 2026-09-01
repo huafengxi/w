@@ -23,6 +23,7 @@
 import json
 import logging
 import os
+import socket
 import http.client
 import urllib.parse
 
@@ -53,13 +54,64 @@ def _parse_rules(obj):
         u = urllib.parse.urlparse(upstream if isinstance(upstream, str) else '')
         if u.scheme not in ('http', 'https') or not u.netloc:
             raise ValueError('route.upstream must be http(s)://host[:port]: %r' % (r,))
+        local_on = r.get('local_on')
+        if local_on is not None:
+            if not isinstance(local_on, list) or not all(isinstance(h, str) for h in local_on):
+                raise ValueError('route.local_on must be a list of host names: %r' % (r,))
         rules.append({
             'prefix': prefix,
             'upstream': u,
             'strip_prefix': bool(r.get('strip_prefix', False)),
             'timeout': float(r.get('timeout', 10)),
+            'local_on': list(local_on) if local_on else [],
         })
     return rules
+
+
+# ---- 本机规范名（local_on 判定）----
+# 身份映射 = ~/m/env/host-id（<hostname> <规范名>，全机共用入库文件）；
+# 未命中/文件缺失 → 回退 hostname 本身（与 host_info 工具同口径）。
+_host_id_file = os.path.expanduser('~/m/env/host-id')
+_self_host_cache = {'key': None, 'name': None}
+
+
+def self_host():
+    """本机规范名（按 hostname 查 env/host-id，回退 hostname）。结果缓存。"""
+    hn = socket.gethostname()
+    if _self_host_cache['key'] == hn:
+        return _self_host_cache['name']
+    name = hn
+    try:
+        with open(_host_id_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == hn:
+                    name = parts[1]
+                    break
+    except OSError:
+        pass
+    _self_host_cache.update(key=hn, name=name)
+    return name
+
+
+def rewrite_local(path):
+    """local_on 重写：命中本机规范名的代理前缀剥掉前缀改本地直读。
+    供 wsgi 层在进管线前调用（本机服务自己的前缀不必绕代理一跳）；
+    未命中/规则为空 → 原样返回。"""
+    routes = load_routes()
+    if not routes:
+        return path
+    rule = match_route(routes, path)
+    if not rule or not rule['local_on'] or self_host() not in rule['local_on']:
+        return path
+    rest = path[len(rule['prefix']):]
+    if not rest.startswith('/'):
+        rest = '/' + rest
+    logging.info('PROXY LOCAL: %s -> %s (host=%s)', path, rest, self_host())
+    return rest
 
 
 def load_routes():
@@ -231,6 +283,9 @@ def proxy_handler(env, path, query, post):
     if not routes:
         return None
     rule = match_route(routes, path)
+    if rule and rule['local_on'] and self_host() in rule['local_on']:
+        # local_on 命中本机：不代理（正常路径下 wsgi 层已剥前缀重写，此处兜底）。
+        return None
     if not rule:
         # 裸前缀兜底（任务 kqhweh，ogwtb4 评审建议 3）：/mac（无尾斜杠）不匹配
         # '/mac/' 前缀，会落回既有管线渲染兜底聊天页（易误导）。显式 302 重定向到

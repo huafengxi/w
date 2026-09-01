@@ -53,11 +53,19 @@ def make_wsgi_app(handlers):
         env.setdefault('QUERY_STRING', '')
         pi = env.get('PATH_INFO', '')
         try:
-            env['PATH_INFO'] = (pi.encode('latin-1') if isinstance(pi, str) else pi).decode('utf-8', errors='replace')
+            pi = (pi.encode('latin-1') if isinstance(pi, str) else pi).decode('utf-8', errors='replace')
         except Exception as e:
             logging.warning('PATH_INFO decode failed: %r %s', pi, e)
+        # local_on 重写：命中本机规范名的代理前缀剥掉改本地直读（见 ext/proxy），
+        # 让 itab/链接可以固定带 /dev//mac/ 等前缀、四机任意入口同址可达。
+        try:
+            from ext.proxy.proxy import rewrite_local
+            pi = rewrite_local(pi)
+        except Exception as e:
+            logging.warning('rewrite_local failed: %r %s', pi, e)
+        env['PATH_INFO'] = pi
 
-        header, content = handle_request(env, env.get('PATH_INFO'), env['QUERY_STRING'], env['wsgi.input'])
+        header, content = handle_request(env, pi, env['QUERY_STRING'], env['wsgi.input'])
         response(*header)
         if not content: content = []
         elif isinstance(content, bytes): content = [content]
