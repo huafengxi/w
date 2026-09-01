@@ -1,31 +1,31 @@
 {
-  "_comment": "reverse proxy 路由规则（0831-0937-sh7l；多机扩展 r71ydk；/mac/ 反向隧道任务 xt2sj3；local_on 本机直读；se6t32 起路由始终带宿主前缀：无前缀请求在 wsgi 层 302 到 /<本机规范名><路径>，故跨机转发一律保留前缀（strip_prefix=false），由对端 rewrite_local/local_on 剥自家前缀——若剥前缀转发，无前缀路径到达对端会被 302 回带前缀路径，客户端死循环）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port])、strip_prefix(可选，缺省 false；勿开，见前)、timeout(可选，秒，缺省 10；对流式响应 = 空闲超时，SSE 路由须 > 上游 keep-alive 周期)、local_on(可选，规范名列表；本机命中时不走代理，剥前缀本地直读——规范名按 ~/m/env/host-id 映射，见 README.md)。详见 w/design.md「reverse proxy」小节。upstream 用 IP：dev/nv2 真实主机名（obrde.dev-yi3/ob-ai-115）在 nv1 上不可 DNS 解析，ssh 别名仅存在于 ~/.ssh/config；/nv1/ 同口径（nv1 短名不可靠，用真实 IP 30.249.210.114，SSE 流式故 timeout=65）。/mac/ = mac 无公网可达，走 rsh 反向端口转发（hub nv1 0.0.0.0:8083 → mac 127.0.0.1:8080，env/rsh-forwards mac=3），upstream 固定本机回环。",
+  "_comment": "reverse proxy 路由规则（0831-0937-sh7l；多机扩展 r71ydk；/mac/ 反向隧道任务 xt2sj3；local_on 本机直读）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port])、strip_prefix(可选，缺省 false)、timeout(可选，秒，缺省 10；对流式响应 = 空闲超时，SSE 路由须 > 上游 keep-alive 周期)、local_on(可选，规范名列表；本机命中时不走代理，剥前缀本地直读——规范名按 ~/m/env/host-id 映射，见 README.md)。无前缀路径不强制跳转（2026-09-01 用户拍板撤销 se6t32 的 302）。详见 w/design.md「reverse proxy」小节。upstream 用 IP：dev/nv2 真实主机名（obrde.dev-yi3/ob-ai-115）在 nv1 上不可 DNS 解析，ssh 别名仅存在于 ~/.ssh/config；/nv1/ 同口径（nv1 短名不可靠，用真实 IP 30.249.210.114，SSE 流式故 timeout=65）。/mac/ = mac 无公网可达，走 rsh 反向端口转发（hub nv1 0.0.0.0:8083 → mac 127.0.0.1:8080，env/rsh-forwards mac=3），upstream 固定本机回环。",
   "routes": [
     {
       "prefix": "/dev/",
       "upstream": "http://6.12.232.57:8080",
-      "strip_prefix": false,
+      "strip_prefix": true,
       "timeout": 10,
       "local_on": ["dev"]
     },
     {
       "prefix": "/nv2/",
       "upstream": "http://30.249.210.115:8080",
-      "strip_prefix": false,
+      "strip_prefix": true,
       "timeout": 10,
       "local_on": ["nv2"]
     },
     {
       "prefix": "/nv1/",
       "upstream": "http://30.249.210.114:8080",
-      "strip_prefix": false,
+      "strip_prefix": true,
       "timeout": 65,
       "local_on": ["nv1"]
     },
     {
       "prefix": "/mac/",
       "upstream": "http://127.0.0.1:8083",
-      "strip_prefix": false,
+      "strip_prefix": true,
       "timeout": 65,
       "local_on": ["mac"]
     }
