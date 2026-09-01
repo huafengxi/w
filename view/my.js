@@ -124,6 +124,25 @@ function rpc(url, content) {
 }
 
 // Streaming POST: on_chunk(text) is called for each decoded chunk as it arrives.
+// async counterparts of http()/read()（任务 8a1xdz：同步 XHR 会冻结整个同源 tab
+// 共享的渲染进程主线程，视图 init/轮询热路径一律走这里）。
+function httpAsync(url, content, on_load, on_error) {
+    fetch(url, {
+        method: "POST",
+        headers: {"Content-type": "application/x-www-form-urlencoded"},
+        body: content || '',
+    }).then(resp => resp.text())
+      .then(text => { if (on_load) on_load(text); })
+      .catch(e => { if (on_error) on_error(e); });
+}
+
+function readAsync(url, on_load, on_error) {
+    httpAsync(url, encodeQueryString({v: 'read', token: _token()}), function (res) {
+        if (res.match(/^Exception:/)) { if (on_error) on_error(res); return; }
+        if (on_load) on_load(res);
+    }, on_error);
+}
+
 function rpc_stream(url, content, on_chunk, on_done, on_error) {
     if (!content) content = {};
     content['token'] = _token();

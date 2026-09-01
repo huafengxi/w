@@ -109,19 +109,22 @@
          return m ? parseInt(m[1], 10) : 0;
       }
       var lastRendered = null;
+      var pollInFlight = false;
       function pollRefresh() {
-         if (getRefreshSec() <= 0) return;
+         if (getRefreshSec() <= 0 || pollInFlight) return;
          var url = getUrl();
          if (document.hidden) return; // paused while tab hidden; next tick resumes
          var y = window.scrollY;
-         try {
-            // ?t=... only busts caches; the server ignores unknown params
-            var content = read(url + '?t=' + Date.now());
+         pollInFlight = true;
+         // 任务 8a1xdz：同步 read() 改异步——慢源（如 svc 聚合 2-3s）同步请求会冻结
+         // 同源 tab 共享的主线程，期间容器切 tab/点击全部卡顿。?t= 仍只做缓存破坏。
+         readAsync(url + '?t=' + Date.now(), function (content) {
+            pollInFlight = false;
             if (content === lastRendered) return;
             lastRendered = content;
             renderDoc(content);
             window.scrollTo(0, y);
-         } catch (e) { /* transient fetch error; retry on next tick */ }
+         }, function () { pollInFlight = false; /* transient fetch error; retry on next tick */ });
       }
       (function(){
          var sec = getRefreshSec();

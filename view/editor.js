@@ -9,9 +9,7 @@ function getMatch(s, pat, pos) {
 
 function makeEditor(panel, on_save) {
     panel.innerHTML = '<button type="button" id="save_editor_button">save</button><button type="button" id="resize_editor_button">resize</button><button type="button" id="upload_button">upload</button><button type="button" id="orig_link_button">orig link</button><textarea name="content" class="input" style="height:100%">${content}</textarea><pre class="error"></pre>';
-    var content = read(getUrl());
     var editor = $s(panel, 'input');
-    editor.value = content;
     function set_error(err_msg) {
         $s(panel, "error").innerHTML = err_msg;
     }
@@ -22,7 +20,12 @@ function makeEditor(panel, on_save) {
             set_error("on save failed\n" + e);
         }
     }
-    on_save_no_exception(content);
+    // 任务 8a1xdz：初始内容改异步读取（同步 XHR 会冻结同源 tab 共享的主线程；
+    // 慢源如 svc 聚合要 2-3s，期间容器点什么都卡）。面板默认隐藏，行为等价。
+    readAsync(getUrl(), function (content) {
+        editor.value = content;
+        on_save_no_exception(content);
+    }, function (e) { set_error("read failed\n" + e); });
     function save() {
         set_error("");
         try {

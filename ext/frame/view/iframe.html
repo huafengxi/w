@@ -35,8 +35,9 @@
       }
       function setIframeSrc(iframe, src) {
          if (!iframe.src.endsWith(src)) { iframe.src = src; }
-         iframe.style.display = 'block';
-         iframe.onload = function () { applyHeight(iframe); }
+         if (layoutMode == 'tab') stackFrame(iframe, true);
+         else iframe.style.display = 'block';
+         iframe.onload = function () { applyHeight(iframe); prewarm(iframe); }
       }
       function frameHeight(iframe) {
          var doc = iframe.contentWindow && iframe.contentWindow.document;
@@ -62,6 +63,38 @@
          } else {
              iframe.style.height = frameHeight(iframe) + 'px';
          }
+      }
+      // ---- 堆叠预布局（任务 8a1xdz，H1 修复）----
+      // tab 模式：已加载行常驻参与布局（position:absolute 堆叠在 tab 栏下方同一位置），
+      // 显隐只改 visibility/z-index——切换不再为目标文档付全量同步布局代价。
+      // （display:none 的 iframe 浏览器不保有布局，切回 block 会强制该文档全量同步
+      // reflow 才能上屏，大文档（如 chat）每次来回切换都卡一下。）
+      // absolute 相对初始包含块（=viewport，body margin 0），top 取 iframe-list 的
+      // offsetTop，与原正常流中的渲染位置一致；高度仍由 applyHeight 的 calc 语义承担。
+      function stackFrame(iframe, visible) {
+         iframe.style.display = 'block';
+         iframe.style.position = 'absolute';
+         iframe.style.left = '0';
+         iframe.style.top = topBarHeight() + 'px';
+         iframe.style.width = '100%';
+         iframe.style.visibility = visible ? 'visible' : 'hidden';
+         iframe.style.zIndex = visible ? '2' : '1';
+      }
+      // 预布局：强制完成一次同步布局（读布局属性即触发），代价付在加载完成时刻、
+      // 而不是切换时刻；对已布局文档是廉价的。
+      function prewarm(iframe) {
+         if (layoutMode != 'tab') return;
+         try {
+             iframe.offsetWidth;
+             var doc = iframe.contentWindow && iframe.contentWindow.document;
+             if (doc && doc.body) doc.body.offsetHeight;
+         } catch (e) { /* 跨源/未就绪：静默跳过 */ }
+      }
+      // 行隐藏判定：display:none（未加载/复选框 off）或 tab 模式 visibility:hidden
+      //（已加载未选中行，预布局态）。
+      function rowHidden(it) {
+         if (it.active.style.display == 'none') return true;
+         return layoutMode == 'tab' && it.active.style.visibility == 'hidden';
       }
       var items = [];        // {name, link, active, standby, standbyTimer, pendingSwap, checkbox, tab, refreshSec, nextRefresh}
                              // 双缓冲（任务 24ha97）：active = 当前显示的 iframe；
@@ -100,7 +133,10 @@
       }
       function startStandby(it) {
          var sb = document.createElement('iframe');
-         sb.style.display = 'none';
+         // tab 模式：standby 以预布局态（堆叠隐藏）挂载，加载期间渐进完成布局，
+         // swap 时不再触发全量 reflow（H3）；flow 模式维持 display:none 旧行为。
+         if (layoutMode == 'tab') { stackFrame(sb, false); applyHeight(sb); }
+         else sb.style.display = 'none';
          $("iframe-list").appendChild(sb);
          it.standby = sb;
          // 30s 超时兜底：丢弃 standby 保留旧内容，下个周期重试（防 onload 永不触发挂死）
@@ -111,6 +147,7 @@
              clearTimeout(it.standbyTimer); it.standbyTimer = null;
              if (document.hidden) { it.pendingSwap = true; return; } // 页面隐藏：推迟到可见后
              if (!standbyReady(sb)) { discardStandby(it); return; }  // 空白/未就绪：保留旧内容，下个周期重试
+             prewarm(sb); // 换入前确保布局已完成，swap 只改样式不触发 reflow
              swap(it);
          };
          sb.src = reloadSrc(it.link);
@@ -122,6 +159,8 @@
          it.standby = null;
          var old = it.active;
          sb.style.display = old.style.display;
+         sb.style.visibility = old.style.visibility; // tab 模式继承显隐（flow 模式为 ''=可见，等价旧行为）
+         sb.style.zIndex = old.style.zIndex;
          it.active = sb;
          old.onload = null;
          if (old.parentNode) old.parentNode.removeChild(old);
@@ -165,7 +204,10 @@
       function baseName(p) { var m = String(p).match(/[^/]+$/); return m ? m[0] : p; }
       function initApp(){
          setWindowTitle(baseName(ARGS.src || window.location.pathname));
-         var links = http(getUrl()).split('\n');
+         // 任务 8a1xdz：tab 列表改异步拉取（启动时的一次性同步 XHR 同样冻结主线程）
+         httpAsync(getUrl(), '', function (text) { buildApp(text.split('\n')); });
+      }
+      function buildApp(links){
          var body = $("iframe-list");
          var checklist = $("check-list");
          var tabbar = $("tab-bar");
@@ -210,6 +252,7 @@
          return item.active.src && item.active.src.indexOf(item.link) >= 0;
       }
       function selectTab(idx) {
+         var t0 = performance.now();  // 埋点（任务 8a1xdz）：切换耗时，真机 DevTools Console 可观测
          currentTab = idx;
          for (var j = 0; j < items.length; j++) {
              var it = items[j];
@@ -217,15 +260,25 @@
                  it.tab.className = 'tab selected';
                  if (!iframeLoaded(it)) {
                      setIframeSrc(it.active, it.link);  // lazy load; onload sets height
+                 } else if (layoutMode == 'tab') {
+                     stackFrame(it.active, true);   // 布局常驻，只切 visibility，无全量 reflow
+                     applyHeight(it.active);
                  } else {
                      it.active.style.display = 'block';
                      applyHeight(it.active);
                  }
              } else {
                  it.tab.className = 'tab';
-                 it.active.style.display = 'none';
+                 // tab 模式：已加载行只降 visibility（保持预布局）；未加载/
+                 // 复选框 off（display:none）行不动，保持 lazy load 语义
+                 if (layoutMode == 'tab') {
+                     if (it.active.style.display != 'none') stackFrame(it.active, false);
+                 } else {
+                     it.active.style.display = 'none';
+                 }
              }
          }
+         console.debug('selectTab(' + idx + ') took ' + (performance.now() - t0).toFixed(2) + 'ms');
       }
       // flow-mode auto-fit (replaces the manual resize button): re-measure
       // visible iframes, writing height only when it actually changed
@@ -277,7 +330,7 @@
          for (var j = 0; j < items.length; j++) {
              var it = items[j];
              if (it.refreshSec <= 0 || !iframeLoaded(it)) continue;
-             if (it.active.style.display == 'none') {
+             if (rowHidden(it)) {
                 it.nextRefresh = now + it.refreshSec * 1000; // hidden: reschedule, no fetch
                 continue;
              }
