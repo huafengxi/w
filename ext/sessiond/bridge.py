@@ -31,6 +31,12 @@ RING_MAX = int(os.environ.get("SESSIOND_BRIDGE_RING", "2000"))
 MAX_STREAMS_PER_BRIDGE = int(os.environ.get("SESSIOND_BRIDGE_MAXSTREAMS", "5"))
 ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
 COMMANDS_TIMEOUT = 10.0     # get_commands 往返超时（秒，任务 a16jpj）
+INSPECT_TIMEOUT = 15.0      # 探针转储往返超时（秒，任务 s0f1la）
+
+# 探针侧车目录（任务 s0f1la）：与 probe.ts 同口径 = ~/m/run/sessiond-inspect
+# （宿主本地运行时区，不入 git；文件即用即删）。
+INSPECT_DIR = os.path.join(os.path.expanduser("~/m"), "run",
+                           "sessiond-inspect")
 
 # 会话面命令拦截（评审 0829-1327-7ca3 S3）：这些命令会改绑 session_file/会话名，
 # 使监督登记失准（会话名是 agentd 通知门控依据，铁律 0828-1618-zru9）。
@@ -117,6 +123,13 @@ class Bridge:
                     slim["data"] = {"commands": "<%d commands omitted>"
                                     % len(data.get("commands") or [])}
                     self._append(slim)
+                    waiter["resp"] = obj
+                    waiter["event"].set()
+                    return
+                if waiter is not None:
+                    # 任务 s0f1la：配对等待泛化——其它命令（本场景 = 探针命令的
+                    # prompt 回执）也回填等待者。回执是小对象，照常入环不瘦身。
+                    self._append(obj)
                     waiter["resp"] = obj
                     waiter["event"].set()
                     return
@@ -301,6 +314,74 @@ class Bridge:
                              % (resp.get("error") or "?")}
         data = resp.get("data") or {}
         return {"ok": True, "commands": data.get("commands") or []}
+
+    # ---- 探针：系统提示词+工具清单转储（任务 s0f1la） ----
+
+    def inspect(self, timeout=INSPECT_TIMEOUT):
+        """探针转储编排：经会话内探针扩展（同目录 probe.ts，proc.py:_spawn
+        以 -e 注入）取当前系统提示词全文 + 工具清单。
+
+        握手：生成随机 nonce → 下发 prompt `/sessiond-inspect <nonce>`（pi 对
+        extension 命令即时执行、即使流式中，命令完成后才发回执）→ 按既有配对等待
+        机制等该回执 → 读侧车文件 INSPECT_DIR/<nonce>.json（短轮询兜底）→ 读后删。
+        侧车文件不进事件环、不进 jsonl、不进 LLM 上下文，零会话污染；几十 KB 的
+        转储走 HTTP 响应（rpc/api.py op=inspect）。
+
+        成功 {"ok": True, "doc": <转储文档>}；失败 {"ok": False, "error": ...}。
+        转储文档内 ok:False = 探针 handler 内部异常（带 error 字段）。
+        """
+        self.sup.ensure_started()
+        if not self.sup.wait_ready():
+            return {"ok": False,
+                    "error": "session process not ready in time (state=%s)"
+                             % self.sup.state}
+        nonce = uuid.uuid4().hex
+        with self.lock:
+            self._req_seq += 1
+            rid = "wbin-%d-%d" % (os.getpid(), self._req_seq)
+            waiter = {"event": threading.Event(), "resp": None}
+            self.pending[rid] = waiter
+        cmd = {"type": "prompt", "id": rid,
+               "message": "/sessiond-inspect %s" % nonce}
+        if not self.sup.send(cmd):
+            with self.lock:
+                self.pending.pop(rid, None)
+            return {"ok": False,
+                    "error": "session process unavailable (state=%s)"
+                             % self.sup.state}
+        if not waiter["event"].wait(timeout):
+            with self.lock:
+                self.pending.pop(rid, None)
+            return {"ok": False,
+                    "error": "inspect timed out after %.0fs "
+                             "(probe command not acked)" % timeout}
+        resp = waiter["resp"]
+        if resp is None:
+            return {"ok": False, "error": "no response received"}
+        if not resp.get("success"):
+            return {"ok": False,
+                    "error": "probe command rejected: %s"
+                             % (resp.get("error") or "?")}
+        # 读侧车文件：回执在探针 handler 完成后才发，文件通常已就位；
+        # 短轮询兜底跨文件系统可见性毛刺。读后即删。
+        path = os.path.join(INSPECT_DIR, nonce + ".json")
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                with open(path) as f:
+                    doc = json.load(f)
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+                return {"ok": True, "doc": doc}
+            except (OSError, ValueError):
+                if time.monotonic() >= deadline:
+                    return {"ok": False,
+                            "error": "probe dump file missing: %s "
+                                     "(extension not loaded or handler failed)"
+                                     % path}
+                time.sleep(0.1)
 
     # ---- 游标解析与流订阅 ----
 

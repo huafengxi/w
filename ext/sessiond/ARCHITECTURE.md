@@ -79,7 +79,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 熔断 | `FAIL_WINDOW=300s` 窗口内连续崩溃超 `FAIL_LIMIT=6` → `disabled`，停监督，广播 `sessiond.session_disabled`；仅 `reload/clear` 可解除 |
 | 稳定期重置 | 上轮存活超 `STABLE_RESET=120s` → 崩溃计数与 `restarts` 清零 |
 | 单行上限 | `LINE_LIMIT=16MiB`，超限丢弃该行 |
-| 进程参数 | `pi --mode rpc --session <jsonl 绝对路径> --name <basename 去 .jsonl>`，`start_new_session=True`（web 被整组杀时不连带杀会话），stderr 继承 web（并入 `run/logs/web.log`） |
+| 进程参数 | `pi --mode rpc --session <jsonl 绝对路径> --name <basename 去 .jsonl> -e <探针扩展>`（探针见下小节；文件不存在则跳过 `-e` 不拖垮会话），`start_new_session=True`（web 被整组杀时不连带杀会话），stderr 继承 web（并入 `run/logs/web.log`） |
 | 环境清洗 | `proc.py:clean_env` 剥除调度/任务身份变量（`AGENTD_TASK`/`DISPATCH_TASK_*`/`PI_SESSION*` 等），防会话归属投毒 |
 | 旧宿主识别 | 零文件：spawn 注入 environ 标记 `SESSIOND_SESSION_FILE=<jsonl>`（`proc.py:HOST_MARKER`）；`proc.py:find_hosts` 扫 `/proc/*/environ` 精确匹配（pi 会 setproctitle 重写 argv，cmdline 匹配不可行） |
 | 双宿主清场 | `proc.py:_clear_stale_proc`（首次拉起时，主要面向 web 重启/跨进程场景）：等旧宿主自然退出（stdin EOF，宽限 `ORPHAN_GRACE=15s`）→ SIGTERM → 3s → SIGKILL |
@@ -87,6 +87,18 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 **生命周期帧**（监督员经 `on_event` 广播，入事件环下发）：
 `sessiond.session_restarting{session, delay[, reload]}`、`sessiond.session_restarted{session, gen, pid}`、`sessiond.session_disabled{session}`。
+
+### 探针扩展（任务 s0f1la）
+
+`probe.ts`（随仓，同目录）经 `_spawn` 对所有会话子进程以 `-e <绝对路径>` 注入（路径运行期解析 = `proc.py:PROBE_EXT`，勿硬编码），提供查看系统提示词与工具清单的探针能力：
+
+| 项 | 语义 |
+|---|---|
+| 命令 | 仅注册一个内部斜杠命令 `sessiond-inspect`（命名经冲突排查：不与 pi 内置命令、已装 npm 包命令、用户/项目扩展命令、skill `skill:` 命名空间冲突；不注册任何工具，工具名冲突面为零）。前端不直接敲它，由后端 `op=inspect` 编排 |
+| 行为 | `/sessiond-inspect <nonce>` 把当前系统提示词全文（`ctx.getSystemPrompt()`）+ 工具清单（`pi.getAllTools()`）写侧车文件 `~/m/run/sessiond-inspect/<nonce>.json`（临时文件+rename 原子） |
+| 零污染 | 侧车文件不进事件环、不进 jsonl、不进 LLM 上下文；转储经 `bridge.py:inspect` → HTTP 响应（`op=inspect`）下发 |
+| 容错 | 运行期异常（命令/钩子）→ pi 发 `extension_error` 不崩进程，且探针 handler 内部自包 try/catch（异常也写 error payload 进侧车文件）；**但 pi 对 `-e` 扩展的加载（语法）错误是致命的**（启动直接退出，与自动发现扩展的 errors 收集不同）——探针保持极小面（只一个命令、无钩子），`_spawn` 仅在文件存在时注入，语法回归由发版前的会话实测闸门拦截 |
+| 命名排查记录 | 内置命令（dist 全量枚举：/changelog /clone /compact /debug /export /fork /model /reload /resume 等）、已装包命令（curator/goal/google-account/plan/search/websearch）、用户扩展（无命令）、agentd 项目扩展（无命令）、pi 自带 llama——均无冲突 |
 
 **reload / clear**（`proc.py:reload` / `proc.py:clear`，共用 `_kill_and_restart`）：
 
@@ -141,6 +153,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 - `bridge.py:send(cmd_obj)`：命令拦截面 `BLOCKED_COMMANDS = {switch_session, set_session_name}`（会改绑 session_file/会话名，使监督登记失准）→ 返回错误串；`extension_ui_response` 校验必须有对应悬空 `pending_dialogs` id，否则拒绝并返回错误串，放行且转发成功后广播 `sessiond.dialog_resolved` 结算帧（§11.4 发射时机表）；`abort` 特殊处理：把所有悬空 dialog 以 `cancelled` 代答（pi rpc dialog 是裸 Promise，`session.abort()` 触不到，不代答则回合永久阻塞），先发 abort 再串行发代答，并广播 `cancelled:true` 结算帧。应答/代答/`abort` 前均顺带清扫超时 dialog。
 - `bridge.py:get_entries(timeout=ENTRIES_TIMEOUT=20s)`：`ensure_started` + `wait_ready` → 发 `{type:"get_entries", id:"wbge-…"}` → 等配对响应行（响应行的事件 ID = `watermark` 水位）。超时/不就位/不可写均返回 `{ok: False, error}`。
 - `bridge.py:get_commands(timeout=COMMANDS_TIMEOUT=10s)`（任务 a16jpj）：只读查询当前会话实际加载的可发现命令（pi rpc `get_commands` 转发）。配对等待结构同 `get_entries`（`id:"wbgc-…"`），响应行入环但瘦身（commands 列表替换为条数计数，防长清单进 SSE 环）；无水位语义。返回 `{ok, commands:[{name,description,source,location,path}]}`，`source` ∈ `extension`（pi.registerCommand 注册的斜杠命令）/ `prompt`（提示模板，带 `location`）/ `skill`（名字带 `skill:` 前缀，带 `location`）；不含 TUI 内置命令。**局限：只注册工具或只挂事件钩子、未注册斜杠命令的 extension 不出现**（预期）。超时/不就位/不可写/被拒均返回 `{ok: False, error}`。
+- `bridge.py:inspect(timeout=INSPECT_TIMEOUT=15s)`（任务 s0f1la）：探针转储编排（见 §2 探针扩展小节）。生成随机 nonce → 下发 `prompt` `/sessiond-inspect <nonce>`（pi 对 extension 命令即时执行、即使流式中，完成后才发回执）→ 配对等待该回执（`id:"wbin-…"`；`_ingest` 配对等待已泛化：命中等待者的非 get_entries/get_commands 回执也回填，回执是小对象照常入环不瘦身）→ 读侧车文件（短轮询 ≤2s 兜底）→ 读后删。返回 `{ok, doc}`，doc 内 `ok:False` = 探针 handler 内部异常（带 `error` 字段）；超时/不就位/不可写/被拒/文件缺失均返回 `{ok: False, error}`。
 
 ---
 
@@ -154,6 +167,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | `attach` | — | `{ok, session, gen, entries, pendingDialogs, leafId, watermark}` | **全量基线**：`get_entries()`；顺带下发悬空 dialog 快照（`pendingDialogs`） | 504 `get_entries` 超时/不就位；502 pi 拒绝（`success:false`） |
 | `cmd` | `cmd`（JSON 字符串，须为含 `type` 的对象） | `{ok: true}` | 上行单条 pi 命令，经 `bridge.py:send`；被拦截/无悬空 dialog/stdin 不可写 → 403 | 400 JSON 解析失败或非对象/无 type；403 `send` 返回错误 |
 | `commands` | — | `{ok, session, commands}` | 只读查询会话已加载命令清单（`bridge.py:get_commands` → pi rpc `get_commands` 转发，任务 a16jpj）；仅注册了斜杠命令的 extension 出现，见 §3 | 502 超时/不就位/被拒 |
+| `inspect` | — | `{ok, session, inspect:{ok, generatedAt, sessionFile, cwd, toolCount, tools[], systemPrompt}}` | 探针转储（任务 s0f1la）：经 `-e` 注入的探针扩展命令取当前系统提示词全文 + 工具清单（侧车文件握手，见 §3/§2 探针小节）；payload 几十 KB 走本 HTTP 响应，不进事件环/jsonl | 502 超时/不就位/被拒/侧车文件缺失 |
 | `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时） | 502 重拉超时等失败 |
 | `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因） | 502 失败（含删文件失败） |
 | 未知 | — | — | — | 400 `unknown op` |
@@ -229,6 +243,7 @@ attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries
 |---|---|---|
 | `#flashNotice` flash 轻提示 | 顶部居中浮层，承载所有系统提示（挂接/自愈/reload/熔断/发送被拒等），**错误不静默吞掉** | `flash()` 触发；普通 4s、`err` 8s 自动隐藏 |
 | `#slashNotice` 斜杠提示条 | 输入框上方内联提示（`/` 支持表粘性展示、命令结果/用法错误）；粘性展示时顶部为 `slashStatusLine()` 状态行：model/thinking、msgs/gen/restarts、ctx 占用、host/workDir/sessionDir（末行仅 .agent 会话有值，数据源 = op=agent 回执，缺失显 `?`）；状态行与 `SLASH_HELP` 之间为**已加载命令清单段**（任务 a16jpj）：数据源 = `op=commands`（首次 `/` 输入拉取并缓存，每次 get_state 回执且可见时后台刷新）；按 source 分组（extension/prompt/skill）：extension/prompt 组逐条 `name — description`（description 截断 80 字符），单组超 8 条（`CMD_GROUP_LIMIT`）整组折叠为计数摘要；**skill 组例外（x6wp1z）**——全部名字（去 `skill:` 前缀）逗号+空格拼成一行可换行段落（靠 .notice pre-wrap 自然换行），不折叠、不带描述；请求失败/空清单/子进程未起 → 不显示该段（优雅降级）；会话重启（`session_restarted`）清缓存待重拉 | 输入以 `/` 开头 → 粘性显示 `SLASH_HELP`；执行命令后非粘性 6s 自动隐藏；非 `/` 输入清除 |
+| `.inspectbox` 探针面板（任务 s0f1la） | `/inspect` 的输出：可折叠 `<details>`（默认展开）追加进 `#stream`：summary = 工具数/提示词字数/生成时间；内部工具清单逐条（名 + description 首行）+ 系统提示词全文（限高滚动 `<pre>`）。数据源 = `op=inspect`（后端编排探针扩展，见 §4）。**瞬态**：不进 jsonl，heal/刷新后消失（与 sysLine/flash 同类，探针输出非会话内容）；失败 → flash err | `/inspect` 命令成功返回时 |
 | `#queuedPanel` QUEUED 面板 | 「QUEUED · N」：后端权威队列（`queue_update`）+ 本地乐观补位（`pendingSends`，同文本不重复）；条目 = 徽标（`steer` 蓝色描边 / `follow-up` 灰色）+ 单行截断文本；被拒条目红色；**无 Recall 按钮**（pi rpc 协议无召回能力） | 有任一条目时显示，空则隐藏；`queue_update`/发送/送达/清屏时重渲染 |
 | `#attachBar` 附件条 | 输入栏上方待发送图片缩略图（粘贴取图，仅拦 `image/*`），单个移除 + Clear (N) | `pendingImages` 非空时显示；发送后清空隐藏 |
 | `#dialogBox` dialog 模态盒 | 右下固定浮层：标题（`dialog [method] id=…`）+ 正文 + 按 method 生成控件 + Cancel + 倒计时「Auto-settle in Ns」（250ms tick，到期由 pi 端超时结算） | 默认 `display:none`；`extension_ui_request` 到达且当前无其它框时显示；同框异 id 时仅登记排队（`showDialog` 同 id 幂等）；应答/`cancelled`/`sessiond.dialog_resolved`/`/abort` 时关闭并自动弹下一个排队框；应答被服务端拒绝（如对端已结算的 `no pending dialog`）时 `replyDialog` catch 分支也本地关框（双保险，§11.4） |

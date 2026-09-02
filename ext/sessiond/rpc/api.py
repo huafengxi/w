@@ -8,6 +8,9 @@
 #   op=cmd     上行单条 pi 命令
 #   op=commands 该会话实际加载的可发现命令清单（任务 a16jpj：pi rpc get_commands 转发；
 #              extension 斜杠命令 / prompt 模板 / skill；仅注册了斜杠命令的 extension 出现）
+#   op=inspect  探针转储（任务 s0f1la）：经 -e 注入的探针扩展命令 sessiond-inspect
+#              取当前系统提示词全文 + 工具清单（侧车文件握手，见 bridge.py:inspect）；
+#              不进事件环、不进 jsonl，payload 走本 HTTP 响应
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
@@ -267,6 +270,16 @@ def interp(store, op='', session='', cmd='', **kw):
                       '502 Bad Gateway')
         return _j({"ok": True, "session": b.session,
                    "commands": r["commands"]})
+    if op == 'inspect':
+        # 任务 s0f1la：探针转储（系统提示词 + 工具清单），编排在 bridge.inspect；
+        # 失败口径对齐 attach/commands（502）。
+        r = b.inspect()
+        if not r["ok"]:
+            return _j({"ok": False, "session": b.session,
+                       "error": "inspect failed: %s" % r["error"]},
+                      '502 Bad Gateway')
+        return _j({"ok": True, "session": b.session,
+                   "inspect": r["doc"]})
     if op == 'reload':
         r = b.sup.reload()
         if not r.get("ok"):

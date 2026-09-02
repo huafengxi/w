@@ -149,6 +149,17 @@ details summary::-webkit-details-marker { display: none; }
 .retrybox { margin: 4px 0; border: 1px solid #eed888;
   background: #fff8c5; border-radius: 8px; padding: 8px 10px; color: var(--warn);
   font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+/* 探针面板（任务 s0f1la /inspect）：瞬态渲染进 #stream（不进 jsonl，heal/刷新
+   后消失，与 sysLine/flash 同类）；工具清单逐条 + 系统提示词全文限高滚动 */
+.inspectbox { margin: 4px 0; border: 1px solid #c9d4e3; background: #f6f9fc;
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.inspectbox > summary { cursor: pointer; color: #46607e; }
+.inspectbox .tools { margin: 6px 0; font-size: 12px; }
+.inspectbox .tools div { margin: 1px 0; word-break: break-word; }
+.inspectbox .tools b { color: #25435f; }
+.inspectbox pre { font-size: 11px; margin: 4px 0; padding: 6px; background: #eef2f7;
+  border-radius: 6px; max-height: 320px; overflow: auto; white-space: pre-wrap;
+  word-break: break-word; }
 .tool-block .tbody { padding: 0; }
 .tool-block pre { font-size: 11px; margin: 4px 0; white-space: pre-wrap;
   word-break: break-all; }
@@ -1607,7 +1618,7 @@ async function doClear() {
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const SLASH_HELP = "Session commands: /abort · /clear · /compact · /model <provider>/<modelId> · "
   + "/thinking <" + THINKING_LEVELS.join("|") + "> · /export · /fork [<entryId>]"
-  + " · /image · /reload · /sound [on|off]";
+  + " · /image · /inspect · /reload · /sound [on|off]";
 let noticeTimer = null;
 let slashNoticeOn = false;    // 当前粘性展示的是斜杠命令提示（0830-1257-vwzb，供 get_state 回执定点刷新）
 function showNotice(text, cls, sticky) {
@@ -1766,6 +1777,13 @@ function handleSlash(msg) {
       // 任务 0830-1139-yao1：手机上粘贴取图别扭，低频场景用命令唤起系统文件选择器。
       // 必须在本同步调用链内触发 input.click()（见 pickImages 注释）。
       pickImages(); return;
+    case "/inspect":
+      // 任务 s0f1la：探针 = 后端 op=inspect（编排 -e 注入的探针扩展命令）；前端只拉取并渲染。
+      flash("Inspecting session (system prompt + tools)…");
+      api("inspect", {session: attached}).then(d => {
+        renderInspectPanel(d && d.inspect);
+      }).catch(e => { flash("Inspect failed: " + e.message, "err"); });
+      return;
     case "/reload":
       doReload(); return;
     case "/sound": {
@@ -1781,6 +1799,47 @@ function handleSlash(msg) {
     default:
       showNotice("Unknown command " + cmd + " — " + SLASH_HELP, "err"); return;
   }
+}
+
+// ---------------- 探针面板渲染（任务 s0f1la：op=inspect 转储） ----------------
+// 瞬态面板：追加进 #stream，不进 jsonl；heal/刷新后消失（与 sysLine/flash 同类，预期）。
+// 展示：工具清单逐条（名 + description 首行）+ 系统提示词全文（限高滚动 <pre>）。
+function renderInspectPanel(doc) {
+  if (!doc || typeof doc !== "object") {
+    flash("Inspect returned no data", "err"); return;
+  }
+  if (doc.ok === false) {
+    flash("Inspect probe error: " + (doc.error || "?"), "err"); return;
+  }
+  const tools = Array.isArray(doc.tools) ? doc.tools : [];
+  const prompt = typeof doc.systemPrompt === "string" ? doc.systemPrompt : "";
+  const box = document.createElement("details");
+  box.className = "ev inspectbox";
+  box.open = true;
+  const sum = document.createElement("summary");
+  sum.textContent = "Session inspect · " + tools.length + " tools · system prompt "
+    + prompt.length + " chars · " + (doc.generatedAt || "?");
+  box.appendChild(sum);
+  const tl = document.createElement("div");
+  tl.className = "tools";
+  for (const t of tools) {
+    const line = document.createElement("div");
+    const b = document.createElement("b");
+    b.textContent = (t && t.name) ? t.name : "?";
+    line.appendChild(b);
+    const desc = ((t && t.description) || "").split("\n")[0].trim();
+    if (desc) line.appendChild(document.createTextNode(" — " + trunc(desc, 160)));
+    tl.appendChild(line);
+  }
+  box.appendChild(tl);
+  const hd = document.createElement("div");
+  hd.textContent = "System prompt (" + prompt.length + " chars):";
+  box.appendChild(hd);
+  const pre = document.createElement("pre");
+  pre.textContent = prompt;
+  box.appendChild(pre);
+  $("stream").appendChild(box);
+  scrollStream();
 }
 
 // ---------------- 粘贴取图 + 待发送附件条（任务 0829-2103-8etk） ----------------

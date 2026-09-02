@@ -51,6 +51,15 @@ WS_REAL = os.path.realpath(WS)
 # 子进程 environ 标记（零文件旧宿主识别，R2）
 HOST_MARKER = "SESSIOND_SESSION_FILE"
 
+# 探针扩展（任务 s0f1la）：对所有会话子进程注入 `-e`，提供内部命令
+# `sessiond-inspect`（系统提示词+工具清单转储，供 op=inspect 编排；见同目录
+# probe.ts 与 bridge.py:inspect）。路径运行期解析（= 本文件所在目录），勿硬编码。
+# 容错口径（实测）：pi 对 -e 扩展的**加载（语法）错误是致命的**（启动直接退出，
+# 与自动发现扩展的 errors 收集不同）；运行期异常（命令/钩子）只发 extension_error
+# 不崩进程。故探针保持极小面（只注册一个命令、无钩子），_spawn 只在文件存在时
+# 注入（文件丢失不拖垮会话）。语法回归由发版前的会话实测闸门拦截。
+PROBE_EXT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "probe.ts")
+
 
 def resolve_session_path(path):
     """会话路径校验与解析（路径安全红线）：
@@ -607,9 +616,12 @@ class Supervisor:
             self.state = "starting"
         env = clean_env()
         env[HOST_MARKER] = self.session_file        # 零文件旧宿主识别标记
+        cmd = [pi_binary(), "--mode", "rpc", "--session", self.session_file,
+               "--name", self.name]
+        if os.path.exists(PROBE_EXT):               # 探针扩展（任务 s0f1la）
+            cmd += ["-e", PROBE_EXT]
         self.proc = subprocess.Popen(
-            [pi_binary(), "--mode", "rpc", "--session", self.session_file,
-             "--name", self.name],
+            cmd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=None,                            # 继承 web stderr → web.log
             cwd=self.cwd, start_new_session=True, env=env)
