@@ -47,7 +47,7 @@ DIALOG_METHODS = {"select", "confirm", "input", "editor"}
 class Bridge:
     """单个会话路径的进程内事件环 + 命令通道（按路径注册，见 get_bridge）。"""
 
-    def __init__(self, session_path, cwd=None):
+    def __init__(self, session_path, cwd=None, sock_path=None):
         # 站内路径（如 /assistant/foo.jsonl）；解析/校验在 Supervisor 内。
         self._site_path = session_path
         self.session = None      # 展示名，待监督员解析后回填
@@ -66,9 +66,33 @@ class Bridge:
         # 桥接不清理会让 attach 基线向新 tab 重建已死 dialog → 按 deadline 清理）
         self._dialog_deadline = {}
         self.subscribers = 0                 # 当前 SSE 流订阅数
-        self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest,
-                                    cwd=cwd)
+        # 监督员选择（任务 ybzvbn，票 hegipc）：sock_path 在场 = rpc 封装形态任务，
+        # SocketSupervisor 连接透传 socket（无杀权、不重拉）；否则普通 Supervisor spawn。
+        if sock_path:
+            self.sup = _proc.SocketSupervisor(self._site_path,
+                                              on_event=self._ingest,
+                                              sock_path=sock_path)
+            self.terminated = False          # 断连终结标记（iter_events 停流依据）
+            self.sup.on_lost = self._socket_lost
+        else:
+            self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest,
+                                        cwd=cwd)
         self.session = self.sup.name         # 展示名以监督员解析为准
+
+    def _socket_lost(self):
+        """透传连接断（任务收敛/被杀，任务 ybzvbn）：标记终结（iter_events 停流 →
+        前端重连）+ 摘除注册表（后续访问重新路由：终态任务落入普通复活路径，
+        任务会话结束无缝转普通会话）。由 SocketSupervisor.on_lost 回调。"""
+        self.terminated = True
+        key = None
+        try:
+            key = _proc.resolve_session_path(self._site_path)
+        except ValueError:
+            pass
+        if key is not None:
+            with _BRIDGES_LOCK:
+                if _BRIDGES.get(key) is self:
+                    del _BRIDGES[key]
 
     # ---- 监督侧事件入口 ----
 
@@ -397,7 +421,9 @@ class Bridge:
             return oldest, True
 
     def iter_events(self, start_seq):
-        """流订阅生成器：先补发 start_seq 之后的缓冲，再实时跟随。锁外 yield。"""
+        """流订阅生成器：先补发 start_seq 之后的缓冲，再实时跟随。锁外 yield。
+        桥接终结（任务透传断连，任务 ybzvbn）：发完环内余帧即停流，前端自动重连后
+        重新路由（终态任务转复活）。"""
         sent = start_seq
         while True:
             batch = []
@@ -406,14 +432,20 @@ class Bridge:
                     batch = [e for e in self.ring if e[0] > sent]
                     if batch:
                         break
+                    if getattr(self, "terminated", False):
+                        return
                     if not self.cond.wait(timeout=15):
                         break           # 超时 → keep-alive
             if not batch:
+                if getattr(self, "terminated", False):
+                    return
                 yield None              # keep-alive
                 continue
             for seq, eid, obj in batch:
                 sent = seq
                 yield (eid, obj)
+            if getattr(self, "terminated", False):
+                return
 
 
 _BRIDGES = {}                     # resolved path -> Bridge（按需多会话）
@@ -446,14 +478,30 @@ def get_bridge(session_path):
     注册表键 = 解析后的绝对路径（`/./x` 等变体归一）。
     建桥时查 _CWD_OVERRIDES：命中则把显式 cwd 传给 Supervisor（.agent 会话），
     未命中缺省 = jsonl 所在目录（.jsonl 直开，行为不变）。
+
+    任务会话路由（任务 ybzvbn，票 hegipc）：站内 /agents/task/<id>/session/
+    session.jsonl 按 pid.json 判定（_proc.task_route）：活 socket → SocketSupervisor
+    透传直播；终态 → 登记显式 cwd（spec.workdir，53yjuc 口径）后普通复活；
+    旧形态运行中/跨机 → ValueError 拒绝 + 指引。其余路径零影响。
     非法路径抛 ValueError（调用方回 400）。"""
     key = _proc.resolve_session_path(session_path)
     with _BRIDGES_LOCK:
         b = _BRIDGES.get(key)
         if b is None:
+            sock_path = None
+            route = _proc.task_route(session_path)
+            if route is not None:
+                mode, payload = route
+                if mode == "reject":
+                    raise ValueError(payload)
+                if mode == "revive":
+                    with _CWD_OVERRIDES_LOCK:
+                        _CWD_OVERRIDES[key] = payload["cwd"]
+                elif mode == "live":
+                    sock_path = payload["sock"]
             with _CWD_OVERRIDES_LOCK:
                 cwd = _CWD_OVERRIDES.get(key)
-            b = Bridge(session_path, cwd=cwd)
+            b = Bridge(session_path, cwd=cwd, sock_path=sock_path)
             _BRIDGES[key] = b
             b.sup.ensure_started()
         return b

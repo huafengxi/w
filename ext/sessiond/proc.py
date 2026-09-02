@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import posixpath
+import re
 import shutil
 import signal
 import socket
@@ -663,3 +664,278 @@ class Supervisor:
             self.on_event(obj)
         except Exception:
             log.exception("on_event failed")
+
+
+# ----------------------------------------------------------------
+# 任务会话 socket 监督（任务 ybzvbn，票 hegipc，plan v3 B 路线）
+#
+# rpc 封装形态的任务（命令含 agentd/pi-rpc-wrap.py）由封装脚本拉起并持有，
+# 经 ~/m/run/agentd/<taskId>.sock 透传 pi rpc 原生字节流。SocketSupervisor =
+# 「连接而非 spawn」的监督者：生命周期所有权在 agentd runner，本类**无杀权**
+# （kill/reload/clear 一律拒绝），不与 Supervisor 共享生命周期机制（崩溃重拉/
+# 旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge 的 ingest/事件环。
+# 断连（任务收敛/被杀）= 监督终结：广播 agentd.task_ended 后由桥接摘除自身，
+# 后续访问重新路由（终态任务转入普通复活路径）。
+
+class SocketSupervisor:
+    """连接透传 socket 的任务会话监督者（接口面对齐 Supervisor 的桥接消费面）。"""
+
+    CONNECT_WINDOW = 25.0    # 首次连接等待窗（对齐 wait_ready 缺省口径）
+    CONNECT_RETRY = 0.3
+
+    def __init__(self, session_path, on_event, sock_path):
+        # 路径处理与 Supervisor 同口径（兼容站内路径与已解析绝对路径）。
+        if os.path.isabs(session_path) and session_path.endswith(".jsonl"):
+            rp = os.path.realpath(session_path)
+            roots = [WS_REAL, os.path.realpath(os.path.join(WS, "run"))]
+            if any(rp == r or rp.startswith(r + os.sep) for r in roots):
+                self.session_file = rp
+            else:
+                self.session_file = resolve_session_path(session_path)
+        else:
+            self.session_file = resolve_session_path(session_path)
+        self.name = display_name(self.session_file)
+        self.cwd = os.path.dirname(self.session_file)
+        self.sock_path = sock_path
+        self.on_event = on_event
+        self.on_lost = None          # 断连回调（桥接注入：摘注册表 + 终结标记）
+        self.gen = 1                 # 单世代（无重拉概念）
+        self.restarts = 0
+        self.disabled = False
+        self.state = "idle"          # idle/starting/running/ended
+        self._cond = threading.Condition()
+        self._started = False
+        self._thread = None
+        self._sock = None
+        self._write_lock = threading.Lock()
+
+    # ---- 启动（幂等） ----
+
+    def ensure_started(self):
+        with self._cond:
+            if self._started:
+                return
+            self._started = True
+            self._thread = threading.Thread(
+                target=self._run, name="socksup-" + self.name, daemon=True)
+            self._thread.start()
+
+    def wait_ready(self, timeout=25.0):
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            while self.state not in ("running",):
+                if self.state in ("ended", "disabled"):
+                    return False
+                remain = deadline - time.monotonic()
+                if remain <= 0:
+                    return False
+                self._cond.wait(min(remain, 0.5))
+            return True
+
+    def send(self, obj):
+        """向会话写一条命令（单写者串行；透传给封装脚本 → pi stdin）。"""
+        with self._cond:
+            s = self._sock
+        if s is None:
+            return False
+        try:
+            with self._write_lock:
+                s.sendall(json.dumps(obj, ensure_ascii=False).encode("utf-8")
+                          + b"\n")
+            return True
+        except OSError:
+            return False
+
+    def status_doc(self):
+        with self._cond:
+            return {"session": self.name, "state": self.state,
+                    "pid": None, "gen": self.gen, "restarts": self.restarts,
+                    "disabled": self.disabled, "session_file": self.session_file,
+                    "cwd": self.cwd, "mode": "socket", "sock": self.sock_path}
+
+    # ---- 无杀权：生命周期属 agentd runner ----
+
+    def reload(self, timeout=20.0):
+        return {"ok": False,
+                "error": "socket-mode (agentd task) session: lifecycle owned by "
+                         "agentd runner; reload not available"}
+
+    def clear(self, timeout=20.0):
+        return {"ok": False,
+                "error": "socket-mode (agentd task) session: lifecycle owned by "
+                         "agentd runner; clear not available"}
+
+    # ---- 连接主循环 ----
+
+    def _run(self):
+        with self._cond:
+            self.state = "starting"
+        sock = None
+        deadline = time.monotonic() + self.CONNECT_WINDOW
+        while time.monotonic() < deadline:
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(self.CONNECT_RETRY)
+                s.connect(self.sock_path)
+                s.settimeout(None)
+                sock = s
+                break
+            except OSError:
+                time.sleep(self.CONNECT_RETRY)
+        if sock is None:
+            log.error("socket supervisor: connect failed within %.0fs: %s",
+                      self.CONNECT_WINDOW, self.sock_path)
+            self._finish("connect_failed")
+            return
+        with self._cond:
+            self._sock = sock
+            self.state = "running"
+        log.info("socket supervisor connected: %s (session=%s)",
+                 self.sock_path, self.name)
+        buf = b""
+        while True:
+            try:
+                d = sock.recv(262144)
+            except OSError:
+                break
+            if not d:
+                break
+            buf += d
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if len(line) > LINE_LIMIT:
+                    log.warning("socket line exceeds %d bytes; dropping",
+                                LINE_LIMIT)
+                    continue
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                self._broadcast(obj)
+        try:
+            sock.close()
+        except OSError:
+            pass
+        self._finish("disconnected")
+
+    def _finish(self, reason):
+        with self._cond:
+            self.state = "ended"
+            self._sock = None
+        log.info("socket supervisor ended (%s): %s", reason, self.name)
+        # 先入环广播再摘桥：订阅者能看到终态帧，之后流自然终结（前端重连后
+        # 重新路由——终态任务落入普通复活路径）。
+        self._broadcast({"type": "agentd.task_ended", "session": self.name,
+                         "reason": reason})
+        if self.on_lost is not None:
+            try:
+                self.on_lost()
+            except Exception:
+                log.exception("on_lost failed")
+
+    def _broadcast(self, obj):
+        try:
+            self.on_event(obj)
+        except Exception:
+            log.exception("on_event failed")
+
+
+# ---- 任务会话路由判定（任务 ybzvbn） ----
+#
+# 打开 /agents/task/<id>/session/session.jsonl 时按 pid.json 判路由：
+#   活 socket 在场（sock 字段 ∧ pid 存活 ∧ 可连） → SocketSupervisor 直播
+#   已终态（final ∨ 无 pid.json）                → 普通 Supervisor 复活
+#                                                  （先登记显式 cwd = spec.workdir，
+#                                                   53yjuc 口径：首帧 cwd 决定扩展发现）
+#   旧形态运行中（无 sock）                      → 拒绝 + 指引（双宿主风险）
+# 跨机：spec.host ≠ 本机规范名 → 拒绝 + 指引（同 host_guard 口径）。
+
+_TASK_SESSION_RE = re.compile(
+    r"^/agents/task/([^/]+)/session/session\.jsonl$")
+
+
+def _site_path(session_path):
+    """站内路径归一：绝对路径还原为站内形式（/…），其余原样。"""
+    p = session_path
+    if isinstance(p, str) and os.path.isabs(p):
+        real = os.path.realpath(p)
+        if real == WS_REAL or real.startswith(WS_REAL + os.sep):
+            p = "/" + os.path.relpath(real, WS_REAL)
+    return posixpath.normpath(p) if isinstance(p, str) else ""
+
+
+def _sock_live(path, timeout=2.0):
+    """unix socket 可连探测（路由判定用）。"""
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect(path)
+            return True
+        finally:
+            s.close()
+    except OSError:
+        return False
+
+
+def task_route(session_path):
+    """任务会话路由判定。返回 None（非任务会话路径，零影响）或
+    (mode, payload)：
+      ("live",   {"sock": <透传端点>})          → SocketSupervisor 直播
+      ("revive", {"cwd": <复活显式 cwd>})        → 普通复活（调用方登记 _CWD_OVERRIDES）
+      ("reject", <错误消息>)                     → 拒绝（调用方抛 ValueError）
+    """
+    p = _site_path(session_path)
+    m = _TASK_SESSION_RE.match(p)
+    if not m:
+        return None
+    task_id = m.group(1)
+    adir = os.path.join(WS, "agents", "task", task_id)
+    try:
+        with open(os.path.join(adir, "spec.json")) as f:
+            spec = json.load(f)
+    except (OSError, ValueError):
+        spec = None
+    spec = spec if isinstance(spec, dict) else {}
+    # 跨机守卫（同 host_guard 口径：指引用户去宿主机的 8080）
+    host = spec.get("host")
+    if isinstance(host, str) and host.strip():
+        me = _self_host()
+        if me is None:
+            return ("reject",
+                    "host guard: env/host-id 缺失或无本机映射，无法判定任务会话宿主，"
+                    "拒绝打开（修复 env/host-id 后重试）")
+        if host.strip() != me:
+            return ("reject",
+                    "该任务宿主=%s，请通过 %s 的服务访问（本机=%s）"
+                    % (host.strip(), host.strip(), me))
+    try:
+        with open(os.path.join(adir, "pid.json")) as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        doc = None
+    if not isinstance(doc, dict):
+        doc = None
+    # 终态（或无档案）→ 复活：登记显式 cwd = spec.workdir（首帧 cwd 口径，53yjuc）
+    if doc is None or doc.get("final") is True:
+        wd = spec.get("workdir")
+        if isinstance(wd, str) and wd.strip():
+            try:
+                cwd = resolve_cwd(os.path.expanduser(wd.strip()))
+            except ValueError as e:
+                return ("reject", "任务 workdir 非法，无法复活：%s" % e)
+        else:
+            cwd = os.path.dirname(os.path.join(WS, p.lstrip("/")))
+        return ("revive", {"cwd": cwd, "task_id": task_id})
+    # 未终态：新形态（有 sock）= 直播；旧形态 = 拒绝（双宿主风险）
+    sock = doc.get("sock")
+    if isinstance(sock, str) and sock and pid_alive(doc.get("pid")):
+        if _sock_live(sock):
+            return ("live", {"sock": sock, "task_id": task_id})
+        return ("reject",
+                "任务观测通道未就绪（任务启动中或封装进程异常），请稍后重试：%s" % sock)
+    return ("reject",
+            "旧形态运行中任务不可打开会话（会与任务进程双宿主写同一 jsonl）；"
+            "终态后自动可复活续聊，实时观测需新形态任务（pi-rpc-wrap）")

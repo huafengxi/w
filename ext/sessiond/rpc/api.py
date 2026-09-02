@@ -271,8 +271,13 @@ def interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "commands": r["commands"]})
     if op == 'inspect':
-        # 任务 s0f1la：探针转储（系统提示词 + 工具清单），编排在 bridge.inspect；
-        # 失败口径对齐 attach/commands（502）。
+        # socket 模式（agentd 任务会话，任务 ybzvbn）：任务进程不注入探针扩展，
+        # 且生命周期属 runner——inspect/reload/clear 类会话级操作一律拒绝。
+        if isinstance(b.sup, _proc.SocketSupervisor):
+            return _j({"ok": False,
+                       "error": "socket-mode (agentd task) session: inspect "
+                                "not available (lifecycle owned by agentd "
+                                "runner)"}, '403 Forbidden')
         r = b.inspect()
         if not r["ok"]:
             return _j({"ok": False, "session": b.session,
@@ -281,6 +286,11 @@ def interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "inspect": r["doc"]})
     if op == 'reload':
+        if isinstance(b.sup, _proc.SocketSupervisor):
+            return _j({"ok": False,
+                       "error": "socket-mode (agentd task) session: reload "
+                                "not available (lifecycle owned by agentd "
+                                "runner)"}, '403 Forbidden')
         r = b.sup.reload()
         if not r.get("ok"):
             return _j({"ok": False,
@@ -289,6 +299,11 @@ def interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "gen": r.get("gen"), "pid": r.get("pid")})
     if op == 'clear':
+        if isinstance(b.sup, _proc.SocketSupervisor):
+            return _j({"ok": False,
+                       "error": "socket-mode (agentd task) session: clear "
+                                "not available (lifecycle owned by agentd "
+                                "runner)"}, '403 Forbidden')
         # 保留会话路径、清空全部内容：杀会话进程→截断 jsonl 到 0 + 去 replica 标记→立即重拉（顺序在
         # Supervisor.clear 内保证：先杀透再删，防旧进程把内存历史回写）。
         r = b.sup.clear()
