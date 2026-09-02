@@ -6,7 +6,7 @@
 
 ## 1. 总览
 
-sessiond 是 web 服务（8080，全局 Basic Auth，凭据 `~/.auth/passwd`）内嵌的**路径驱动聊天系统**：
+- **sessiond 是 web 服务（8080，全局 Basic Auth，凭据 `~/.auth/passwd`）内嵌的**路径驱动聊天系统**，任务会话与 bot 会话同构（任务 ybzvbn 起：任务会话 = 普通会话，见 §10）：
 
 - **会话 = 站内任意 `.jsonl` 路径**。`<path>/<name>.jsonl?v=chat` 打开聊天窗；路由键 = 完整路径（不同目录的同名文件 = 不同会话，可并存）。会话工作目录（cwd）= 该 jsonl 所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展，预期行为，不特判）。
 - **每会话 = 一个受监督的 `pi --mode rpc` 子进程**。由 `proc.py:Supervisor` 在 web 进程内直接监督（stdin/stdout 管道，进程内直连，无 unix socket），崩溃自动退避重启并从该 jsonl resume。
@@ -348,6 +348,32 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 | `response` | 上行命令回执 `{id, command, success, error?}` | `handleCmdResponse`："already processing" → 自动转 follow_up（见 §6）；其余拒绝 → flash + rejected |
 
 其余非主流类型（side 帧，由 `classifyEvent` 判定）不渲染；基线回放中 `model_change`/`thinking_level_change` 等 entry 仅更新本地状态（当前模型）或出一行 `◆ …` 提示（经 flash）。
+
+---
+
+## 10. 任务会话（agentd rpc 封装形态，任务 ybzvbn / 票 hegipc）
+
+任务会话与 bot 会话在本系统内同构：`/agents/task/<taskId>/session/session.jsonl?v=chat` 直开即聊天窗，前端零改动，契约全对齐 §3–§5。生命周期所有权在 agentd runner（web = 纯 attach 客户端，无杀权）。
+
+### 路由判定（`proc.py:task_route`，get_bridge 内单一决策点，仅匹配任务会话路径）
+
+| pid.json 状态 | 路由 | 行为 |
+|---|---|---|
+| `sock` 在场 ∧ pid 存活 ∧ 可连 | `SocketSupervisor` 直播 | 连接 `~/m/run/agentd/<taskId>.sock` 透传 pi rpc 字节流（封装脚本 `agentd/pi-rpc-wrap.py` 持有任务侧）；attach/cmd/events 全走透传，无自研语义 |
+| `final: true`（或无 pid.json） | 普通 Supervisor 复活 | 先 `set_session_cwd(spec.workdir)` 登记（53yjuc：首帧 cwd 决定扩展发现）再 spawn 重拉；终态任务复活续聊即此路径 |
+| 运行中且无 sock（旧形态） | 拒绝 400 | 双宿主风险指引（终态后自动可复活） |
+| spec.host ≠ 本机 | 拒绝 400 | 「请通过 <host> 的服务访问」（同 host_guard 口径） |
+| pid 活但 sock 不可连 | 拒绝 400 | 「观测通道未就绪，稍后重试」（启动窗口/封装异常降级提示） |
+
+### SocketSupervisor（`proc.py`，独立类，风险圈养）
+
+连接而非 spawn；**无杀权**（`reload/clear` 返回 `{ok:False}`，api 层 `inspect/reload/clear` 一律 403）；不与 Supervisor 共享生命周期机制（崩溃重拉/旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge ingest/事件环；`status_doc` 带 `mode:"socket"` + `sock` 路径。断连（任务收敛/被杀）= 监督终结：广播 `agentd.task_ended{session,reason}` 入环 → 标记桥接 `terminated`（`iter_events` 发完余帧停流）→ 摘除注册表 → 前端 1.5s 重连后重新路由（终态任务无缝转复活路径，任务结束自动变普通会话）。
+
+### 观测面边界（协议 §11.12）
+
+- socket 绝不落 `agents/` 同步树（实测 `rsync -a` 会复制死节点）；端点 = 宿主本地运行时区 `run/agentd/`（chmod 0600 + `.pid` 伴生档）；发现 = pid.json `sock` 字段（runner 写）。
+- 独立失败域：观测链路故障只降级观测（400 指引），不伤调度面；调度面不开任务启动接口。
+- 注入轮次 = 普通 `op=cmd`（prompt/follow_up 等，同 §6）；任务阻塞在 ask_dispatcher 时注入的轮次按 pi 队列语义排队至 ask 得答。接管态 = 观测/交互层信息性概念（无协议状态变更）。
 
 ---
 
