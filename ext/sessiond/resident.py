@@ -2,7 +2,7 @@
 # resident.py — resident 会话启动扫描（任务 02mi7r，票 su068s）。
 #
 # 背景：sessiond 会话原本只懒拉起（首次访问建桥接时 spawn），夜间无人开页则主调度员
-# 会话进程不存在 → 扩展 receiver 不运行 → participant/dispatcher/inbox 通知积压到用户
+# 会话进程不存在 → 扩展 receiver 不运行 → bot/dispatcher/inbox 通知积压到用户
 # 主动发消息才处理。resident 机制 = .agent 声明 "resident": true 且 host == 本机规范名
 # 时，web 启动完成（服务 ready 钩子，见 core/wsgi.py fork 之后）即无 attach 直接建桥拉起；
 # 进程退出后由监督员既有崩溃退避重拉机制自拉起（非用户操作语义不变：本无 stop 操作，
