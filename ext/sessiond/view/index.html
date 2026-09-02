@@ -760,7 +760,6 @@ function handleEvent(o) {
     return;
   }
   if (t === "sessiond.session_restarted") {
-    loadedCommands = null;                   // 会话重启后扩展可能变化，清缓存待下次 / 输入重拉（a16jpj）
     flash("Session restarted", "warn");
     if (lastGen !== null && o.gen !== undefined && o.gen !== lastGen) {
       lastGen = o.gen;
@@ -1492,7 +1491,6 @@ function handleCmdResponse(o) {
       if (typeof o.data.messageCount === "number") curMsgCount = o.data.messageCount;  // inbox 增项：零额外请求自带
       curCompacting = !!o.data.isCompacting;
       refreshSlashNoticeIfVisible();
-      if (slashNoticeOn) fetchCommands();   // 每次 get_state 回执且斜杠提示可见 → 一并刷新命令清单（a16jpj）
     }
     return;
   }
@@ -1662,40 +1660,28 @@ function slashStatusLine() {
     + " \u00b7 sessionDir: " + (agentSessionDir || "?");
   return l1 + "\n" + l2 + "\n" + ctxStatusText() + "\n" + l4;
 }
-// ---------------- 已加载命令清单（任务 a16jpj：op=commands ← pi rpc get_commands） ----------------
-// slashNotice 内展示当前会话实际加载的 extension 斜杠命令 / prompt 模板 / skill。
-// 首次 / 输入拉取并缓存；每次 get_state 回执且可见时后台刷新；失败/空清单 → 不显示该段（优雅降级）。
-// extension/prompt 组每 组展示上限 CMD_GROUP_LIMIT，超限整组折叠为计数摘要；
-// skill 组例外：全部名字（去 skill: 前缀）逗号拼成一个可换行段落，不折叠、不带描述（x6wp1z）。
+// ---------------- 已加载命令清单（任务 a16jpj 引入，de3opk 迁至 /inspect 面板） ----------------
+// 数据源 = op=commands（pi rpc get_commands）：会话实际加载的 extension 斜杠命令 /
+// prompt 模板 / skill。/inspect 打开时并行现拉（不缓存），渲染进探针面板独立段。
+// 展示规则沿用现状：extension/prompt 组逐条 `name — description`（desc 截 80 字符），
+// 单组超 CMD_GROUP_LIMIT 折叠为计数摘要；skill 组去 `skill:` 前缀逗号拼段（x6wp1z）。
+// 失败/空清单 → 该段不渲染、不闪 err（优雅降级）。
 // 局限：仅列出注册了斜杠命令的 extension；只注册工具/事件钩子的不出现（预期）。
-let loadedCommands = null;          // null = 未拉取或失败；[] = 空清单（均不展示该段）
-let commandsInFlight = false;
 const CMD_GROUP_LIMIT = 8;          // extension/prompt 组展示条数阈值，超出折叠为计数摘要；skill 组逗号拼段不受限（a16jpj/x6wp1z）
 const CMD_DESC_LIMIT = 80;          // description 截断长度（a16jpj）
 
-function fetchCommands() {
-  if (!attached || commandsInFlight) return;
-  commandsInFlight = true;
-  api("commands", {session: attached}).then(d => {
-    if (d && d.ok && Array.isArray(d.commands)) {
-      loadedCommands = d.commands;
-      refreshSlashNoticeIfVisible();      // 可见时重渲染展示；不可见无副作用（a16jpj）
-    }
-    // 失败/非预期形状：缓存保持原值（null → 不显示该段），静默不闪 err（a16jpj）
-  }).catch(() => {}).finally(() => { commandsInFlight = false; });
-}
-
-function loadedCommandsText() {
-  if (!Array.isArray(loadedCommands) || loadedCommands.length === 0) return "";
+// 纯函数：入参为命令清单数组；非数组/空 → 返回 ""（调用方据此不渲染该段）。
+function loadedCommandsText(cmds) {
+  if (!Array.isArray(cmds) || cmds.length === 0) return "";
   const groups = {"extension": [], "prompt": [], "skill": []};
-  for (const c of loadedCommands) {
+  for (const c of cmds) {
     const src = c && c.source ? "" + c.source : "other";
     (groups[src] || (groups[src] = [])).push(c);
   }
   const labels = {"extension": "extension", "prompt": "prompt", "skill": "skills"};
   const order = ["extension", "prompt", "skill"];
   for (const src of Object.keys(groups)) if (order.indexOf(src) < 0) order.push(src);
-  const lines = ["Loaded commands (extension/prompt/skill):"];
+  const lines = [];
   for (const src of order) {
     const list = groups[src];
     if (!list || !list.length) continue;
@@ -1717,12 +1703,12 @@ function loadedCommandsText() {
       lines.push("\u00b7 " + label + ": " + name + (desc ? " \u2014 " + desc : ""));
     }
   }
-  return lines.length > 1 ? lines.join("\n") : "";   // 全部组空 → 不展示该段（a16jpj）
+  return lines.length ? lines.join("\n") : "";       // 全部组空 → 不展示该段（a16jpj）
 }
 
 function showSlashNotice() {
-  const cmds = loadedCommandsText();                  // 已加载命令清单插在状态行与命令表之间（a16jpj）
-  showNotice(slashStatusLine() + (cmds ? "\n" + cmds : "") + "\n" + SLASH_HELP, "", true);
+  // 命令清单段已迁 /inspect 面板（任务 de3opk）：粘性提示仅状态行 + SLASH_HELP。
+  showNotice(slashStatusLine() + "\n" + SLASH_HELP, "", true);
   slashNoticeOn = true;
 }
 function refreshSlashNoticeIfVisible() {
@@ -1779,9 +1765,16 @@ function handleSlash(msg) {
       pickImages(); return;
     case "/inspect":
       // 任务 s0f1la：探针 = 后端 op=inspect（编排 -e 注入的探针扩展命令）；前端只拉取并渲染。
+      // 任务 de3opk：已加载命令清单并行复用 op=commands 现拉（不缓存，面板每次打开按需拉取）；
+      // commands 失败/空 → 该段不渲染、不闪 err，不拖累探针主体。
       flash("Inspecting session (system prompt + tools)…");
-      api("inspect", {session: attached}).then(d => {
-        renderInspectPanel(d && d.inspect);
+      Promise.all([
+        api("inspect", {session: attached}),
+        api("commands", {session: attached})
+          .then(d => (d && d.ok && Array.isArray(d.commands)) ? d.commands : null)
+          .catch(() => null),                 // 静默降级（de3opk，沿用 a16jpj 口径）
+      ]).then(([d, cmds]) => {
+        renderInspectPanel(d && d.inspect, cmds);
       }).catch(e => { flash("Inspect failed: " + e.message, "err"); });
       return;
     case "/reload":
@@ -1803,8 +1796,10 @@ function handleSlash(msg) {
 
 // ---------------- 探针面板渲染（任务 s0f1la：op=inspect 转储） ----------------
 // 瞬态面板：追加进 #stream，不进 jsonl；heal/刷新后消失（与 sysLine/flash 同类，预期）。
-// 展示：工具清单逐条（名 + description 首行）+ 系统提示词全文（限高滚动 <pre>）。
-function renderInspectPanel(doc) {
+// 展示：工具清单逐条（名 + description 首行）+ 已加载命令清单段（任务 de3opk 从
+// slashNotice 迁入，数据源 = op=commands 前端并行拉取，cmds 为 null/空时该段不渲染）
+// + 系统提示词全文（限高滚动 <pre>）。
+function renderInspectPanel(doc, cmds) {
   if (!doc || typeof doc !== "object") {
     flash("Inspect returned no data", "err"); return;
   }
@@ -1832,6 +1827,15 @@ function renderInspectPanel(doc) {
     tl.appendChild(line);
   }
   box.appendChild(tl);
+  const cl = loadedCommandsText(cmds);        // null/空清单 → 该段不渲染、不闪 err（de3opk）
+  if (cl) {
+    const ch = document.createElement("div");
+    ch.textContent = "Loaded commands (extension/prompt/skill):";
+    box.appendChild(ch);
+    const cpre = document.createElement("pre");
+    cpre.textContent = cl;
+    box.appendChild(cpre);
+  }
   const hd = document.createElement("div");
   hd.textContent = "System prompt (" + prompt.length + " chars):";
   box.appendChild(hd);
@@ -1979,7 +1983,7 @@ $("promptInput").addEventListener("input", function () {
     });
   }
   // / 补全提示（简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
-  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); sendStatusQuery(); sendCtxStats(); if (loadedCommands === null) fetchCommands(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填；0830-1324-3qet：上下文占用；a16jpj：首次 / 输入拉取已加载命令清单并缓存
+  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); sendStatusQuery(); sendCtxStats(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填；0830-1324-3qet：上下文占用
   else hideNotice();
 });
 
