@@ -749,6 +749,7 @@ function handleEvent(o) {
     return;
   }
   if (t === "sessiond.session_restarted") {
+    loadedCommands = null;                   // 会话重启后扩展可能变化，清缓存待下次 / 输入重拉（a16jpj）
     flash("Session restarted", "warn");
     if (lastGen !== null && o.gen !== undefined && o.gen !== lastGen) {
       lastGen = o.gen;
@@ -1480,6 +1481,7 @@ function handleCmdResponse(o) {
       if (typeof o.data.messageCount === "number") curMsgCount = o.data.messageCount;  // inbox 增项：零额外请求自带
       curCompacting = !!o.data.isCompacting;
       refreshSlashNoticeIfVisible();
+      if (slashNoticeOn) fetchCommands();   // 每次 get_state 回执且斜杠提示可见 → 一并刷新命令清单（a16jpj）
     }
     return;
   }
@@ -1649,8 +1651,58 @@ function slashStatusLine() {
     + " \u00b7 sessionDir: " + (agentSessionDir || "?");
   return l1 + "\n" + l2 + "\n" + ctxStatusText() + "\n" + l4;
 }
+// ---------------- 已加载命令清单（任务 a16jpj：op=commands ← pi rpc get_commands） ----------------
+// slashNotice 内展示当前会话实际加载的 extension 斜杠命令 / prompt 模板 / skill。
+// 首次 / 输入拉取并缓存；每次 get_state 回执且可见时后台刷新；失败/空清单 → 不显示该段（优雅降级）。
+// 每 source 组展示上限 CMD_GROUP_LIMIT，超限整组折叠为计数摘要（如 "skills: 16"）。
+// 局限：仅列出注册了斜杠命令的 extension；只注册工具/事件钩子的不出现（预期）。
+let loadedCommands = null;          // null = 未拉取或失败；[] = 空清单（均不展示该段）
+let commandsInFlight = false;
+const CMD_GROUP_LIMIT = 8;          // 每 source 组展示条数阈值，超出折叠为计数摘要（a16jpj）
+const CMD_DESC_LIMIT = 80;          // description 截断长度（a16jpj）
+
+function fetchCommands() {
+  if (!attached || commandsInFlight) return;
+  commandsInFlight = true;
+  api("commands", {session: attached}).then(d => {
+    if (d && d.ok && Array.isArray(d.commands)) {
+      loadedCommands = d.commands;
+      refreshSlashNoticeIfVisible();      // 可见时重渲染展示；不可见无副作用（a16jpj）
+    }
+    // 失败/非预期形状：缓存保持原值（null → 不显示该段），静默不闪 err（a16jpj）
+  }).catch(() => {}).finally(() => { commandsInFlight = false; });
+}
+
+function loadedCommandsText() {
+  if (!Array.isArray(loadedCommands) || loadedCommands.length === 0) return "";
+  const groups = {"extension": [], "prompt": [], "skill": []};
+  for (const c of loadedCommands) {
+    const src = c && c.source ? "" + c.source : "other";
+    (groups[src] || (groups[src] = [])).push(c);
+  }
+  const labels = {"extension": "extension", "prompt": "prompt", "skill": "skills"};
+  const order = ["extension", "prompt", "skill"];
+  for (const src of Object.keys(groups)) if (order.indexOf(src) < 0) order.push(src);
+  const lines = ["Loaded commands (extension/prompt/skill):"];
+  for (const src of order) {
+    const list = groups[src];
+    if (!list || !list.length) continue;
+    const label = labels[src] || src;
+    if (list.length > CMD_GROUP_LIMIT) { lines.push("\u00b7 " + label + ": " + list.length); continue; }
+    for (const c of list) {
+      let name = (c && c.name) ? "" + c.name : "?";
+      if (src === "skill" && name.indexOf("skill:") === 0) name = name.slice(6);  // 去 skill: 前缀（a16jpj）
+      let desc = ((c && c.description) || "").replace(/\s+/g, " ").trim();
+      if (desc.length > CMD_DESC_LIMIT) desc = desc.slice(0, CMD_DESC_LIMIT - 1) + "\u2026";
+      lines.push("\u00b7 " + label + ": " + name + (desc ? " \u2014 " + desc : ""));
+    }
+  }
+  return lines.length > 1 ? lines.join("\n") : "";   // 全部组空 → 不展示该段（a16jpj）
+}
+
 function showSlashNotice() {
-  showNotice(slashStatusLine() + "\n" + SLASH_HELP, "", true);
+  const cmds = loadedCommandsText();                  // 已加载命令清单插在状态行与命令表之间（a16jpj）
+  showNotice(slashStatusLine() + (cmds ? "\n" + cmds : "") + "\n" + SLASH_HELP, "", true);
   slashNoticeOn = true;
 }
 function refreshSlashNoticeIfVisible() {
@@ -1859,7 +1911,7 @@ $("promptInput").addEventListener("input", function () {
     });
   }
   // / 补全提示（简版）：输入以 / 开头时粘性展示支持表；非 / 开头清掉提示
-  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); sendStatusQuery(); sendCtxStats(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填；0830-1324-3qet：上下文占用
+  if (this.value.trimStart().startsWith("/")) { showSlashNotice(); sendGetState(); sendStatusQuery(); sendCtxStats(); if (loadedCommands === null) fetchCommands(); }  // 0830-1257-vwzb：状态行 + 命令表，并拉权威值回填；0830-1324-3qet：上下文占用；a16jpj：首次 / 输入拉取已加载命令清单并缓存
   else hideNotice();
 });
 

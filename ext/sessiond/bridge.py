@@ -30,6 +30,7 @@ from ext.sessiond import proc as _proc
 RING_MAX = int(os.environ.get("SESSIOND_BRIDGE_RING", "2000"))
 MAX_STREAMS_PER_BRIDGE = int(os.environ.get("SESSIOND_BRIDGE_MAXSTREAMS", "5"))
 ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
+COMMANDS_TIMEOUT = 10.0     # get_commands 往返超时（秒，任务 a16jpj）
 
 # 会话面命令拦截（评审 0829-1327-7ca3 S3）：这些命令会改绑 session_file/会话名，
 # 使监督登记失准（会话名是 agentd 通知门控依据，铁律 0828-1618-zru9）。
@@ -106,6 +107,17 @@ class Bridge:
                     _, eid = self._append(slim)
                     waiter["resp"] = obj      # 完整响应交给等待者
                     waiter["eid"] = eid       # 响应行的事件 ID = 水位
+                    waiter["event"].set()
+                    return
+                if waiter is not None and obj.get("command") == "get_commands":
+                    # 任务 a16jpj：配对等待同 get_entries；清单可能很长（user 级
+                    # skill 16+），环内瘦身为条数计数，完整响应只交给等待者。
+                    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+                    slim = dict(obj)
+                    slim["data"] = {"commands": "<%d commands omitted>"
+                                    % len(data.get("commands") or [])}
+                    self._append(slim)
+                    waiter["resp"] = obj
                     waiter["event"].set()
                     return
         if expired:
@@ -248,6 +260,47 @@ class Bridge:
         return {"ok": True, "resp": waiter["resp"],
                 "watermark": waiter.get("eid") or "",
                 "gen": self.sup.gen}
+
+    # ---- 只读查询：get_commands（任务 a16jpj） ----
+
+    def get_commands(self, timeout=COMMANDS_TIMEOUT):
+        """发 pi rpc get_commands 并等待配对响应（结构镜像 get_entries）。
+
+        返回该会话实际加载的可发现命令清单（extension 注册的斜杠命令 / prompt 模板 /
+        skill）；仅列出注册了斜杠命令的 extension（只注册工具/事件钩子的不出现）。
+        成功 {"ok": True, "commands": [...]}；失败 {"ok": False, "error": ...}。
+        """
+        self.sup.ensure_started()
+        if not self.sup.wait_ready():
+            return {"ok": False,
+                    "error": "session process not ready in time (state=%s)"
+                             % self.sup.state}
+        with self.lock:
+            self._req_seq += 1
+            rid = "wbgc-%d-%d" % (os.getpid(), self._req_seq)
+            waiter = {"event": threading.Event(), "resp": None}
+            self.pending[rid] = waiter
+        cmd = {"type": "get_commands", "id": rid}
+        if not self.sup.send(cmd):
+            with self.lock:
+                self.pending.pop(rid, None)
+            return {"ok": False,
+                    "error": "session process unavailable (state=%s)"
+                             % self.sup.state}
+        if not waiter["event"].wait(timeout):
+            with self.lock:
+                self.pending.pop(rid, None)
+            return {"ok": False,
+                    "error": "get_commands timed out after %.0fs" % timeout}
+        resp = waiter["resp"]
+        if resp is None:
+            return {"ok": False, "error": "no response received"}
+        if not resp.get("success"):
+            return {"ok": False,
+                    "error": "get_commands rejected: %s"
+                             % (resp.get("error") or "?")}
+        data = resp.get("data") or {}
+        return {"ok": True, "commands": data.get("commands") or []}
 
     # ---- 游标解析与流订阅 ----
 

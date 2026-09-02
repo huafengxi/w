@@ -31,7 +31,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
    ┌──────────┐      │        │                                            ▲                        │
    │ 用户输入  │──────┼──────▶ │  fetch POST /sessiond/rpc/api.py           │                        │
    │ (prompt/  │      │        │    op=status/attach/cmd/                   │ SSE 帧                 │
-   │  斜杠…)   │      │        │       reload/clear                         │ id:+data:              │
+   │  斜杠…)   │      │        │       reload/clear/commands                │ id:+data:              │
    └──────────┘      │        ▼                                            │ (`: ping` 保活)         │
         ▲            │   ┌──────────┐   send(cmd)/get_entries()   ┌────────────────┐                │
         │            │   │ rpc/     │────────────────────────────▶│                │                │
@@ -140,6 +140,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 - `bridge.py:send(cmd_obj)`：命令拦截面 `BLOCKED_COMMANDS = {switch_session, set_session_name}`（会改绑 session_file/会话名，使监督登记失准）→ 返回错误串；`extension_ui_response` 校验必须有对应悬空 `pending_dialogs` id，否则拒绝并返回错误串，放行且转发成功后广播 `sessiond.dialog_resolved` 结算帧（§11.4 发射时机表）；`abort` 特殊处理：把所有悬空 dialog 以 `cancelled` 代答（pi rpc dialog 是裸 Promise，`session.abort()` 触不到，不代答则回合永久阻塞），先发 abort 再串行发代答，并广播 `cancelled:true` 结算帧。应答/代答/`abort` 前均顺带清扫超时 dialog。
 - `bridge.py:get_entries(timeout=ENTRIES_TIMEOUT=20s)`：`ensure_started` + `wait_ready` → 发 `{type:"get_entries", id:"wbge-…"}` → 等配对响应行（响应行的事件 ID = `watermark` 水位）。超时/不就位/不可写均返回 `{ok: False, error}`。
+- `bridge.py:get_commands(timeout=COMMANDS_TIMEOUT=10s)`（任务 a16jpj）：只读查询当前会话实际加载的可发现命令（pi rpc `get_commands` 转发）。配对等待结构同 `get_entries`（`id:"wbgc-…"`），响应行入环但瘦身（commands 列表替换为条数计数，防长清单进 SSE 环）；无水位语义。返回 `{ok, commands:[{name,description,source,location,path}]}`，`source` ∈ `extension`（pi.registerCommand 注册的斜杠命令）/ `prompt`（提示模板，带 `location`）/ `skill`（名字带 `skill:` 前缀，带 `location`）；不含 TUI 内置命令。**局限：只注册工具或只挂事件钩子、未注册斜杠命令的 extension 不出现**（预期）。超时/不就位/不可写/被拒均返回 `{ok: False, error}`。
 
 ---
 
@@ -152,6 +153,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | `status` | — | `{ok, session, state, pid, gen, restarts, disabled, session_file, cwd}` | 只读查询监督员状态（`proc.py:status_doc`），无副作用 | 400 session 缺失/非法 |
 | `attach` | — | `{ok, session, gen, entries, pendingDialogs, leafId, watermark}` | **全量基线**：`get_entries()`；顺带下发悬空 dialog 快照（`pendingDialogs`） | 504 `get_entries` 超时/不就位；502 pi 拒绝（`success:false`） |
 | `cmd` | `cmd`（JSON 字符串，须为含 `type` 的对象） | `{ok: true}` | 上行单条 pi 命令，经 `bridge.py:send`；被拦截/无悬空 dialog/stdin 不可写 → 403 | 400 JSON 解析失败或非对象/无 type；403 `send` 返回错误 |
+| `commands` | — | `{ok, session, commands}` | 只读查询会话已加载命令清单（`bridge.py:get_commands` → pi rpc `get_commands` 转发，任务 a16jpj）；仅注册了斜杠命令的 extension 出现，见 §3 | 502 超时/不就位/被拒 |
 | `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时） | 502 重拉超时等失败 |
 | `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因） | 502 失败（含删文件失败） |
 | 未知 | — | — | — | 400 `unknown op` |
@@ -226,7 +228,7 @@ attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries
 | 元素 | 用途 | 显隐触发 |
 |---|---|---|
 | `#flashNotice` flash 轻提示 | 顶部居中浮层，承载所有系统提示（挂接/自愈/reload/熔断/发送被拒等），**错误不静默吞掉** | `flash()` 触发；普通 4s、`err` 8s 自动隐藏 |
-| `#slashNotice` 斜杠提示条 | 输入框上方内联提示（`/` 支持表粘性展示、命令结果/用法错误）；粘性展示时顶部为 `slashStatusLine()` 状态行：model/thinking、msgs/gen/restarts、ctx 占用、host/workDir/sessionDir（末行仅 .agent 会话有值，数据源 = op=agent 回执，缺失显 `?`） | 输入以 `/` 开头 → 粘性显示 `SLASH_HELP`；执行命令后非粘性 6s 自动隐藏；非 `/` 输入清除 |
+| `#slashNotice` 斜杠提示条 | 输入框上方内联提示（`/` 支持表粘性展示、命令结果/用法错误）；粘性展示时顶部为 `slashStatusLine()` 状态行：model/thinking、msgs/gen/restarts、ctx 占用、host/workDir/sessionDir（末行仅 .agent 会话有值，数据源 = op=agent 回执，缺失显 `?`）；状态行与 `SLASH_HELP` 之间为**已加载命令清单段**（任务 a16jpj）：数据源 = `op=commands`（首次 `/` 输入拉取并缓存，每次 get_state 回执且可见时后台刷新）；按 source 分组（extension/prompt/skill），每条 `name — description`（skill 去 `skill:` 前缀，description 截断 80 字符），单组超 8 条（`CMD_GROUP_LIMIT`）整组折叠为计数摘要（如 `skills: 16`）；请求失败/空清单/子进程未起 → 不显示该段（优雅降级）；会话重启（`session_restarted`）清缓存待重拉 | 输入以 `/` 开头 → 粘性显示 `SLASH_HELP`；执行命令后非粘性 6s 自动隐藏；非 `/` 输入清除 |
 | `#queuedPanel` QUEUED 面板 | 「QUEUED · N」：后端权威队列（`queue_update`）+ 本地乐观补位（`pendingSends`，同文本不重复）；条目 = 徽标（`steer` 蓝色描边 / `follow-up` 灰色）+ 单行截断文本；被拒条目红色；**无 Recall 按钮**（pi rpc 协议无召回能力） | 有任一条目时显示，空则隐藏；`queue_update`/发送/送达/清屏时重渲染 |
 | `#attachBar` 附件条 | 输入栏上方待发送图片缩略图（粘贴取图，仅拦 `image/*`），单个移除 + Clear (N) | `pendingImages` 非空时显示；发送后清空隐藏 |
 | `#dialogBox` dialog 模态盒 | 右下固定浮层：标题（`dialog [method] id=…`）+ 正文 + 按 method 生成控件 + Cancel + 倒计时「Auto-settle in Ns」（250ms tick，到期由 pi 端超时结算） | 默认 `display:none`；`extension_ui_request` 到达且当前无其它框时显示；同框异 id 时仅登记排队（`showDialog` 同 id 幂等）；应答/`cancelled`/`sessiond.dialog_resolved`/`/abort` 时关闭并自动弹下一个排队框；应答被服务端拒绝（如对端已结算的 `no pending dialog`）时 `replyDialog` catch 分支也本地关框（双保险，§11.4） |

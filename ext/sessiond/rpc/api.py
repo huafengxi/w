@@ -6,6 +6,8 @@
 #   op=status  该会话状态（state/pid/gen/restarts/cwd/session_file）
 #   op=attach  建桥 + 经 pi rpc get_entries 返回消息基线（全量）
 #   op=cmd     上行单条 pi 命令
+#   op=commands 该会话实际加载的可发现命令清单（任务 a16jpj：pi rpc get_commands 转发；
+#              extension 斜杠命令 / prompt 模板 / skill；仅注册了斜杠命令的 extension 出现）
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
@@ -255,6 +257,16 @@ def interp(store, op='', session='', cmd='', **kw):
                        "error": "get_entries rejected: %s"
                        % (r["resp"].get("error") or "?")}, '502 Bad Gateway')
         return _j(doc)
+    if op == 'commands':
+        # 任务 a16jpj：pi rpc get_commands 只读查询（结构同 get_entries 配对等待，
+        # 见 bridge.py:get_commands）；失败口径对齐 attach（502）。
+        r = b.get_commands()
+        if not r["ok"]:
+            return _j({"ok": False, "session": b.session,
+                       "error": "get_commands failed: %s" % r["error"]},
+                      '502 Bad Gateway')
+        return _j({"ok": True, "session": b.session,
+                   "commands": r["commands"]})
     if op == 'reload':
         r = b.sup.reload()
         if not r.get("ok"):
