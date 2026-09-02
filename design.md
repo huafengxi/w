@@ -80,7 +80,7 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
   工作区的 AGENTS/扩展（如 `~/m/assistant/*.agent` → cwd=`~/m/assistant` → 命中
   `assistant/.pi` 全套扩展与 `assistant/AGENTS.md`）。天然在 ~/m 服务树内，无逃逸问题。
 - **`sessionDir`（可选）= 会话目录**：会话 jsonl 的落盘处，也是跨机可观测的
-  participant 目录。缺省 = cwd 目录（会话文件落在 .agent 旁边，最朴素形态）。
+  bot 目录。缺省 = cwd 目录（会话文件落在 .agent 旁边，最朴素形态）。
 - **`host` v1 边界**：仅持久化保存（存于 .agent 文件）+ 随 `op=agent` 响应返回 +
   聊天页可见；不做跨机拉起。
 - **旧 `workdir` 字段（kcywpy v1）不再识别**：读到忽略并记日志提示，不报错。
@@ -90,7 +90,7 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
 - **视图映射**：`mime.frag` `.agent → application/x-sessiond-agent`，vmap 指向聊天视图
   （同 `?v=chat`，另有 `?v=agent` 别名）——复用现有聊天界面与监督机制，仅会话启动参数来源不同。
 - **启动参数解析单点**：`ext/sessiond/rpc/api.py` `op=agent`（`_resolve_agent`）：
-  读规格 → 校验 → **sessionDir 不存在自动 `mkdir -p`（含 participant/ 中间层）+ 记日志** →
+  读规格 → 校验 → **sessionDir 不存在自动 `mkdir -p`（含 bot/ 中间层）+ 记日志** →
   登记显式 cwd（`bridge.set_session_cwd`）→ 返回会话路径与 cwd/sessionDir。
   会话 = **`<sessionDir>/<agent名>.jsonl`**（每 agent 一会话、可重连续聊，类比
   `/assistant/dispatcher.jsonl` 的组织），之后完全走既有 .jsonl 会话链路（桥接/监督/重连）。
@@ -101,8 +101,8 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
   会话路径同一根集（~/m 与 ~/m/run 实路径）内，逃逸 → 400；推导出的会话路径再经
   `resolve_session_path` 二次校验。错误语义：文件缺失 → 404；路径非法/坏 JSON/
   缺 host/sessionDir 非法 → 400。缺失 .agent 依本节上方兜底语义渲染聊天页，由页内展示友好错误。
-- **可观测设计**：`sessionDir` 指向 `agents/participant/<名字>/` 时，会话文件经
-  agents-sync 四机同步——一台机器可观测另一台机器上 participant 的会话/收件状态。
+- **可观测设计**：`sessionDir` 指向 `agents/bot/<名字>/` 时，会话文件经
+  agents-sync 四机同步——一台机器可观测另一台机器上 bot 的会话/收件状态。
   **跨宿主守卫（任务 8nherl 最小版）**：.agent 声明 host 的会话只能被声明机实体化——
   守卫单点在 `proc.py host_guard`（Supervisor 创建 = 建桥接/spawn 唯一咽喉）：目标会话文件命中
   声明者推导（`<sessionDir>/<agent名>.jsonl`，assistant/** 递归同口径）且声明 host ≠ 本机 →
@@ -111,10 +111,10 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
 - **host 跨机路由（后续）**：按 host 把请求经反向通道/各机 8080 代理转发到目标机的
   同名端点（配套：多机 8080 + 代理 + rsh 端口转发），只需改 `_resolve_agent` 单点与
   其返回的路由指示。
-- **存量约定**：`assistant/dispatcher.agent`（sessionDir=`~/m/agents/participant/dispatcher`）、
-  `assistant/operator.agent`（sessionDir=`~/m/agents/participant/operator`；operator 的 cwd
+- **存量约定**：`assistant/dev-dispatcher/dev-dispatcher.agent`（cwd=`~/m/assistant`，会话文件在 .agent 旁）、
+  `assistant/operator.agent`（sessionDir=`~/m/agents/bot/operator`；operator 的 cwd
   随之为 `~/m/assistant`，会话文件位置不变，将加载 assistant 扩展——约定自然结果）。
-- **UI 约定**：会话名/页标题 = agent 名（文件名）；`/agents/participant/` 下会话豁免
+- **UI 约定**：会话名/页标题 = agent 名（文件名）；`/agents/bot/` 下会话豁免
   双宿主盲区警示（该目录是 .agent 会话的约定归属地，sessiond 自家拉起）。
 - **同名会话单机不变量**（ogwtb4 评审建议，任务 kqhweh）：同一 session jsonl 同一时刻
   只应被本机一个 supervisor 持有（单一宿主）。非 hub 机器的 receiver 按会话名门控
