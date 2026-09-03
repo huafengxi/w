@@ -403,6 +403,9 @@ let dialogDeadline = 0;
 // 显示时机 = 回合中且无流式产出（用户消息发出后等首个产出、工具执行完成后等下一轮
 // 模型响应）；任一模型产出帧（assistant message_start / message_update /
 // tool_execution_start）到达即移除。纯前端基于现有 SSE 事件推断，无后端新事件。
+// 块间间隙续接（任务 0c736g）：上述触发点全是事件边界——回合进行中模型响应块间
+// 静默（无任何帧流动）时指示缺位。补静默计时器（gapTimer，见下方 Waiting 节），
+// 静默超窗且守卫通过 → 复用同一 waiting 行。
 let turnActive = false;
 let waitingEl = null;
 // 回合状态三件套（任务 0829-2131-pdop）：
@@ -496,7 +499,7 @@ async function attach(name) {
   $("stream").innerHTML = "";
   curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
-  turnActive = false; waitingEl = null;                 // 重挂接重置等待指示（0829-2107-cvdn）
+  turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false;   // 重挂接重置等待指示（0829-2107-cvdn；间隙计时/收尾窗同清，0c736g）
   pendingSends = {}; queueState = {steering: [], followUp: []};
   toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重挂接丢弃（bw333x）
   curMsgCount = null; curCompacting = null; curGen = null; curRestarts = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
@@ -522,7 +525,7 @@ function applyBaseline(doc, initial) {
     $("stream").innerHTML = "";
     curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
     seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
-    turnActive = false; waitingEl = null;               // 自愈重渲染重置（0829-2107-cvdn）
+    turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; // 自愈重渲染重置（0829-2107-cvdn；间隙计时/收尾窗同清，0c736g）
     pendingSends = {}; queueState = {steering: [], followUp: []};
     toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重渲染丢弃（bw333x）
     retryBoxEl = null; lastRenderedErrorMsg = null;     // 回合状态重置（0829-2131-pdop）
@@ -799,9 +802,9 @@ function handleEvent(o) {
     return;
   }
   if (t === "sessiond.session_disabled") { flash("Session disabled (crash loop)", "err");
-    turnActive = false; hideWaiting(); return; }
+    turnActive = false; hideWaiting(); disarmGapTimer(); return; }
   if (t === "sessiond.session_dormant") { flash("Session dormant (no subscribers) — refresh or send a message to revive", "warn");
-    turnActive = false; hideWaiting(); return; }
+    turnActive = false; hideWaiting(); disarmGapTimer(); return; }
   if (t === "sessiond.dialog_resolved") {
     if (pendingDialogs[o.id]) closeDialog(o.id, "answered");
     return;
@@ -824,7 +827,8 @@ function handleEvent(o) {
   //    声音是它唯一的用户可见产出）。
   if (document.hidden && t === "message_start" && !turnActive) beep("notify");
   if (document.hidden && (t === "sessiond.error" || t === "extension_ui_request")) beep("notify");
-  if (t === "agent_settled") { beep("done"); collapseProcessGroups(); }  // 回合彻底落定 → 组折叠（0830-1039-a6vy）
+  if (t === "agent_settled") { beep("done"); collapseProcessGroups();   // 回合彻底落定 → 组折叠（0830-1039-a6vy）
+    turnActive = false; hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; }               // settled = 无重试/无 compaction/无队列续跑终态：busy 态收敛兜底（0c736g，防 agent_end 缺失的异常路径挂住等待指示与 follow_up 排队判定）
   // turn_end 真实发射时序（pi-agent-core/dist/agent-loop.js:131）：toolResults 已入上下文之后、
   // 下一次模型调用之前发射，事件携带 toolResults 字段。因此非空 = 子回合以工具调用结束、
   // 模型即将再调（此刻起进入下一轮 TTFT 空白）→ showWaiting 保持/恢复等待指示；
@@ -832,14 +836,21 @@ function handleEvent(o) {
   // 旧版无条件 hideWaiting 把指示器恰好在 TTFT 空白开始前移除（任务 c6ue7q 修复）。
   if (t === "turn_end") {
     if (o.toolResults && o.toolResults.length > 0) showWaiting();
-    else hideWaiting();                                 // 仅清等待指示，不清 turnActive（0830-1029-urgg）
+    else { hideWaiting(); awaitingAgentEnd = true; }    // 仅清等待指示，不清 turnActive（0830-1029-urgg）；
+                                                        // 纯文本收尾子回合后只剩 agent_end，模型不再被调用，
+                                                        // 收尾窗内间隙静默检测挂起防误导（0c736g）
   }
   if (t === "agent_end") {
-    turnActive = false; hideWaiting();
+    turnActive = false; hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false;
     collapseProcessGroups();                            // agent run 结束 → 自动折叠过程组（0830-1039-a6vy）
   }
   if (t === "response") { handleCmdResponse(o); }       // 上行命令回执（0829-2115-zvti）
   renderEvent(o);
+  // 块间间隙续接（任务 0c736g）：每收一个真实事件帧重置静默计时（保活 `: ping`
+  // 注释帧在 drainFrames 被跳过不进本函数，不会误重置）；到期且守卫通过 → 复用
+  // waiting 行（见 gapTimerFire）。间隙中偶发的控制帧（queue_update 等）只把指示
+  // 推迟一个窗口，属"有事情发生"语义，无害。
+  if (turnActive) armGapTimer(); else disarmGapTimer();
 }
 
 function renderEvent(o) {
@@ -874,10 +885,10 @@ function renderEvent(o) {
       resolvePendingByMessage(m);             // 待发条目转正（0829-2115-zvti）
       renderUserMessage(m);                     // 流式渲染：文本 + 图片缩略图（同一入口，内含 turnGroup 重置）
       curAssistantEl = null; curAssistantBuf = "";
-      turnActive = true;                        // 回合开始：等模型首个产出（0829-2107-cvdn）
+      turnActive = true; awaitingAgentEnd = false;   // 回合开始：等模型首个产出（0829-2107-cvdn；收尾窗标志重置，0c736g）
       showWaiting();
     } else if (m.role === "assistant") {
-      hideWaiting();                            // 模型已开始输出本轮消息（0829-2107-cvdn）
+      hideWaiting(); awaitingAgentEnd = false;  // 模型已开始输出本轮消息（0829-2107-cvdn；新产出即出收尾窗，0c736g）
       curAssistantEl = addDiv("role-assistant md", "");
       curAssistantBuf = "";
       lastRenderedErrorMsg = null;              // 新消息开始，重置错误去重键（0829-2131-pdop）
@@ -1066,6 +1077,33 @@ function showWaiting() {
 }
 function hideWaiting() {
   if (waitingEl) { waitingEl.remove(); waitingEl = null; }
+}
+// 块间间隙静默检测（任务 0c736g）：回合进行中模型响应块间无真实事件帧流动
+// （thinking 流结束 → 下一块开始的间隙、provider 侧慢生成等）时，上方事件驱动的
+// show/hide 没有触发点 → 页面观感像对话已结束。handleEvent 末尾每收一帧重置计时，
+// 到期且守卫通过 → 复用 showWaiting（同一元素同一文案，与 reasoning「Thinking · N 字」
+// chip 天然区分）。误导态抑制：工具执行中（.tool-block.run 蓝色态本身即进行指示）、
+// 重试框在场（警告框代言等待）、有未决 dialog（等的是用户不是模型）。
+// 陈旧定时器双保险：到期回调全量复查守卫；所有 turnActive=false 重置点同步 disarm。
+// 收尾窗标志（0c736g）：turn_end 空 toolResults → 其后只可能接 agent_end，模型不再被调用，
+// 此窗内静默不应出"等模型"指示；下一轮产出（user/assistant message_start）或终态重置清除。
+let awaitingAgentEnd = false;
+let gapTimer = null;
+const GAP_MS = 2500;
+function armGapTimer() {
+  if (gapTimer) clearTimeout(gapTimer);
+  gapTimer = setTimeout(gapTimerFire, GAP_MS);
+}
+function disarmGapTimer() {
+  if (gapTimer) { clearTimeout(gapTimer); gapTimer = null; }
+}
+function gapTimerFire() {
+  gapTimer = null;
+  if (!turnActive || waitingEl || retryBoxEl) return;
+  if (awaitingAgentEnd) return;                            // 收尾窗：只等 agent_end，非等模型
+  if (document.querySelector(".tool-block.run")) return;   // 工具执行中：块色态即进行指示，不误导"等模型"
+  if (Object.keys(pendingDialogs).length) return;          // 等用户应答 dialog，非等模型
+  showWaiting();
 }
 
 // ---------------- thinking/工具调用折叠块 ----------------
