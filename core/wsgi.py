@@ -111,14 +111,8 @@ def run_use_wsgiserver(app, host, port, daemon):
     logging.info("run use wsgiserver: socket timeout: %s", timeout)
     server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout, numthreads=30)
     fork_as_daemon(daemon)
-    # sessiond resident 会话启动钩子（任务 02mi7r）：必须在 fork_as_daemon 之后——
-    # fork 前创建的监督线程不进子进程。扫描/拉起逻辑全在 ext/sessiond/resident.py，
-    # 这里仅懒导入 + 兜底：失败绝不阻塞服务启动。详见 w/ext/sessiond/ARCHITECTURE.md。
-    try:
-        from ext.sessiond import resident
-        resident.bootstrap()
-    except Exception:
-        logging.exception('sessiond resident bootstrap failed')
+    # sessiond resident 钩子已退役（去保活二期，任务 ja0vr7）：常驻/自愈语义统一归
+    # agentd，sessiond 只保留懒拉起 + 在场监督（详见 w/ext/sessiond/ARCHITECTURE.md）。
     server.start()
 
 def read_credential():

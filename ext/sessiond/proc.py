@@ -324,8 +324,9 @@ class Supervisor:
         self.pid = None
         self.gen = 0
         self.restarts = 0
-        self.state = "idle"         # idle/starting/running/restarting/disabled
+        self.state = "idle"         # idle/starting/running/restarting/disabled/dormant
         self.disabled = False       # 熔断标记（reload 解除）
+        self._reaping = False       # 空闲回收杀：退出不计崩溃、转懒态不重拉（去保活，任务 ja0vr7）
         self._reloading = False     # 主动 reload：退出不计崩溃/不排退避
         self._clearing = False      # 主动 clear（0829-2238-atnj）：重拉前先把 jsonl 截断到 0
         self._clear_error = None    # clear 截断文件失败信息（由监督循环回填）
@@ -335,18 +336,74 @@ class Supervisor:
         self._cond = threading.Condition()
         self._started = False
         self._thread = None
+        # 在场判定钩子（去保活，任务 ja0vr7）：由 bridge 注入 has_presence；
+        # None = 保守按有在场（无桥接消费方时行为与旧版逐字一致）。
+        self.presence_check = None
 
     # ---- 启动（幂等，首次调用拉起监督线程） ----
 
     def ensure_started(self):
         with self._cond:
-            if self._started:
+            thread_alive = (self._thread is not None
+                            and self._thread.is_alive())
+            if self._started and thread_alive:
                 return
+            if self._started:
+                # 监督循环已退出：熔断态（disabled）须经 reload 解锁，不在这里复活；
+                # 懒态（dormant，去保活转态）→ 重起监督循环即复活，语义回到懒拉起。
+                if self.disabled:
+                    return
             self._started = True
             self._thread = threading.Thread(
                 target=self._run_loop,
                 name="supervisor-" + self.name, daemon=True)
             self._thread.start()
+
+    def _has_presence(self):
+        """在场判定（去保活，任务 ja0vr7）：桥接提供数据（SSE 订阅数>0 ∨ 距最近一次
+        attach/cmd/reload/clear 活动 < PRESENCE_GRACE）。钩子缺失/异常 → 保守按有在场。"""
+        fn = self.presence_check
+        if fn is None:
+            return True
+        try:
+            return bool(fn())
+        except Exception:
+            return True
+
+    def _go_dormant(self, reason):
+        """转懒态（去保活）：广播休眠帧、置 dormant、监督循环随后退出。
+        复活路径 = ensure_started（下次访问自然拉起）。"""
+        with self._cond:
+            self.proc = None
+            self.pid = None
+            self.state = "dormant"
+        log.info("session dormant (%s): %s file=%s", reason, self.name,
+                 self.session_file)
+        self._broadcast({"type": "sessiond.session_dormant",
+                         "session": self.name, "reason": reason})
+
+    def _idle_reap(self):
+        """空闲回收执行体（去保活，任务 ja0vr7）：同 _kill_and_restart 的优雅杀但**不重拉**——
+        置 _reaping 标志后杀进程，监督循环观察到退出即转懒态（不计崩溃）。"""
+        with self._cond:
+            if self.state != "running":
+                return
+            self._reaping = True
+            p = self.proc
+        log.info("idle reap: killing %s (no subscribers, idle beyond timeout)",
+                 self.name)
+        if p is not None and p.poll() is None:
+            try:
+                p.terminate()
+            except OSError:
+                pass
+            try:
+                p.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
 
     # ---- 对外 ----
 
@@ -470,6 +527,9 @@ class Supervisor:
                 self._spawn()
             except Exception:
                 log.exception("spawn failed")
+                if not self._has_presence():   # 去保活：无人看时不空转重拉，转懒态
+                    self._go_dormant("spawn failed, no presence")
+                    return
                 self._broadcast({"type": "sessiond.session_restarting",
                                  "session": self.name,
                                  "delay": BACKOFF_MAX})
@@ -479,6 +539,8 @@ class Supervisor:
             with self._cond:
                 reloading = self._reloading
                 self._reloading = False
+                reaping = self._reaping
+                self._reaping = False
                 self.proc = None
                 self.pid = None
                 self.state = "restarting"
@@ -486,6 +548,14 @@ class Supervisor:
                         rc, self.gen, self.name, self.session_file)
             if reloading:
                 continue                # 主动 reload：立即重拉（无退避）
+            if reaping:
+                self._go_dormant("idle-reaped")   # 空闲回收：转懒态不重拉
+                return
+            if not self._has_presence():
+                # 去保活核心（du44uj §1.2.2）：崩溃时无在场订阅 → 不重拉转懒态
+                #（浏览器重开经 ensure_started 复活）；有在场 → 下方退避重拉/熔断照旧。
+                self._go_dormant("crashed without subscribers")
+                return
             now = time.monotonic()
             self._crash_ts = [t for t in self._crash_ts
                               if now - t <= FAIL_WINDOW]
@@ -859,18 +929,21 @@ class SocketSupervisor:
             log.exception("on_event failed")
 
 
-# ---- 任务会话路由判定（任务 ybzvbn） ----
+# ---- agentd 登记会话路由判定（任务 ybzvbn 泛化，去保活二期 ja0vr7） ----
 #
-# 打开 /agents/task/<id>/session/session.jsonl 时按 pid.json 判路由：
+# 打开 /agents/(task|bot)/<名>/session/session.jsonl 时按 pid.json 判路由；
+# 用户硬约束（2026-09-03）：凡 agentd 登记者（有 spec.json）web/sessiond **零启动**——
+# 只桥接透传、永不 spawn，三态全不落普通 Supervisor：
 #   活 socket 在场（sock 字段 ∧ pid 存活 ∧ 可连） → SocketSupervisor 直播
-#   已终态（final ∨ 无 pid.json）                → 普通 Supervisor 复活
-#                                                  （先登记显式 cwd = spec.workdir，
-#                                                   53yjuc 口径：首帧 cwd 决定扩展发现）
-#   旧形态运行中（无 sock）                      → 拒绝 + 指引（双宿主风险）
+#   已终态（final）                              → 拒绝并指引（生命周期归 agentd）
+#   缺席（无 pid.json ∨ 进程不在）               → 等待提示（拉起权单点 = agentd）
+#   status=paused                                → 拒绝并提示 control restart
 # 跨机：spec.host ≠ 本机规范名 → 拒绝 + 指引（同 host_guard 口径）。
+# 注：路径命中但目录下无 spec.json（如测试/临时目录）时仍按登记会话口径三态判定，
+# 不回落裸 jsonl 懒拉起（裸 jsonl 废除，.agent 才是唯一拉起入口）。
 
-_TASK_SESSION_RE = re.compile(
-    r"^/agents/task/([^/]+)/session/session\.jsonl$")
+_AGENTD_SESSION_RE = re.compile(
+    r"^/agents/(task|bot)/([^/]+)/session/session\.jsonl$")
 
 
 def _site_path(session_path):
@@ -897,19 +970,20 @@ def _sock_live(path, timeout=2.0):
         return False
 
 
-def task_route(session_path):
-    """任务会话路由判定。返回 None（非任务会话路径，零影响）或
-    (mode, payload)：
-      ("live",   {"sock": <透传端点>})          → SocketSupervisor 直播
-      ("revive", {"cwd": <复活显式 cwd>})        → 普通复活（调用方登记 _CWD_OVERRIDES）
-      ("reject", <错误消息>)                     → 拒绝（调用方抛 ValueError）
+def agentd_route(session_path):
+    """agentd 登记会话路由判定（task/bot 两族，去保活二期 ja0vr7）。
+    返回 None（非登记会话路径，零影响）或 (mode, payload)：
+      ("live",   {"sock": <透传端点>, "participant_id": <族/名>}) → SocketSupervisor 直播
+      ("reject", <错误消息>)   → 终态/缺席等待/暂停/跨机/通道未就绪（调用方抛 ValueError；
+                                  登记者一律不 spawn，硬约束②）
     """
     p = _site_path(session_path)
-    m = _TASK_SESSION_RE.match(p)
+    m = _AGENTD_SESSION_RE.match(p)
     if not m:
         return None
-    task_id = m.group(1)
-    adir = os.path.join(WS, "agents", "task", task_id)
+    family, name = m.group(1), m.group(2)
+    participant_id = "%s/%s" % (family, name)
+    adir = os.path.join(WS, "agents", family, name)
     try:
         with open(os.path.join(adir, "spec.json")) as f:
             spec = json.load(f)
@@ -922,11 +996,11 @@ def task_route(session_path):
         me = _self_host()
         if me is None:
             return ("reject",
-                    "host guard: env/host-id 缺失或无本机映射，无法判定任务会话宿主，"
+                    "host guard: env/host-id 缺失或无本机映射，无法判定会话宿主，"
                     "拒绝打开（修复 env/host-id 后重试）")
         if host.strip() != me:
             return ("reject",
-                    "该任务宿主=%s，请通过 %s 的服务访问（本机=%s）"
+                    "该会话宿主=%s，请通过 %s 的服务访问（本机=%s）"
                     % (host.strip(), host.strip(), me))
     try:
         with open(os.path.join(adir, "pid.json")) as f:
@@ -935,24 +1009,25 @@ def task_route(session_path):
         doc = None
     if not isinstance(doc, dict):
         doc = None
-    # 终态（或无档案）→ 复活：登记显式 cwd = spec.workdir（首帧 cwd 口径，53yjuc）
-    if doc is None or doc.get("final") is True:
-        wd = spec.get("workdir")
-        if isinstance(wd, str) and wd.strip():
-            try:
-                cwd = resolve_cwd(os.path.expanduser(wd.strip()))
-            except ValueError as e:
-                return ("reject", "任务 workdir 非法，无法复活：%s" % e)
-        else:
-            cwd = os.path.dirname(os.path.join(WS, p.lstrip("/")))
-        return ("revive", {"cwd": cwd, "task_id": task_id})
-    # 未终态：新形态（有 sock）= 直播；旧形态 = 拒绝（双宿主风险）
+    # 终态 → 拒绝并指引（生命周期归 agentd：换代 = control restart，web 不代拉）
+    if doc is not None and doc.get("final") is True:
+        return ("reject",
+                "会话已终态（agentd 已收口 %s），不可打开；如需续用请经 agentd "
+                "control restart 换代" % participant_id)
+    if doc is None:
+        return ("reject",
+                "会话进程缺席（%s 尚无运行档案）：拉起权单点 = agentd，"
+                "请等待 agentd 放行拉起后重试" % participant_id)
+    if doc.get("status") == "paused":
+        return ("reject",
+                "该会话已暂停（%s），可经 agentd control restart 恢复"
+                % participant_id)
     sock = doc.get("sock")
     if isinstance(sock, str) and sock and pid_alive(doc.get("pid")):
         if _sock_live(sock):
-            return ("live", {"sock": sock, "task_id": task_id})
+            return ("live", {"sock": sock, "participant_id": participant_id})
         return ("reject",
-                "任务观测通道未就绪（任务启动中或封装进程异常），请稍后重试：%s" % sock)
+                "会话观测通道未就绪（启动中或封装进程异常），请稍后重试：%s" % sock)
     return ("reject",
-            "旧形态运行中任务不可打开会话（会与任务进程双宿主写同一 jsonl）；"
-            "终态后自动可复活续聊，实时观测需新形态任务（pi-rpc-wrap）")
+            "会话进程缺席（%s，无活跃观测通道）：拉起/复活归 agentd 监督"
+            "（restartPolicy=auto 会自动拉起），请稍候重试" % participant_id)

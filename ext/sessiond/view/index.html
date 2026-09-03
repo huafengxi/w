@@ -793,6 +793,8 @@ function handleEvent(o) {
   }
   if (t === "sessiond.session_disabled") { flash("Session disabled (crash loop)", "err");
     turnActive = false; hideWaiting(); return; }
+  if (t === "sessiond.session_dormant") { flash("Session dormant (no subscribers) — refresh or send a message to revive", "warn");
+    turnActive = false; hideWaiting(); return; }
   if (t === "sessiond.dialog_resolved") {
     if (pendingDialogs[o.id]) closeDialog(o.id, "answered");
     return;

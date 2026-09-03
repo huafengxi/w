@@ -19,6 +19,7 @@ socket）。首次访问某路径时创建并拉起会话进程，之后复用�
 锁定 ~/m 内；注册表键 = 解析后绝对路径）。仅 python3 标准库。
 """
 import json
+import logging
 import os
 import threading
 import time
@@ -27,8 +28,16 @@ from collections import deque
 
 from ext.sessiond import proc as _proc
 
+log = logging.getLogger("sessiond-bridge")
+
 RING_MAX = int(os.environ.get("SESSIOND_BRIDGE_RING", "2000"))
 MAX_STREAMS_PER_BRIDGE = int(os.environ.get("SESSIOND_BRIDGE_MAXSTREAMS", "5"))
+# 去保活（任务 ja0vr7，设计 du44uj §1.2）：
+# PRESENCE_GRACE = 在场判定的活动宽限（attach 是一次性 POST，防「刚 attach 还没开流」误判）；
+# IDLE_TIMEOUT = 空闲回收阈值（无订阅 ∧ 空闲超阈 → 杀进程转懒态；秒，0=关，测试可调小）。
+PRESENCE_GRACE = float(os.environ.get("SESSIOND_PRESENCE_GRACE", "300"))
+IDLE_TIMEOUT = float(os.environ.get("SESSIOND_IDLE_TIMEOUT", "900"))
+IDLE_SCAN_INTERVAL = float(os.environ.get("SESSIOND_IDLE_SCAN", "60"))
 ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
 COMMANDS_TIMEOUT = 10.0     # get_commands 往返超时（秒，任务 a16jpj）
 INSPECT_TIMEOUT = 15.0      # 探针转储往返超时（秒，任务 s0f1la）
@@ -66,6 +75,7 @@ class Bridge:
         # 桥接不清理会让 attach 基线向新 tab 重建已死 dialog → 按 deadline 清理）
         self._dialog_deadline = {}
         self.subscribers = 0                 # 当前 SSE 流订阅数
+        self.last_activity = time.monotonic()  # 最近一次活动（在场判定/空闲回收，去保活）
         # 监督员选择（任务 ybzvbn，票 hegipc）：sock_path 在场 = rpc 封装形态任务，
         # SocketSupervisor 连接透传 socket（无杀权、不重拉）；否则普通 Supervisor spawn。
         if sock_path:
@@ -77,7 +87,23 @@ class Bridge:
         else:
             self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest,
                                         cwd=cwd)
+            # 去保活（任务 ja0vr7）：在场判定数据由桥接供给（崩溃无订阅不重拉/空闲回收）。
+            self.sup.presence_check = self.has_presence
         self.session = self.sup.name         # 展示名以监督员解析为准
+
+    def note_activity(self):
+        """记录会话活动时刻（去保活）：调用点 = attach 基线/上行命令/commands/inspect（本模块）
+        与 reload/clear（rpc/api.py 补记）。在场判定与空闲回收共享。"""
+        with self.lock:
+            self.last_activity = time.monotonic()
+
+    def has_presence(self):
+        """在场判定（去保活，设计 du44uj §1.2.1）：① 当前 SSE 订阅数 > 0，或② 距
+        最近一次活动 < PRESENCE_GRACE（防「刚 attach 还没开流」窗口误判）。"""
+        with self.lock:
+            if self.subscribers > 0:
+                return True
+            return time.monotonic() - self.last_activity < PRESENCE_GRACE
 
     def _socket_lost(self):
         """透传连接断（任务收敛/被杀，任务 ybzvbn）：标记终结（iter_events 停流 →
@@ -197,6 +223,8 @@ class Bridge:
 
     def send(self, cmd_obj):
         """向会话发一条命令。返回错误串或 None。"""
+        self.note_activity()
+        self.sup.ensure_started()   # 懒态复活：去保活后崩溃转懒态的会话经此拉起（幂等）
         t = cmd_obj.get("type")
         if t in BLOCKED_COMMANDS:
             return ("command %r is blocked: it would desync the session "
@@ -270,6 +298,7 @@ class Bridge:
         返回 {"ok": True, "resp": <pi response>, "watermark": <响应行 eid>,
         "gen": <会话进程世代>}；失败返回 {"ok": False, "error": ...}。
         """
+        self.note_activity()
         self.sup.ensure_started()
         if not self.sup.wait_ready():
             return {"ok": False,
@@ -307,6 +336,7 @@ class Bridge:
         skill）；仅列出注册了斜杠命令的 extension（只注册工具/事件钩子的不出现）。
         成功 {"ok": True, "commands": [...]}；失败 {"ok": False, "error": ...}。
         """
+        self.note_activity()
         self.sup.ensure_started()
         if not self.sup.wait_ready():
             return {"ok": False,
@@ -354,6 +384,7 @@ class Bridge:
         成功 {"ok": True, "doc": <转储文档>}；失败 {"ok": False, "error": ...}。
         转储文档内 ok:False = 探针 handler 内部异常（带 error 字段）。
         """
+        self.note_activity()
         self.sup.ensure_started()
         if not self.sup.wait_ready():
             return {"ok": False,
@@ -474,34 +505,103 @@ def set_session_cwd(session_path, cwd):
 
 
 def get_bridge(session_path):
-    """按路径取桥接；首次访问创建并拉起该会话的监督员（懒拉起）。
+    """按路径取桥接；首次访问创建桥接并拉起监督员。
     注册表键 = 解析后的绝对路径（`/./x` 等变体归一）。
-    建桥时查 _CWD_OVERRIDES：命中则把显式 cwd 传给 Supervisor（.agent 会话），
-    未命中缺省 = jsonl 所在目录（.jsonl 直开，行为不变）。
 
-    任务会话路由（任务 ybzvbn，票 hegipc）：站内 /agents/task/<id>/session/
-    session.jsonl 按 pid.json 判定（_proc.task_route）：活 socket → SocketSupervisor
-    透传直播；终态 → 登记显式 cwd（spec.workdir，53yjuc 口径）后普通复活；
-    旧形态运行中/跨机 → ValueError 拒绝 + 指引。其余路径零影响。
+    拉起权单点（去保活二期 ja0vr7，用户硬约束①②③）：
+    - agentd 登记会话（/agents/(task|bot)/<名>/session/session.jsonl）按 pid.json 判定
+      （_proc.agentd_route）：活 socket → SocketSupervisor 透传直播（只连接不 spawn）；
+      终态/缺席/暂停/跨机 → ValueError 拒绝 + 指引/等待提示，**永不 spawn**；
+    - 其余路径：仅当 _CWD_OVERRIDES 有登记（= 经 op=agent 解析的 .agent 声明者）才建桥拉起；
+      未登记的裸 jsonl 直开 → ValueError（裸 jsonl 拉起废除：.agent 是 web 唯一拉起入口）。
     非法路径抛 ValueError（调用方回 400）。"""
     key = _proc.resolve_session_path(session_path)
     with _BRIDGES_LOCK:
         b = _BRIDGES.get(key)
         if b is None:
             sock_path = None
-            route = _proc.task_route(session_path)
+            route = _proc.agentd_route(session_path)
             if route is not None:
                 mode, payload = route
                 if mode == "reject":
                     raise ValueError(payload)
-                if mode == "revive":
-                    with _CWD_OVERRIDES_LOCK:
-                        _CWD_OVERRIDES[key] = payload["cwd"]
-                elif mode == "live":
-                    sock_path = payload["sock"]
-            with _CWD_OVERRIDES_LOCK:
-                cwd = _CWD_OVERRIDES.get(key)
-            b = Bridge(session_path, cwd=cwd, sock_path=sock_path)
+                sock_path = payload["sock"]    # live 唯一放行态：只透传不 spawn（硬约束②）
+                b = Bridge(session_path, sock_path=sock_path)
+            else:
+                with _CWD_OVERRIDES_LOCK:
+                    cwd = _CWD_OVERRIDES.get(key)
+                if cwd is None:
+                    raise ValueError(
+                        "裸 jsonl 拉起已废除（任务 ja0vr7）：直开该路径不再拉起宿主；"
+                        "浏览器会话入口 = .agent 声明者（唯一），agentd 登记会话的拉起/"
+                        "复活归 agentd 监督（本路径经 socket 透传）")
+                b = Bridge(session_path, cwd=cwd)
             _BRIDGES[key] = b
             b.sup.ensure_started()
+            _ensure_idle_reaper()
         return b
+
+
+# ----------------------------------------------------------------
+# 空闲回收扫描器（去保活，任务 ja0vr7，设计 du44uj §1.2.3）
+#
+# web 进程级单守护线程：周期扫 _BRIDGES，对「运行中 ∧ 无订阅 ∧ 空闲超阈」的普通会话
+# 优雅杀进程转懒态（重开复活）；否则开过一次的会话活到 web 重启 = 变相保活。
+# 排除 SocketSupervisor（socket 模式生命周期属 agentd，断连自有终结路径）。
+# 双条件防误杀：距最近活动 > IDLE_TIMEOUT（含无上行 cmd）∧ jsonl mtime 老化 > IDLE_TIMEOUT
+#（防杀进行中的回合）。
+
+def _idle_scan():
+    if IDLE_TIMEOUT <= 0:
+        return
+    now = time.monotonic()
+    with _BRIDGES_LOCK:
+        items = list(_BRIDGES.items())
+    for _key, b in items:
+        sup = b.sup
+        if isinstance(sup, _proc.SocketSupervisor):
+            continue
+        with b.lock:
+            if b.subscribers > 0:
+                continue
+            if now - b.last_activity < IDLE_TIMEOUT:
+                continue
+        try:
+            # 会话仍在干活（近阈值内有写入）→ 不回收；文件尚不存在（pi 懒落盘，
+            # 无任何写入）也算空闲——否则从未写过盘的会话永不被回收。
+            if time.time() - os.path.getmtime(sup.session_file) < IDLE_TIMEOUT:
+                continue
+        except OSError:
+            pass
+        with sup._cond:
+            if sup.state != "running" or sup.proc is None:
+                continue
+        log.info("idle reap candidate: %s (no subscribers, idle >%.0fs)",
+                 b.session, IDLE_TIMEOUT)
+        sup._idle_reap()
+
+
+def _idle_reaper_loop():
+    while True:
+        time.sleep(IDLE_SCAN_INTERVAL)
+        try:
+            _idle_scan()
+        except Exception:
+            log.exception("idle scan failed")
+
+
+_REAPER_LOCK = threading.Lock()
+_REAPER_STARTED = False
+
+
+def _ensure_idle_reaper():
+    """幂等启动空闲回收扫描线程（首个桥接建立时拉起）。"""
+    global _REAPER_STARTED
+    with _REAPER_LOCK:
+        if _REAPER_STARTED or IDLE_TIMEOUT <= 0:
+            return
+        _REAPER_STARTED = True
+    threading.Thread(target=_idle_reaper_loop, name="sessiond-idle-reaper",
+                     daemon=True).start()
+    log.info("idle reaper started (timeout=%.0fs scan=%.0fs)",
+             IDLE_TIMEOUT, IDLE_SCAN_INTERVAL)

@@ -291,6 +291,7 @@ def interp(store, op='', session='', cmd='', **kw):
                        "error": "socket-mode (agentd task) session: reload "
                                 "not available (lifecycle owned by agentd "
                                 "runner)"}, '403 Forbidden')
+        b.note_activity()   # 去保活：主动操作计在场/空闲时钟（任务 ja0vr7）
         r = b.sup.reload()
         if not r.get("ok"):
             return _j({"ok": False,
@@ -306,6 +307,7 @@ def interp(store, op='', session='', cmd='', **kw):
                                 "runner)"}, '403 Forbidden')
         # 保留会话路径、清空全部内容：杀会话进程→截断 jsonl 到 0 + 去 replica 标记→立即重拉（顺序在
         # Supervisor.clear 内保证：先杀透再删，防旧进程把内存历史回写）。
+        b.note_activity()   # 去保活：主动操作计在场/空闲时钟（任务 ja0vr7）
         r = b.sup.clear()
         if not r.get("ok"):
             return _j({"ok": False,

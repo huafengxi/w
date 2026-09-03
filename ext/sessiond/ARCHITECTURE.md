@@ -73,7 +73,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 | 项 | 值/语义 |
 |---|---|
-| 状态 `state` | `idle → starting → running`；进程退出瞬间 `restarting`；熔断 `disabled` |
+| 状态 `state` | `idle → starting → running`；进程退出瞬间 `restarting`；熔断 `disabled`；懒态 `dormant`（去保活，见下小节：无在场崩溃/空闲回收后转入，下次访问复活） |
 | 世代 `gen` | 每次 spawn +1；前端据此做基线自愈 |
 | 崩溃退避 | `2^n` 秒，上限 `BACKOFF_MAX=30s`；`sessiond.session_restarting{delay}` 广播 |
 | 熔断 | `FAIL_WINDOW=300s` 窗口内连续崩溃超 `FAIL_LIMIT=6` → `disabled`，停监督，广播 `sessiond.session_disabled`；仅 `reload/clear` 可解除 |
@@ -86,7 +86,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 就位等待 | `proc.py:wait_ready` 默认 25s（覆盖清场 15s + SIGTERM 3s + spawn 余量） |
 
 **生命周期帧**（监督员经 `on_event` 广播，入事件环下发）：
-`sessiond.session_restarting{session, delay[, reload]}`、`sessiond.session_restarted{session, gen, pid}`、`sessiond.session_disabled{session}`。
+`sessiond.session_restarting{session, delay[, reload]}`、`sessiond.session_restarted{session, gen, pid}`、`sessiond.session_disabled{session}`、`sessiond.session_dormant{session, reason}`（去保活转懒态，前端 flash 提示）。
 
 ### 探针扩展（任务 s0f1la）
 
@@ -111,21 +111,18 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 **跨宿主守卫**（`proc.py:host_guard`，任务 8nherl 最小版）：唯一守卫点 = `Supervisor.__init__`（建桥接即建监督员，是会话进程在本机被拉起的唯一咽喉）。目标会话文件命中某 `.agent` 声明者推导（`<sessionDir>/<agent名>.jsonl`，`assistant/**` 递归，与 `_resolve_agent` 同口径）且声明 `host` ≠ 本机（`env/host-id` 查表）→ `ValueError` 拒绝（经 `get_bridge` 传播，api/stream 回 400 + 「请通过 <host> 的服务访问」指引）；本机身份不可得 = 配置错误，命中声明者拒绝放行；无声明者会话零波及。
 
-### resident 常驻会话（任务 02mi7r，票 su068s）
+### 去保活语义（任务 ja0vr7，设计 du44uj；resident 机制已退役）
 
-背景：会话原本仅懒拉起（首次访问建桥接时 spawn）——夜间无人开页则会话进程不存在，会话内扩展（如调度员 receiver）不运行，`participant/<名>/inbox` 通知积压。resident = 声明即常驻：
+定位收敛：sessiond = 浏览器聊天载体/观测层（懒拉起 + 在场订阅期间监督）；常驻/自愈语义统一归 agentd（生产调度员 = `bot/dev-dispatcher` agentd 常驻进程型 bot，见 §10 透传链路）。原 resident 钩子（`resident.py` + `core/wsgi.py` ready 钩子）已删除。
 
 | 项 | 语义 |
 |---|---|
-| 声明 | `.agent` JSON 可选字段 `"resident": true`（仅布尔 true 生效）；且须声明 `host` == 本机规范名 |
-| 启动时机 | web 启动 ready 钩子：`core/wsgi.py:run_use_wsgiserver` 在 `fork_as_daemon` **之后**、`server.start()` 之前调 `resident.py:bootstrap()`（fork 前创建的监督线程不进子进程，故钩子必须在 fork 后；懒导入 + try/except，失败不阻塞服务） |
-| 扫描面 | `resident.py:_mount_roots` 解析 `w/stores/fstab`（与 build_root_store 同口径）取 Dir/Enc 类型挂载的本地根（去重、剔除被包含子根），`os.walk` 不跟随符号链接、剪枝 `.git`/`node_modules`/`__pycache__`，找全部 `*.agent` |
-| 入选条件 | `resident is True` 且 `host == _self_host()`（env/host-id 查表）；本机身份不可得 → 整体跳过不猜测（与 host_guard 同口径）。他机 web 启动扫到同一 .agent（~/m 跨机同步）但 host ≠ 本机 → 不拉起 |
-| 启动参数 | 与 `rpc/api.py:_resolve_agent` 同口径：会话文件 = `<sessionDir 缺省 .agent 所在目录>/<名>.jsonl`（含 run 软链区站内路径还原）；cwd = 显式 `cwd` 字段，缺省 = .agent 所在目录；先 `set_session_cwd` 登记再 `get_bridge`（建桥即过 host_guard 守卫点）→ `ensure_started` 起监督线程 → `_spawn`。**无 attach / get_entries、不等待** |
-| 自拉起 | 零新代码：监督循环既有崩溃退避重拉（2^n，≤30s）天然覆盖——resident = 监督线程常驻不退出；熔断行为与普通会话一致（仅 reload/clear 解除，无专属自恢复）。本无用户 stop 操作；reload/clear 杀后重拉语义不变 |
-| 幂等 | `bootstrap()` 模块级一次性标志；每会话失败只记日志跳过，不影响其它会话与服务 |
-| 零波及 | 非 resident `.agent` 与 `.jsonl` 直开的懒拉起语义完全不变；重启竞态由既有 `_clear_stale_proc` 旧宿主清场兜底 |
-| 现网声明 | 仅 `assistant/dev-dispatcher/dev-dispatcher.agent`（主调度员单点常驻）；`nv1-dispatcher` 后备实例保持懒拉起（用户拍板 02mi7r） |
+| 在场判定 | `bridge.py:has_presence`：① SSE 订阅数 > 0，或② 距最近一次活动（attach 基线/cmd 上行/reload/clear/commands/inspect，`note_activity` 记录）< `PRESENCE_GRACE`（env `SESSIOND_PRESENCE_GRACE`，缺省 300s，防「刚 attach 还没开流」窗口误判）。`Supervisor.presence_check` 钩子由桥接注入 |
+| 崩溃不重拉 | 监督循环崩溃分支：有在场 → 退避重拉/熔断（逻辑逐字不变）；无在场 → 广播 `sessiond.session_dormant`、置 `state=dormant`、监督循环退出（不重拉、不计崩溃） |
+| 复活 | 懒态桥接的下次访问（attach/cmd）经 `ensure_started` 重起监督循环（熔断态仍需 reload 解锁，不变），语义回到懒拉起 |
+| 空闲回收 | `bridge.py` 模块级单守护线程（`_idle_scan`，周期 `SESSIOND_IDLE_SCAN` 缺省 60s）：`state=running ∧ 无订阅 ∧ 距最近活动 > IDLE_TIMEOUT ∧ jsonl mtime 老化 > IDLE_TIMEOUT（文件不存在 = 从未写盘，算空闲）` → `Supervisor._idle_reap()` 优雅杀转懒态（不计崩溃）。`IDLE_TIMEOUT` = env `SESSIOND_IDLE_TIMEOUT`，缺省 900s，0=关。排除 SocketSupervisor（生命周期属 agentd） |
+| 拉起权单点 | 用户硬约束（2026-09-03）：① 拉起/复活归 agentd 监督（对登记者）；② 有 `spec.json` 的 agentd 登记者（/agents/(task\|bot)/…）web 只透传、**永不 spawn**，缺席时浏览器入口显示不可用/等待（§10 三态）；③ 裸 jsonl 拉起废除——`get_bridge` 对非路由路径仅当 `_CWD_OVERRIDES` 有登记（= 经 `op=agent` 解析的 .agent 声明者）才拉起，未登记直开 → 400 提示；**.agent 声明者是 web 唯一拉起入口** |
+| 浏览器不弄坏 | 有 tab 打开 = 有订阅 = 有在场 → 崩溃退避重拉、熔断、多 tab 语义逐字不变；变化仅在「无人看」之后（不重拉/空闲回收），前端只见休眠提示帧 |
 
 ---
 
@@ -351,23 +348,26 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 
 ---
 
-## 10. 任务会话（agentd rpc 封装形态，任务 ybzvbn / 票 hegipc）
+## 10. agentd 登记会话（任务与常驻，rpc 封装形态；任务 ybzvbn / 票 hegipc，去保活二期 ja0vr7 泛化）
 
-任务会话与 bot 会话在本系统内同构：`/agents/task/<taskId>/session/session.jsonl?v=chat` 直开即聊天窗，前端零改动，契约全对齐 §3–§5。生命周期所有权在 agentd runner（web = 纯 attach 客户端，无杀权）。
+task/bot 两族在本系统内同构：`/agents/(task|bot)/<名>/session/session.jsonl?v=chat` 直开即聊天窗，前端零改动，契约全对齐 §3–§5。生命周期所有权在 agentd runner（web = 纯 attach 客户端，无杀权、**零启动权**：只透传、永不 spawn）。
 
-### 路由判定（`proc.py:task_route`，get_bridge 内单一决策点，仅匹配任务会话路径）
+### 路由判定（`proc.py:agentd_route`，get_bridge 内单一决策点，匹配 `^/agents/(task|bot)/<名>/session/session.jsonl$`）
 
 | pid.json 状态 | 路由 | 行为 |
 |---|---|---|
-| `sock` 在场 ∧ pid 存活 ∧ 可连 | `SocketSupervisor` 直播 | 连接 `~/m/run/agentd/<taskId>.sock` 透传 pi rpc 字节流（封装脚本 `agentd/pi-rpc-wrap.py` 持有任务侧）；attach/cmd/events 全走透传，无自研语义 |
-| `final: true`（或无 pid.json） | 普通 Supervisor 复活 | 先 `set_session_cwd(spec.workdir)` 登记（53yjuc：首帧 cwd 决定扩展发现）再 spawn 重拉；终态任务复活续聊即此路径 |
-| 运行中且无 sock（旧形态） | 拒绝 400 | 双宿主风险指引（终态后自动可复活） |
+| `sock` 在场 ∧ pid 存活 ∧ 可连 | `SocketSupervisor` 直播 | 连接 `~/m/run/agentd/<名>.sock` 透传 pi rpc 字节流（封装脚本 `agentd/pi-rpc-wrap.py` 持有进程侧）；attach/cmd/events 全走透传，无自研语义 |
+| `final: true` | 拒绝 400 | 终态指引：生命周期归 agentd（如需续用经 `control restart` 换代），不复活不代拉 |
+| 无 pid.json / pid 不在 | 拒绝 400 | 缺席等待提示：拉起权单点 = agentd（restartPolicy=auto 自动拉起），请等待/稍候重试 |
+| `status: paused` | 拒绝 400 | 提示可经 `agentd control restart` 恢复（不当终态复活，防拉起无人监督的影子会话） |
 | spec.host ≠ 本机 | 拒绝 400 | 「请通过 <host> 的服务访问」（同 host_guard 口径） |
 | pid 活但 sock 不可连 | 拒绝 400 | 「观测通道未就绪，稍后重试」（启动窗口/封装异常降级提示） |
 
+常驻会话（如 `bot/dev-dispatcher`，spec.command 带 `AGENTD_RESIDENT=1` 前缀，见 `agentd/agent-file-protocol.md`）与任务会话同表同链路；浏览器入口即直播窗（进程缺席时显示等待提示，不代拉）。
+
 ### SocketSupervisor（`proc.py`，独立类，风险圈养）
 
-连接而非 spawn；**无杀权**（`reload/clear` 返回 `{ok:False}`，api 层 `inspect/reload/clear` 一律 403）；不与 Supervisor 共享生命周期机制（崩溃重拉/旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge ingest/事件环；`status_doc` 带 `mode:"socket"` + `sock` 路径。断连（任务收敛/被杀）= 监督终结：广播 `agentd.task_ended{session,reason}` 入环 → 标记桥接 `terminated`（`iter_events` 发完余帧停流）→ 摘除注册表 → 前端 1.5s 重连后重新路由（终态任务无缝转复活路径，任务结束自动变普通会话）。
+连接而非 spawn；**无杀权**（`reload/clear` 返回 `{ok:False}`，api 层 `inspect/reload/clear` 一律 403）；不与 Supervisor 共享生命周期机制（崩溃重拉/旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge ingest/事件环；`status_doc` 带 `mode:"socket"` + `sock` 路径。断连（任务收敛/被杀/常驻换代窗口）= 监督终结：广播 `agentd.task_ended{session,reason}` 入环 → 标记桥接 `terminated`（`iter_events` 发完余帧停流）→ 摘除注册表 → 前端 1.5s 重连后重新路由（新进程在场则重新直播；终态/缺席则按上表拒绝提示）。
 
 ### 观测面边界（协议 §11.12）
 
