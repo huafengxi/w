@@ -499,7 +499,7 @@ async function attach(name) {
   $("stream").innerHTML = "";
   curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
-  turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false;   // 重挂接重置等待指示（0829-2107-cvdn；间隙计时/收尾窗同清，0c736g）
+  turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false;   // 重挂接重置等待指示（0829-2107-cvdn；间隙计时/收尾窗/红框在场同清，0c736g/ilznlp）
   pendingSends = {}; queueState = {steering: [], followUp: []};
   toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重挂接丢弃（bw333x）
   curMsgCount = null; curCompacting = null; curGen = null; curRestarts = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
@@ -525,7 +525,7 @@ function applyBaseline(doc, initial) {
     $("stream").innerHTML = "";
     curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
     seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
-    turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; // 自愈重渲染重置（0829-2107-cvdn；间隙计时/收尾窗同清，0c736g）
+    turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false; // 自愈重渲染重置（0829-2107-cvdn；间隙计时/收尾窗/红框在场同清，0c736g/ilznlp）
     pendingSends = {}; queueState = {steering: [], followUp: []};
     toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重渲染丢弃（bw333x）
     retryBoxEl = null; lastRenderedErrorMsg = null;     // 回合状态重置（0829-2131-pdop）
@@ -828,7 +828,7 @@ function handleEvent(o) {
   if (document.hidden && t === "message_start" && !turnActive) beep("notify");
   if (document.hidden && (t === "sessiond.error" || t === "extension_ui_request")) beep("notify");
   if (t === "agent_settled") { beep("done"); collapseProcessGroups();   // 回合彻底落定 → 组折叠（0830-1039-a6vy）
-    turnActive = false; hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; }               // settled = 无重试/无 compaction/无队列续跑终态：busy 态收敛兜底（0c736g，防 agent_end 缺失的异常路径挂住等待指示与 follow_up 排队判定）
+    turnActive = false; hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false; }               // settled = 无重试/无 compaction/无队列续跑终态：busy 态收敛兜底（0c736g，防 agent_end 缺失的异常路径挂住等待指示与 follow_up 排队判定；红框在场同清，ilznlp）
   // turn_end 真实发射时序（pi-agent-core/dist/agent-loop.js:131）：toolResults 已入上下文之后、
   // 下一次模型调用之前发射，事件携带 toolResults 字段。因此非空 = 子回合以工具调用结束、
   // 模型即将再调（此刻起进入下一轮 TTFT 空白）→ showWaiting 保持/恢复等待指示；
@@ -841,7 +841,7 @@ function handleEvent(o) {
                                                         // 收尾窗内间隙静默检测挂起防误导（0c736g）
   }
   if (t === "agent_end") {
-    turnActive = false; hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false;
+    turnActive = false; hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false;
     collapseProcessGroups();                            // agent run 结束 → 自动折叠过程组（0830-1039-a6vy）
   }
   if (t === "response") { handleCmdResponse(o); }       // 上行命令回执（0829-2115-zvti）
@@ -885,10 +885,10 @@ function renderEvent(o) {
       resolvePendingByMessage(m);             // 待发条目转正（0829-2115-zvti）
       renderUserMessage(m);                     // 流式渲染：文本 + 图片缩略图（同一入口，内含 turnGroup 重置）
       curAssistantEl = null; curAssistantBuf = "";
-      turnActive = true; awaitingAgentEnd = false;   // 回合开始：等模型首个产出（0829-2107-cvdn；收尾窗标志重置，0c736g）
+      turnActive = true; awaitingAgentEnd = false; errorBoxLive = false;   // 回合开始：等模型首个产出（0829-2107-cvdn；收尾窗标志重置，0c736g；红框在场清除，ilznlp）
       showWaiting();
     } else if (m.role === "assistant") {
-      hideWaiting(); awaitingAgentEnd = false;  // 模型已开始输出本轮消息（0829-2107-cvdn；新产出即出收尾窗，0c736g）
+      hideWaiting(); awaitingAgentEnd = false; errorBoxLive = false;  // 模型已开始输出本轮消息（0829-2107-cvdn；新产出即出收尾窗，0c736g；红框在场清除，ilznlp）
       curAssistantEl = addDiv("role-assistant md", "");
       curAssistantBuf = "";
       lastRenderedErrorMsg = null;              // 新消息开始，重置错误去重键（0829-2131-pdop）
@@ -1027,6 +1027,7 @@ function renderErrorBox(text) {
   const s = String(text || "").trim();
   if (!s || s === lastRenderedErrorMsg) return;
   lastRenderedErrorMsg = s;
+  errorBoxLive = true;                              // 红框在场：抑制间隙静默的"等模型"误导（ilznlp，见 gapTimerFire）
   hideWaiting();                                  // 与 waiting 行同现时优先展示错误（0829-2107-cvdn 协调）
   const d = addDiv("errbox", "");
   d.textContent = "Error: " + s;
@@ -1035,7 +1036,9 @@ function renderErrorBox(text) {
 // Retrying 警告框：auto_retry_start → 聊天流末橙/黄框；
 // auto_retry_end success → 移除（+ flash 恢复提示），failure → 原地转红框常驻。
 function showRetryBox(o) {
-  hideWaiting();                                  // 重试等待期间由警告框代言，不与 waiting 行重叠
+  hideWaiting();
+  errorBoxLive = false;                           // 重试框接管代言，红框在场抑制移交（ilznlp）
+  // 重试等待期间由警告框代言，不与 waiting 行重叠
   const sec = (typeof o.delayMs === "number") ? Math.max(1, Math.round(o.delayMs / 1000)) : null;
   let msg = "Retrying (" + (o.attempt || 1) + "/" + (o.maxAttempts || "?") + ")"
     + (sec != null ? " in " + sec + "s" : "") + "\u2026";
@@ -1062,6 +1065,7 @@ function endRetryBox(o) {
     d.textContent = txt;
   }
   lastRenderedErrorMsg = null;                    // 后续同文错误帧仍可出框（语义已不同）
+  errorBoxLive = true;                            // 转红框常驻 = 错误红框在场，同口径抑制（ilznlp）
   scrollStream();
 }
 
@@ -1088,6 +1092,10 @@ function hideWaiting() {
 // 收尾窗标志（0c736g）：turn_end 空 toolResults → 其后只可能接 agent_end，模型不再被调用，
 // 此窗内静默不应出"等模型"指示；下一轮产出（user/assistant message_start）或终态重置清除。
 let awaitingAgentEnd = false;
+// 错误红框在场标志（任务 ilznlp）：renderErrorBox 仅 hideWaiting 未抑制间隙检测——
+// stopReason=error 的 message_end 后、agent_end/auto_retry_start 前的静默窗会在红框下
+// 误示"等模型"。红框渲染时置位，随 awaitingAgentEnd 同款生命周期重置点清除。
+let errorBoxLive = false;
 let gapTimer = null;
 const GAP_MS = 2500;
 function armGapTimer() {
@@ -1101,6 +1109,7 @@ function gapTimerFire() {
   gapTimer = null;
   if (!turnActive || waitingEl || retryBoxEl) return;
   if (awaitingAgentEnd) return;                            // 收尾窗：只等 agent_end，非等模型
+  if (errorBoxLive) return;                                // 错误红框在场：错误即当前态，不误导"等模型"（ilznlp）
   if (document.querySelector(".tool-block.run")) return;   // 工具执行中：块色态即进行指示，不误导"等模型"
   if (Object.keys(pendingDialogs).length) return;          // 等用户应答 dialog，非等模型
   showWaiting();
