@@ -1043,6 +1043,31 @@ def agentd_route(session_path):
             "（restartPolicy=auto 会自动拉起），请稍候重试" % participant_id)
 
 
+def agentd_spec_workdir(participant_id):
+    """agentd 参与方声明的工作目录（任务 8r0tww）：读 agents/<族>/<名>/spec.json 的
+    `workdir` 字段——= agentd runner 拉起会话进程的 cwd（runner 侧口径：
+    os.path.expanduser(workdir)，`~/` 按执行机 $HOME 展开，绝对路径 no-op，
+    agentd/runner.py 同款）。participant_id = 路径式两段 id（如 task/<id>、
+    bot/<名>，agentd_route 载荷来源）。
+    读取失败（id 非法/文件缺失/坏 JSON/缺字段/非字符串）一律 → None：不猜缺省，
+    调用方显 `?`。"""
+    if not isinstance(participant_id, str):
+        return None
+    parts = participant_id.split("/")
+    if len(parts) != 2 or not all(parts) or any(".." in x for x in parts):
+        return None
+    try:
+        with open(os.path.join(WS, "agents", parts[0], parts[1],
+                               "spec.json")) as f:
+            spec = json.load(f)
+    except (OSError, ValueError):
+        return None
+    wd = spec.get("workdir") if isinstance(spec, dict) else None
+    if not isinstance(wd, str) or not wd.strip():
+        return None
+    return os.path.expanduser(wd.strip())
+
+
 def agentd_entry(session_path):
     """agentd 族会话入口归一（任务 60grqq，用户拍板：入口唯一化）。
     HTTP 请求入口层前置（rpc/api.py + rpc/stream.py 两处单点调用）：
