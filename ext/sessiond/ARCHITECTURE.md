@@ -367,7 +367,7 @@ task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径�
 
 ### SocketSupervisor（`proc.py`，独立类，风险圈养）
 
-连接而非 spawn；**无杀权**——生命周期属 agentd runner：`reload/clear` 不在本类执行（类内返回 `{ok:False}` 作纵深防御），api 层对 socket 会话把二者**改道代理 agentd 控制动词**（任务 dsuqbi）：`op=clear` → `control/clear`（弃历史换代：杀进程→备份会话文件至 `run/backup/`→截断 session.jsonl→空白新代）、`op=reload` → `control/restart`（保历史换代）——写 `control/<id>.req` → 轮询等 `control/ack/<id>` → 返回 `{ok, gen, outcome, detail}`；跨机参与者维持拒绝（建桥咽喉 + 代理内按 spec.host 纵深校验）；`inspect` 仍 403（任务进程不注入探针扩展）。不与 Supervisor 共享生命周期机制（崩溃重拉/旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge ingest/事件环；`status_doc` 带 `mode:"socket"` + `sock` 路径 + `participant_id`（代理寻址依据）。断连（任务收敛/被杀/常驻换代窗口，含 clear/restart 换代的杀进程窗口）= 监督终结：广播 `agentd.task_ended{session,reason}` 入环 → 标记桥接 `terminated`（`iter_events` 发完余帧停流）→ 摘除注册表 → 前端重连后重新路由（新进程在场则重新直播；终态/缺席则按上表拒绝提示）。
+连接而非 spawn；**无杀权**——生命周期属 agentd runner：`reload/clear` 不在本类执行（类内返回 `{ok:False}` 作纵深防御），api 层对 socket 会话把二者**改道代理 agentd 控制动词**（任务 dsuqbi）：`op=clear` → `control/clear`（弃历史换代：杀进程→备份会话文件至 `run/backup/`→截断 session.jsonl→空白新代）、`op=reload` → `control/restart`（保历史换代）——写 `control/<id>.req` → 轮询等 `control/ack/<id>` → 返回 `{ok, gen, outcome, detail}`；跨机参与者维持拒绝（建桥咽喉 + 代理内按 spec.host 纵深校验）；`inspect` 放行：探针扩展由封装脚本 `agentd/pi-rpc-wrap.py` -e 注入（与 proc.py:_spawn 同款口径），握手链路复用（存量旧进程无探针 → 502「probe dump file missing」）。不与 Supervisor 共享生命周期机制（崩溃重拉/旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge ingest/事件环；`status_doc` 带 `mode:"socket"` + `sock` 路径 + `participant_id`（代理寻址依据）。断连（任务收敛/被杀/常驻换代窗口，含 clear/restart 换代的杀进程窗口）= 监督终结：广播 `agentd.task_ended{session,reason}` 入环 → 标记桥接 `terminated`（`iter_events` 发完余帧停流）→ 摘除注册表 → 前端重连后重新路由（新进程在场则重新直播；终态/缺席则按上表拒绝提示）。
 
 ### 观测面边界（协议 §11.12）
 

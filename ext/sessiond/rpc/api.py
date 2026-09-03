@@ -10,7 +10,8 @@
 #              extension 斜杠命令 / prompt 模板 / skill；仅注册了斜杠命令的 extension 出现）
 #   op=inspect  探针转储（任务 s0f1la）：经 -e 注入的探针扩展命令 sessiond-inspect
 #              取当前系统提示词全文 + 工具清单（侧车文件握手，见 bridge.py:inspect）；
-#              不进事件环、不进 jsonl，payload 走本 HTTP 响应
+#              不进事件环、不进 jsonl，payload 走本 HTTP 响应；
+#              socket 会话同款支持：探针由封装脚本 agentd/pi-rpc-wrap.py -e 注入
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
@@ -370,13 +371,10 @@ def interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "commands": r["commands"]})
     if op == 'inspect':
-        # socket 模式（agentd 任务会话，任务 ybzvbn）：任务进程不注入探针扩展，
-        # 且生命周期属 runner——inspect/reload/clear 类会话级操作一律拒绝。
-        if isinstance(b.sup, _proc.SocketSupervisor):
-            return _j({"ok": False,
-                       "error": "socket-mode (agentd task) session: inspect "
-                                "not available (lifecycle owned by agentd "
-                                "runner)"}, '403 Forbidden')
+        # socket 会话（agentd 任务/常驻）：探针扩展由封装脚本 agentd/pi-rpc-wrap.py
+        # -e 注入（与 proc.py:_spawn 同款），握手链路复用 b.inspect()——只读转储，
+        # 无生命周期动作，不再拒绝（原 403 口径废除）；探针未加载（存量旧进程）
+        # 则回 502「probe dump file missing」。
         r = b.inspect()
         if not r["ok"]:
             return _j({"ok": False, "session": b.session,

@@ -1669,15 +1669,13 @@ async function doReload() {
 // 不再弹 window.confirm——仅针对普通会话。）healBusy 暂置抦住 SSE gen 变化的并发自愈（本处自接管
 // 重挂接，两者同为全量重拉，幂等）。
 // socket 会话（agentd 管理，任务 dsuqbi）：op=clear 后端改道代理 control/clear
-//（杀进程→备份→截断→空白新代）；破坏性动作加二次确认（文案注明清空对话历史）；
+//（杀进程→备份→截断→空白新代）；二次确认已废除（用户拍板，与普通会话同口径）；
 // 成功后走 heal 重试环重挂接（新代拉起+绑 socket 有秒级窗口）。
 async function doClear() {
   if (!attached) { flash("Not attached to a session, cannot clear", "err"); return; }
   if (healBusy) return;
   let sockMode = false;
   try { const st = await api("status", {session: attached}); sockMode = st.mode === "socket"; } catch (e) {}
-  if (sockMode && !window.confirm("清空对话历史？\n\n该会话由 agentd 管理：对话历史将被"
-      + "永久清空（服务端保留备份），会话进程将以空白会话重启。")) return;
   healBusy = true;
   flash("Clearing session…");
   try {
