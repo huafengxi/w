@@ -87,6 +87,22 @@ def display_name(real_path):
     return os.path.basename(real_path)[:-len(".jsonl")]
 
 
+def declared_display_name(session_file):
+    """.agent 声明者指定的展示名（bot 布局第 4 期，任务 ocfidc，plan §4.10
+    显示名退路）：声明者带非空 `name` 字段且推导会话文件 == 目标 → 返回该名字；
+    否则 None（回落 display_name 的 basename 规则）。对外会话标识（如
+    `bot/dev-dispatcher`）由此带族前缀，与会话文件所在族目录口径一致；
+    pi --name 是显示名，不受 session id 字符约束。"""
+    for _name, _host, derived, spec in _scan_agent_declarations():
+        if derived != session_file:
+            continue
+        declared = spec.get("name")
+        if isinstance(declared, str) and declared.strip():
+            return declared.strip()
+        return None
+    return None
+
+
 def resolve_cwd(cwd):
     """显式 cwd 校验（任务 fw2ll1）：与会话路径同一根集（~/m + run 运行时区），
     realpath 前缀校验防穿越/符号链接逃逸；非法抛 ValueError（调用方回 400）。
@@ -157,7 +173,7 @@ def _claim_origin(path):
 
 
 def _scan_agent_declarations():
-    """递归扫 assistant/**/*.agent，yield (agent名, host, 推导会话文件 realpath)。
+    """递归扫 assistant/**/*.agent，yield (agent名, host, 推导会话文件 realpath, spec)。
     坏文件/缺 host 宽容跳过（守卫只拦可判定的声明者）。"""
     for dirpath, _dirnames, filenames in os.walk(os.path.join(WS, "assistant")):
         for fn in filenames:
@@ -178,7 +194,7 @@ def _scan_agent_declarations():
             base = (os.path.realpath(os.path.expanduser(sd.strip()))
                     if isinstance(sd, str) and sd.strip() else dirpath)
             yield name, host.strip(), os.path.realpath(
-                os.path.join(base, name + ".jsonl"))
+                os.path.join(base, name + ".jsonl")), spec
 
 
 def _self_host():
@@ -202,7 +218,7 @@ def host_guard(session_file):
     """跨宿主守卫（唯一守卫点）：目标会话文件若命中某 .agent 声明者推导的会话文件，
     且声明者 host ≠ 本机 → ValueError 拒绝（消息含声明机访问指引）；命中声明者但本机
     身份不可得 → ValueError 配置错误；无声明者（普通会话）→ 放行，零影响。"""
-    for name, host, derived in _scan_agent_declarations():
+    for name, host, derived, _spec in _scan_agent_declarations():
         if derived != session_file:
             continue
         me = _self_host()
@@ -297,7 +313,8 @@ class Supervisor:
                 self.session_file = resolve_session_path(session_path)
         else:
             self.session_file = resolve_session_path(session_path)
-        self.name = display_name(self.session_file)
+        self.name = (declared_display_name(self.session_file)
+                     or display_name(self.session_file))
         host_guard(self.session_file)   # 跨宿主守卫唯一守卫点（任务 8nherl）
         # cwd 由调用方显式传入（任务 fw2ll1：.agent cwd/dir 拆分，经 bridge 转交）；
         # 缺省 = jsonl 所在目录（.jsonl 直开路径行为不变，cwd1）。

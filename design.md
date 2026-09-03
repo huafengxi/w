@@ -74,13 +74,22 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
 多余字段宽容；缺字段/坏 JSON 有明确错误提示。文件放 ~/m 服务树内（如
 `~/m/assistant/dispatcher.agent`）；agent 名 = 文件名。
 
-**字段（2026-08-31 用户拍板最终形态）**：只留 `host` + 可选 `sessionDir`——
+**字段（2026-08-31 用户拍板最终形态）**：必填 `host` + 可选 `cwd`/`sessionDir`/`participant`/`resident`/`name`——
 
-- **cwd（隐含）= .agent 文件所在目录**：会话进程的 pi 工作目录，决定加载哪个
+- **cwd（缺省 = .agent 文件所在目录）**：会话进程的 pi 工作目录，决定加载哪个
   工作区的 AGENTS/扩展（如 `~/m/assistant/*.agent` → cwd=`~/m/assistant` → 命中
   `assistant/.pi` 全套扩展与 `assistant/AGENTS.md`）。天然在 ~/m 服务树内，无逃逸问题。
 - **`sessionDir`（可选）= 会话目录**：会话 jsonl 的落盘处，也是跨机可观测的
   bot 目录。缺省 = cwd 目录（会话文件落在 .agent 旁边，最朴素形态）。
+- **`cwd`（可选，票 7t0ufv）= 显式工作目录**：覆盖缺省的「.agent 所在目录」（~/ 展开，
+  与会话路径同一根集校验防逃逸）。调度员会话用它实现「cwd=assistant 加载全套扩展
+  + 会话文件另落」的拆分。
+- **`participant`（可选，epic.f0j2a1）= 职位信箱（路径式参与方 id，如 `bot/dispatcher`）**：
+  receiver 声明者回落的收件目录来源（DISPATCH.md §8）。
+- **`resident`（可选，票 su068s）= 常驻声明**：`true` 且 host==本机 → web 启动即拉起，
+  崩溃自 respawn（resident.py）。
+- **`name`（可选，bot 布局第 4 期，任务 ocfidc）= 会话展示名（= pi --name）**：
+  缺省 = 会话文件 basename（proc.py display_name）；声明者带此字段则用之——bot 族常驻会话由此带族前缀（如 `bot/dev-dispatcher`），对外会话标识与目录族对齐（plan §4.10 显示名退路；显示名不受 session id 字符约束）。
 - **`host` v1 边界**：仅持久化保存（存于 .agent 文件）+ 随 `op=agent` 响应返回 +
   聊天页可见；不做跨机拉起。
 - **旧 `workdir` 字段（kcywpy v1）不再识别**：读到忽略并记日志提示，不报错。

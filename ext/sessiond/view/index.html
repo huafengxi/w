@@ -2111,10 +2111,10 @@ if (AGENT) {
   // 双宿主盲区警示（任务 0829-2052-rnfe）：/agents/ 下的 .jsonl 可能是其它机制以
   // pi --session 打开的活跃会话（如子任务会话）；8080 的 SESSIOND_SESSION_FILE
   // 识别域看不见外部宿主，继续操作可能对同一文件再起进程。只警告不拦截。
-  // 豁免（任务 kcywpy）：/agents/participant/ 是 .agent 会话的约定归属地，
+  // 豁免（任务 kcywpy；bot 布局同步，任务 ocfidc）：/agents/bot/ 是 .agent 会话的约定归属地，
   // 由 sessiond 自家拉起，无外部宿主风险，不闪警告。
   if (SESSION.split("/").includes("agents")
-      && !SESSION.startsWith("/agents/participant/")) {
+      && !SESSION.startsWith("/agents/bot/")) {
     flash("⚠ This session lives under /agents/ and may be an active session owned by "
       + "another host (e.g. a subtask). 8080 cannot see external hosts; continuing may "
       + "double-host the same session file — proceed with care.", "err");
