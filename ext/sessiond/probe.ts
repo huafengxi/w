@@ -11,8 +11,10 @@
  * 落盘），由 sessiond 后端 op=inspect 编排（发命令→等回执→读文件→HTTP 返回，
  * 见 ext/sessiond/bridge.py:inspect）。不走 pi 事件流/jsonl，零会话污染。
  *
- * 健壮性：加载失败只进 pi 的 errors 数组不阻塞启动；命令 handler 整体
- * try/catch，异常也写 error payload 到同一侧车文件，绝不拖垮会话。
+ * 健壮性（实测口径，与 proc.py PROBE_EXT 注释同步）：pi 对 -e 扩展的加载（语法）
+ * 错误是致命的（启动即退出）；运行期异常（命令/钩子）只发 extension_error 不崩进程。
+ * 故探针保持极小面，命令 handler 整体 try/catch，异常也写 error payload 到同一侧车文件，
+ * 绝不拖垮会话。
  * 无事件钩子、无工具、无后台资源，加载面最小。
  */
 

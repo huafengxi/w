@@ -244,6 +244,44 @@ def pid_alive(pid):
     return True
 
 
+def _proc_starttime(pid):
+    """读 /proc/<pid>/stat 第 22 字段 starttime（自开机时钟节拍，不受系统时钟调整影响）。
+    同口径 agentd/proto.py proc_starttime（§5.5 杀纪律）：非 Linux/进程不存在/读解析失败 → None。"""
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            data = f.read()
+    except OSError:
+        return None
+    # comm（第 2 字段）可含空格与括号：取最后一个 ')' 之后的部分 = 第 3..N 字段
+    try:
+        return int(data.rsplit(")", 1)[1].split()[22 - 3])  # 第 22 字段 → rest[19]
+    except (IndexError, ValueError):
+        return None
+
+
+def pid_identity_ok(pid, expected_start):
+    """(pid, procStart) 双件判活（同口径 agentd/proto.py pid_identity_ok，§5.5 杀纪律，
+    评审 vdckko 攒批②）：pid 只是可被操作系统随时复用的编号，不是身份；身份 =
+    (pid, procStart) 二元组，procStart = spawn 时记录的内核启动时刻。
+    True = 身份一致（视为存活）；False = 目标已消失（/proc 不存在或 pid 被复用）。
+    无记录身份（expected_start 缺失，非 Linux/遗留档案）时回退裸 kill(pid,0) 探测
+    （已知取舍：不防 pid 复用，非 Linux 无更优手段，与 agentd 同口径）。"""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        expected_start = int(expected_start)
+    except (TypeError, ValueError):
+        expected_start = None
+    if expected_start is None:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    live = _proc_starttime(pid)
+    return live is not None and live == expected_start
+
+
 def is_pi_host(pid):
     """宿主身份交叉校验（纵深防御，任务 p0h6fk）：environ 标记单独不构成宿主证据——
     任何旁观进程只要 environ 带标记（如从带标记 shell 继承启动的 scheduler，
@@ -938,9 +976,11 @@ class SocketSupervisor:
 # 打开 /agents/(task|bot)/<名>/session/session.jsonl 时按 pid.json 判路由；
 # 用户硬约束（2026-09-03）：凡 agentd 登记者（有 spec.json）web/sessiond **零启动**——
 # 只桥接透传、永不 spawn，三态全不落普通 Supervisor：
-#   活 socket 在场（sock 字段 ∧ pid 存活 ∧ 可连） → SocketSupervisor 直播
+#   活 socket 在场（sock 字段 ∧ (pid,procStart) 身份一致 ∧ 可连） → SocketSupervisor 直播
 #   已终态（final）                              → 拒绝并指引（生命周期归 agentd）
-#   缺席（无 pid.json ∨ 进程不在）               → 等待提示（拉起权单点 = agentd）
+#   缺席（无 pid.json ∨ 进程身份消失 ∧ 无 sock）  → 等待提示（拉起权单点 = agentd）
+#   sock 在场但进程身份消失（封装已退出未落终态） → 拒绝并等待（等终态落盘/自动拉起）
+#   进程活但无 sock（旧形态运行中）              → 拒绝（双宿主风险，协议 §11.12）
 #   status=paused                                → 拒绝并提示 control restart
 # 跨机：spec.host ≠ 本机规范名 → 拒绝 + 指引（同 host_guard 口径）。
 # 注：路径命中但目录下无 spec.json（如测试/临时目录）时仍按登记会话口径三态判定，
@@ -984,7 +1024,8 @@ def agentd_route(session_path):
     """agentd 登记会话路由判定（task/bot 两族，去保活二期 ja0vr7）。
     返回 None（非登记会话路径，零影响）或 (mode, payload)：
       ("live",   {"sock": <透传端点>, "participant_id": <族/名>}) → SocketSupervisor 直播
-      ("reject", <错误消息>)   → 终态/缺席等待/暂停/跨机/通道未就绪（调用方抛 ValueError；
+      ("reject", <错误消息>)   → 终态/缺席等待/暂停/跨机/通道未就绪/封装已退出等终态/
+                                  旧形态运行中双宿主（调用方抛 ValueError；
                                   登记者一律不 spawn，硬约束②）
     """
     p = _site_path(session_path)
@@ -1033,11 +1074,25 @@ def agentd_route(session_path):
                 "该会话已暂停（%s），可经 agentd control restart 恢复"
                 % participant_id)
     sock = doc.get("sock")
-    if isinstance(sock, str) and sock and pid_alive(doc.get("pid")):
-        if _sock_live(sock):
-            return ("live", {"sock": sock, "participant_id": participant_id})
+    # 判活 = (pid, procStart) 双件口径（评审 vdckko 攒批②）：裸 pid 探测有 pid 复用误判面。
+    pid_ok = pid_identity_ok(doc.get("pid"), doc.get("procStart"))
+    if isinstance(sock, str) and sock:
+        if pid_ok:
+            if _sock_live(sock):
+                return ("live", {"sock": sock, "participant_id": participant_id})
+            return ("reject",
+                    "会话观测通道未就绪（启动中或封装进程异常），请稍后重试：%s" % sock)
+        # sock 在场但进程身份已消失：封装进程已退出而 runner 尚未落终态（评审 vdckko 攒批③：
+        # 旧 catch-all 文案对此场景不准）。等待终态落盘；终态后如需续用经 control restart 换代。
         return ("reject",
-                "会话观测通道未就绪（启动中或封装进程异常），请稍后重试：%s" % sock)
+                "封装进程已退出，等待 agentd 落终态（%s）：收敛中，请稍候重试"
+                "（restartPolicy=auto 会自动拉起；若已终态，续用经 agentd control restart 换代）"
+                % participant_id)
+    if pid_ok:
+        # 进程存活但无 sock = 旧形态运行中：拒绝（双宿主风险，协议 §11.12）。
+        return ("reject",
+                "旧形态运行中会话不可打开（%s）：打开会与任务进程双宿主写同一 jsonl；"
+                "实时观测需新形态（pi-rpc-wrap）" % participant_id)
     return ("reject",
             "会话进程缺席（%s，无活跃观测通道）：拉起/复活归 agentd 监督"
             "（restartPolicy=auto 会自动拉起），请稍候重试" % participant_id)

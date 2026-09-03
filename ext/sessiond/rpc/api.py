@@ -275,7 +275,7 @@ def _resolve_agent(store, session):
                   '400 Bad Request')
     # sessionDir = 会话目录：可选字段；缺省 = .agent 文件所在目录（2026-08-31 用户拍板，
     # 票 7t0ufv：会话 jsonl = 宿主本地运行时状态，落 agent 自家目录，不共享 cwd 工作区/
-    # 参与方同步目录；扩展侧声明者回落同口径，core.ts findAgentDeclarerForSession）。
+    # 参与方同步目录）。
     dir_val = spec.get("sessionDir")
     if dir_val is None:
         agent_site_dir = _posixpath.dirname(p)

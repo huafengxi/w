@@ -356,12 +356,14 @@ task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径�
 
 | pid.json 状态 | 路由 | 行为 |
 |---|---|---|
-| `sock` 在场 ∧ pid 存活 ∧ 可连 | `SocketSupervisor` 直播 | 连接 `~/m/run/agentd/<名>.sock` 透传 pi rpc 字节流（封装脚本 `agentd/pi-rpc-wrap.py` 持有进程侧）；attach/cmd/events 全走透传，无自研语义 |
+| `sock` 在场 ∧ (pid,procStart) 身份一致 ∧ 可连 | `SocketSupervisor` 直播 | 连接 `~/m/run/agentd/<名>.sock` 透传 pi rpc 字节流（封装脚本 `agentd/pi-rpc-wrap.py` 持有进程侧）；attach/cmd/events 全走透传，无自研语义；判活 = 双件口径（评审 vdckko 攒批②，防 pid 复用，同口径 `agentd/proto.py pid_identity_ok`） |
 | `final: true` | 拒绝 400 | 终态指引：生命周期归 agentd（如需续用经 `control restart` 换代），不复活不代拉 |
-| 无 pid.json / pid 不在 | 拒绝 400 | 缺席等待提示：拉起权单点 = agentd（restartPolicy=auto 自动拉起），请等待/稍候重试 |
+| 无 pid.json / 进程身份消失 ∧ 无 sock | 拒绝 400 | 缺席等待提示：拉起权单点 = agentd（restartPolicy=auto 自动拉起），请等待/稍候重试 |
+| `sock` 在场但进程身份已消失（封装已退出、runner 未落终态） | 拒绝 400 | 「封装进程已退出，等待 agentd 落终态」（评审 vdckko 攒批③文案修正：旧 catch-all 对此场景不准），附自动拉起/换代指引 |
+| 进程存活但无 `sock`（旧形态运行中） | 拒绝 400 | 双宿主风险（协议 §11.12）：打开会与任务进程双写同一 jsonl；实时观测需新形态 |
 | `status: paused` | 拒绝 400 | 提示可经 `agentd control restart` 恢复（不当终态复活，防拉起无人监督的影子会话） |
 | spec.host ≠ 本机 | 拒绝 400 | 「请通过 <host> 的服务访问」（同 host_guard 口径） |
-| pid 活但 sock 不可连 | 拒绝 400 | 「观测通道未就绪，稍后重试」（启动窗口/封装异常降级提示） |
+| 身份一致但 sock 不可连 | 拒绝 400 | 「观测通道未就绪，稍后重试」（启动窗口/封装异常降级提示） |
 
 常驻会话（如 `bot/dev-dispatcher`，spec.command 带 `AGENTD_RESIDENT=1` 前缀，见 `agentd/agent-file-protocol.md`）与任务会话同表同链路；浏览器入口即直播窗（进程缺席时显示等待提示，不代拉）。
 
