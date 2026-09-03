@@ -359,7 +359,9 @@ let lastGen = null;           // 会话进程世代（gen 变化检测 → 基�
 let curLeafId = null;         // 活跃分支叶
 let curProvider = null;       // 当前模型 provider/modelId（model_change 跟踪，/model 用）
 let curModelId = null;
-// .agent 会话宿主可见性（任务 8k7awi）：op=agent 回执保存，斜杠提示条第 4 行展示；缺失显 ?
+// 会话宿主可见性（任务 8k7awi；任务 bjhzvj 补齐普通会话）：斜杠提示条第 4 行展示；缺失显 ?。
+// 双数据源：.agent 会话 = op=agent 回执（resolveAgentAndAttach，优先，不被覆盖）；
+// 普通会话 = op=status 附加字段回填（sendStatusQuery，attach 基线完成后即拉）。
 let agentHost = null;
 let agentWorkDir = null;
 let agentSessionDir = null;
@@ -498,6 +500,7 @@ async function attach(name) {
   pendingSends = {}; queueState = {steering: [], followUp: []};
   toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重挂接丢弃（bw333x）
   curMsgCount = null; curCompacting = null; curGen = null; curRestarts = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
+  agentHost = null; agentWorkDir = null; agentSessionDir = null;  // 宿主可见性随重挂接重置（任务 bjhzvj；.agent 会话由 resolveAgentAndAttach 在 attach 后重填）
   curCtx = null;                                      // 上下文占用随重挂接重置（0830-1324-3qet）
   retryBoxEl = null; lastRenderedErrorMsg = null;       // 回合状态重置（0829-2131-pdop）
   renderQueuedPanel();                                  // 待发/队列面板随清屏重置（0829-2115-zvti）
@@ -557,6 +560,7 @@ function renderBranchSliced(branch, doc) {
     stickyBottom = true; scrollStream(true);       // attach/heal 基线落地 → 强制回底并恢复跟随（0830-1544-q9rr）
     sendGetState();                              // 基线完成 → 拉权威模型/思考强度（0830-1257-vwzb）
     sendCtxStats();                              // 基线完成 → 拉上下文占用（0830-1324-3qet）
+    sendStatusQuery();                           // 基线完成 → 拉 host/workDir/sessionDir 等（任务 bjhzvj；回填内部 !AGENT 门控）
   };
   const slice = () => {
     // 进入时 batchDepth 已为 1（入口/续片保持），渲染全程维持 → scrollStream 被抑制；
@@ -1620,6 +1624,13 @@ function sendStatusQuery() {
     if (d && d.ok) {
       curGen = (typeof d.gen === "number") ? d.gen : curGen;
       curRestarts = (typeof d.restarts === "number") ? d.restarts : curRestarts;
+      // 普通会话 host/workDir/sessionDir 回填（任务 bjhzvj）：.agent 会话仍以
+      // op=agent 回执为准（resolveAgentAndAttach），此处不覆盖；缺值保留 `?`。
+      if (!AGENT) {
+        if (d.host) agentHost = d.host;
+        if (d.sessionDir) agentSessionDir = d.sessionDir;
+        if (d.workDir) agentWorkDir = d.workDir;
+      }
       refreshSlashNoticeIfVisible();
     }
   }).catch(() => {}).finally(() => { statusQueryInFlight = false; });
@@ -1741,7 +1752,8 @@ function slashStatusLine() {
     + " \u00b7 gen: " + (curGen == null ? "?" : curGen)
     + " \u00b7 restarts: " + (curRestarts == null ? "?" : curRestarts);
   if (curCompacting) l2 += " \u00b7 compacting\u2026";
-  // 第 4 行（任务 8k7awi）：.agent 会话宿主信息，数据源 = op=agent 回执（见 resolveAgentAndAttach）
+  // 第 4 行（任务 8k7awi；bjhzvj 补齐普通会话）：.agent 会话数据源 = op=agent 回执；
+  // 普通会话数据源 = op=status 附加字段（见 sendStatusQuery）
   const l4 = "host: " + (agentHost || "?") + " \u00b7 workDir: " + (agentWorkDir || "?")
     + " \u00b7 sessionDir: " + (agentSessionDir || "?");
   return l1 + "\n" + l2 + "\n" + ctxStatusText() + "\n" + l4;
@@ -2170,9 +2182,10 @@ function backToBottom() {
 async function resolveAgentAndAttach() {
   try {
     const doc = await api("agent", {session: AGENT});
-    // 保存宿主信息到模块级变量（任务 8k7awi），供斜杠提示条第 4 行展示
+    await attach(doc.session);   // attach 开头清屏，可见性信息须在其后落行；且 attach 会重置三变量（任务 bjhzvj）
+    // 保存宿主信息到模块级变量（任务 8k7awi），供斜杠提示条第 4 行展示；
+    // .agent 会话以本回执为准，不被 sendStatusQuery 回填覆盖（!AGENT 门控）
     agentHost = doc.host; agentWorkDir = doc.cwd; agentSessionDir = doc.sessionDir;
-    await attach(doc.session);   // attach 开头清屏，可见性信息须在其后落行
     // host/cwd/sessionDir 可见性（任务 fw2ll1）：attach 后一行系统消息（host v1 = 仅保存/可见，
     // 会话在本 8080 主机本地拉起；跨机路由为后续能力，见 design.md）。
     sysLine("agent " + doc.name + ": host=" + doc.host + " · cwd=" + doc.cwd

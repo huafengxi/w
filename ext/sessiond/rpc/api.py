@@ -3,7 +3,10 @@
 # 会话按路径管理（`session` 参数必填 = 站内 .jsonl 路径，如 /assistant/foo.jsonl；
 # 校验锁定 ~/m 内，见 proc.resolve_session_path），由 web 进程内各会话监督员
 # （ext/sessiond/proc.py）直接监督，无管理面：
-#   op=status  该会话状态（state/pid/gen/restarts/cwd/session_file）
+#   op=status  该会话状态（state/pid/gen/restarts/cwd/session_file）；另附斜杠状态行第 4 行
+#              可见性三值（任务 bjhzvj）：host（本机规范名，env/host-id 查表）/sessionDir
+#              （= session_file dirname）/workDir（会话进程真实在跑时的拉起 cwd，
+#              未拉起/socket 模式 → null，前端显 `?`，不猜测）
 #   op=attach  建桥 + 经 pi rpc get_entries 返回消息基线（全量）
 #   op=cmd     上行单条 pi 命令
 #   op=commands 该会话实际加载的可发现命令清单（任务 a16jpj：pi rpc get_commands 转发；
@@ -347,7 +350,18 @@ def interp(store, op='', session='', cmd='', **kw):
     if err:
         return err
     if op == 'status':
-        return _j(dict(ok=True, **b.sup.status_doc()))
+        doc = dict(ok=True, **b.sup.status_doc())
+        # 斜杠状态行第 4 行可见性三值（任务 bjhzvj）：服务端既有数据，无新造——
+        # host 复用 _self_host()（env/host-id 查表，同 host_guard 口径）；sessionDir =
+        # session_file 的 dirname；workDir 仅当会话进程真实在跑（state=running ∧ pid）
+        # 时给 status_doc 的拉起 cwd，未拉起 / socket 模式（pid 恒 None，进程归 agentd
+        # runner，cwd 不可知）→ null，前端显 `?`。既有 cwd 字段原样保留（调试口径不变）。
+        doc["host"] = _proc._self_host()
+        sf = doc.get("session_file") or ""
+        doc["sessionDir"] = _os.path.dirname(sf) if sf else None
+        doc["workDir"] = doc.get("cwd") if (doc.get("state") == "running"
+                                            and doc.get("pid")) else None
+        return _j(doc)
     if op == 'attach':
         r = b.get_entries()                      # 全量基线
         if not r["ok"]:
