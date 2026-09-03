@@ -237,6 +237,18 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   border-radius: 10px; padding: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.15);
   display: none; z-index: 10; }
 #dialogBox h4 { margin: 0 0 6px; color: var(--warn); }
+/* dialog 收起为药丸（任务 ytqsqc）：收起按钮 ≥24px 命中区防误触；
+   药丸锚定同一角落、不侵入对话流宽度，样式跟随既有设计变量 */
+#dialogMethodRow { display: flex; align-items: center; gap: 6px; }
+#dialogMethodRow h4 { flex: 1; margin: 0; }
+#dialogCollapse { min-width: 24px; min-height: 24px; padding: 0 6px; line-height: 1;
+  background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 6px; cursor: pointer; }
+#dialogPill { position: fixed; right: 18px; bottom: 80px; display: none;
+  align-items: center; gap: 8px; max-width: 90vw; background: var(--panel2);
+  border: 1px solid var(--warn); border-radius: 16px; padding: 8px 14px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.25); font-size: 13px; cursor: pointer; z-index: 10; }
+#dialogPillTimeout { color: var(--warn); white-space: nowrap; }
 #dialogTitle { white-space: pre-wrap; word-break: break-word; margin-bottom: 10px; }
 #dialogOpts { display: flex; flex-direction: column; gap: 6px; }
 #dialogOpts button { text-align: left; }
@@ -267,8 +279,15 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 
 <button id="toBottomBtn" class="hidden" onclick="backToBottom()">↓ 回到底部</button>
 
+<button id="dialogPill" onclick="expandDialog()">
+  <span id="dialogPillText"></span><span id="dialogPillTimeout"></span>
+</button>
+
 <div id="dialogBox">
-  <h4 id="dialogMethod">dialog</h4>
+  <div id="dialogMethodRow">
+    <h4 id="dialogMethod">dialog</h4>
+    <button id="dialogCollapse" title="Collapse" onclick="collapseDialog()">&ndash;</button>
+  </div>
   <div id="dialogTitle"></div>
   <input id="dialogInput" class="hidden" placeholder="Type here…">
   <div id="dialogOpts"></div>
@@ -1283,11 +1302,39 @@ function showDialog(o) {
   const id = o.id;
   pendingDialogs[id] = o;
   const box = $("dialogBox");
-  if (box.style.display === "block" && box.dataset.did !== String(id)) {
+  if (dialogShowing() && box.dataset.did !== String(id)) {
     sysLine("⚠ Another dialog queued [" + (o.method || "?") + "] id=" + id, "warn");
     return;
   }
   showDialogNow(o);
+}
+// 收起/展开（任务 ytqsqc）：纯前端显示态，不动 pendingDialogs/倒计时/应答链路。
+// 收起 = 盒子隐藏、同角落药丸显示（方法名 + 实时倒计时继续递减）；展开反之。
+function dialogShowing() {
+  return $("dialogBox").style.display === "block" || $("dialogPill").style.display === "flex";
+}
+function collapseDialog() {
+  if (!$("dialogBox").dataset.did) return;
+  $("dialogBox").style.display = "none";
+  updateDialogPill();
+  $("dialogPill").style.display = "flex";
+}
+function expandDialog() {
+  $("dialogPill").style.display = "none";
+  if ($("dialogBox").dataset.did) $("dialogBox").style.display = "block";
+}
+function updateDialogPill() {
+  const o = pendingDialogs[$("dialogBox").dataset.did];
+  $("dialogPillText").textContent = "❓ " + (o ? (o.method || "dialog") : "pending question") + " · click to answer";
+  updatePillCountdown();
+}
+function updatePillCountdown(remain) {
+  const el = $("dialogPillTimeout");
+  if (remain == null) {
+    if (!dialogDeadline) { el.textContent = ""; return; }
+    remain = Math.max(0, Math.ceil((dialogDeadline - Date.now()) / 1000));
+  }
+  el.textContent = remain > 0 ? remain + "s" : "settling…";
 }
 function showDialogNow(o) {
   const id = o.id;
@@ -1338,11 +1385,12 @@ function showDialogNow(o) {
 function startDialogCountdown(timeoutMs) {
   stopDialogCountdown();
   const el = $("dialogTimeout");
-  if (!timeoutMs) { el.textContent = ""; return; }
+  if (!timeoutMs) { el.textContent = ""; dialogDeadline = 0; updatePillCountdown(); return; }
   dialogDeadline = Date.now() + timeoutMs;
   const tick = () => {
     const remain = Math.max(0, Math.ceil((dialogDeadline - Date.now()) / 1000));
     el.textContent = "Auto-settle in " + remain + "s";
+    updatePillCountdown(remain);
     if (remain <= 0) stopDialogCountdown();
   };
   tick();
@@ -1369,20 +1417,28 @@ async function replyDialog(fields) {
 function castId(id) { const o = pendingDialogs[id]; return o ? o.id : id; }
 function closeDialog(id, note) {
   delete pendingDialogs[id];
+  const wasCollapsed = $("dialogPill").style.display === "flex";
   if ($("dialogBox").dataset.did === String(id)) {
     $("dialogBox").style.display = "none";
+    $("dialogPill").style.display = "none";
     stopDialogCountdown();
     $("dialogTimeout").textContent = "";
   }
   sysLine("dialog " + id + " " + note);
   const next = Object.keys(pendingDialogs)[0];
-  if (next) showDialogNow(pendingDialogs[next]);
+  if (next) {
+    showDialogNow(pendingDialogs[next]);
+    // 收起态下队首更替（超时/被代答）→ 药丸继续反映新队首，不弹回大盒子。
+    if (wasCollapsed) collapseDialog();
+  }
 }
 function clearPendingDialogs() {
   pendingDialogs = {};
   $("dialogBox").style.display = "none";
+  $("dialogPill").style.display = "none";
   stopDialogCountdown();
   $("dialogTimeout").textContent = "";
+  $("dialogPillTimeout").textContent = "";
 }
 
 // ---------------- 上行 ----------------
