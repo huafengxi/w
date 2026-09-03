@@ -56,7 +56,7 @@ DIALOG_METHODS = {"select", "confirm", "input", "editor"}
 class Bridge:
     """单个会话路径的进程内事件环 + 命令通道（按路径注册，见 get_bridge）。"""
 
-    def __init__(self, session_path, cwd=None, sock_path=None):
+    def __init__(self, session_path, cwd=None, sock_path=None, participant_id=None):
         # 站内路径（如 /assistant/foo.jsonl）；解析/校验在 Supervisor 内。
         self._site_path = session_path
         self.session = None      # 展示名，待监督员解析后回填
@@ -81,7 +81,8 @@ class Bridge:
         if sock_path:
             self.sup = _proc.SocketSupervisor(self._site_path,
                                               on_event=self._ingest,
-                                              sock_path=sock_path)
+                                              sock_path=sock_path,
+                                              participant_id=participant_id)
             self.terminated = False          # 断连终结标记（iter_events 停流依据）
             self.sup.on_lost = self._socket_lost
         else:
@@ -526,7 +527,8 @@ def get_bridge(session_path):
                 if mode == "reject":
                     raise ValueError(payload)
                 sock_path = payload["sock"]    # live 唯一放行态：只透传不 spawn（硬约束②）
-                b = Bridge(session_path, sock_path=sock_path)
+                b = Bridge(session_path, sock_path=sock_path,
+                           participant_id=payload.get("participant_id"))
             else:
                 with _CWD_OVERRIDES_LOCK:
                     cwd = _CWD_OVERRIDES.get(key)

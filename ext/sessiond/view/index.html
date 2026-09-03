@@ -1640,12 +1640,22 @@ function sendCtxStats() {
 // 去二次确认，任务 0830-1132-7yh5：/reload 直接执行，不再弹 window.confirm，与 /clear 同口径）。
 // （干净进程 = extension 全新加载）。重连由现有缺口/自愈机器承接：
 // 监督员广播 session_restarting(reload)/session_restarted(gen+1) → gen 变化 → 基线自愈。
+// socket 会话（agentd 管理，任务 dsuqbi）：op=reload 后端改道代理 control/restart
+//（保历史换代）；破坏性低不加二次确认（决策记录），成功后走 heal 重试环重挂接新代。
 async function doReload() {
   if (!attached) { sysLine("Not attached to a session, cannot reload", "err"); return; }
-  flash("Session reloading…");
-  sysLine("Reloading session " + attached + ": kill + resume…");
+  let sockMode = false;
+  try { const st = await api("status", {session: attached}); sockMode = st.mode === "socket"; } catch (e) {}
+  if (!sockMode) flash("Session reloading…");
+  sysLine("Reloading session " + attached + (sockMode
+    ? ": agentd control/restart（保历史重启进程）…" : ": kill + resume…"));
   try {
     const r = await api("reload", {session: attached});
+    if (sockMode) {
+      // 换代窗口秒级：复用 heal 自愈重试环重挂接（attach 失败会重试）
+      heal("reload (agentd control)");
+      return;
+    }
     sysLine("Reload issued, waiting for restart heal…");
   } catch (e) {
     sysLine("Reload failed: " + e.message, "err");
@@ -1656,15 +1666,27 @@ async function doReload() {
 // 进程级 clear（任务 0829-2238-atnj；4l3de8 改截断）：直接调 op=clear（杀会话进程→截断 jsonl→
 // 立即重拉空起点），保留会话路径清空全部内容；成功后自行重挂接空基线 +
 // 英文 flash。（用户拍板去二次确认，任务 0830-1130-z9gb：/clear 直接执行，
-// 不再弹 window.confirm。）healBusy 暂置抦住 SSE gen 变化的并发自愈（本处自接管
+// 不再弹 window.confirm——仅针对普通会话。）healBusy 暂置抦住 SSE gen 变化的并发自愈（本处自接管
 // 重挂接，两者同为全量重拉，幂等）。
+// socket 会话（agentd 管理，任务 dsuqbi）：op=clear 后端改道代理 control/clear
+//（杀进程→备份→截断→空白新代）；破坏性动作加二次确认（文案注明清空对话历史）；
+// 成功后走 heal 重试环重挂接（新代拉起+绑 socket 有秒级窗口）。
 async function doClear() {
   if (!attached) { flash("Not attached to a session, cannot clear", "err"); return; }
   if (healBusy) return;
+  let sockMode = false;
+  try { const st = await api("status", {session: attached}); sockMode = st.mode === "socket"; } catch (e) {}
+  if (sockMode && !window.confirm("清空对话历史？\n\n该会话由 agentd 管理：对话历史将被"
+      + "永久清空（服务端保留备份），会话进程将以空白会话重启。")) return;
   healBusy = true;
   flash("Clearing session…");
   try {
     const r = await api("clear", {session: attached});
+    if (sockMode) {
+      healBusy = false;
+      heal("clear (agentd control)");   // 换代窗口秒级：attach 失败自愈环会重试
+      return;
+    }
     stopStream();
     const doc = await api("attach", {session: attached});   // 空基线重挂接（全量）
     applyBaseline(doc, false);

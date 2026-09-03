@@ -100,7 +100,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 容错 | 运行期异常（命令/钩子）→ pi 发 `extension_error` 不崩进程，且探针 handler 内部自包 try/catch（异常也写 error payload 进侧车文件）；**但 pi 对 `-e` 扩展的加载（语法）错误是致命的**（启动直接退出，与自动发现扩展的 errors 收集不同）——探针保持极小面（只一个命令、无钩子），`_spawn` 仅在文件存在时注入，语法回归由发版前的会话实测闸门拦截 |
 | 命名排查记录 | 内置命令（dist 全量枚举：/changelog /clone /compact /debug /export /fork /model /reload /resume 等）、已装包命令（curator/goal/google-account/plan/search/websearch）、用户扩展（无命令）、agentd 项目扩展（无命令）、pi 自带 llama——均无冲突 |
 
-**reload / clear**（`proc.py:reload` / `proc.py:clear`，共用 `_kill_and_restart`）：
+**reload / clear**（`proc.py:reload` / `proc.py:clear`，共用 `_kill_and_restart`；**socket 会话不走本表**——改道代理 agentd `control/restart|clear`，见 §5 SocketSupervisor 段，任务 dsuqbi）：
 
 | op | 语义 | 顺序保证 |
 |---|---|---|
@@ -165,8 +165,8 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | `cmd` | `cmd`（JSON 字符串，须为含 `type` 的对象） | `{ok: true}` | 上行单条 pi 命令，经 `bridge.py:send`；被拦截/无悬空 dialog/stdin 不可写 → 403 | 400 JSON 解析失败或非对象/无 type；403 `send` 返回错误 |
 | `commands` | — | `{ok, session, commands}` | 只读查询会话已加载命令清单（`bridge.py:get_commands` → pi rpc `get_commands` 转发，任务 a16jpj；前端消费方 = /inspect 面板，任务 de3opk）；仅注册了斜杠命令的 extension 出现，见 §3 | 502 超时/不就位/被拒 |
 | `inspect` | — | `{ok, session, inspect:{ok, generatedAt, sessionFile, cwd, toolCount, tools[], systemPrompt}}` | 探针转储（任务 s0f1la）：经 `-e` 注入的探针扩展命令取当前系统提示词全文 + 工具清单（侧车文件握手，见 §3/§2 探针小节）；payload 几十 KB 走本 HTTP 响应，不进事件环/jsonl | 502 超时/不就位/被拒/侧车文件缺失 |
-| `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时） | 502 重拉超时等失败 |
-| `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因） | 502 失败（含删文件失败） |
+| `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时）。**socket 会话**：代理 `control/restart`（保历史换代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 重拉超时等失败；socket 代理 504 等回执超时 / 409 `rejected`（已 final）/ 403 跨机 |
+| `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因）。**socket 会话**：代理 `control/clear`（弃历史换代：杀→备份 `run/backup/`→截断→空白新代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 失败（含删文件失败）；socket 代理 504 等回执超时 / 409 `rejected`（已 final/备份失败）/ 403 跨机 |
 | 未知 | — | — | — | 400 `unknown op` |
 
 attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries 响应行的事件环 ID，前端用它作为续流游标。
@@ -367,7 +367,7 @@ task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径�
 
 ### SocketSupervisor（`proc.py`，独立类，风险圈养）
 
-连接而非 spawn；**无杀权**（`reload/clear` 返回 `{ok:False}`，api 层 `inspect/reload/clear` 一律 403）；不与 Supervisor 共享生命周期机制（崩溃重拉/旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge ingest/事件环；`status_doc` 带 `mode:"socket"` + `sock` 路径。断连（任务收敛/被杀/常驻换代窗口）= 监督终结：广播 `agentd.task_ended{session,reason}` 入环 → 标记桥接 `terminated`（`iter_events` 发完余帧停流）→ 摘除注册表 → 前端 1.5s 重连后重新路由（新进程在场则重新直播；终态/缺席则按上表拒绝提示）。
+连接而非 spawn；**无杀权**——生命周期属 agentd runner：`reload/clear` 不在本类执行（类内返回 `{ok:False}` 作纵深防御），api 层对 socket 会话把二者**改道代理 agentd 控制动词**（任务 dsuqbi）：`op=clear` → `control/clear`（弃历史换代：杀进程→备份会话文件至 `run/backup/`→截断 session.jsonl→空白新代）、`op=reload` → `control/restart`（保历史换代）——写 `control/<id>.req` → 轮询等 `control/ack/<id>` → 返回 `{ok, gen, outcome, detail}`；跨机参与者维持拒绝（建桥咽喉 + 代理内按 spec.host 纵深校验）；`inspect` 仍 403（任务进程不注入探针扩展）。不与 Supervisor 共享生命周期机制（崩溃重拉/旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge ingest/事件环；`status_doc` 带 `mode:"socket"` + `sock` 路径 + `participant_id`（代理寻址依据）。断连（任务收敛/被杀/常驻换代窗口，含 clear/restart 换代的杀进程窗口）= 监督终结：广播 `agentd.task_ended{session,reason}` 入环 → 标记桥接 `terminated`（`iter_events` 发完余帧停流）→ 摘除注册表 → 前端重连后重新路由（新进程在场则重新直播；终态/缺席则按上表拒绝提示）。
 
 ### 观测面边界（协议 §11.12）
 

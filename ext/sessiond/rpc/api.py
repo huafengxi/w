@@ -70,6 +70,100 @@ def _baseline_doc(b, r):
             "watermark": r.get("watermark")}
 
 
+# ---------------- agentd 控制面代理（任务 dsuqbi） ----------------
+# socket-mode（agentd_route）会话的生命周期属 agentd runner，sessiond 无杀权：
+# 会话级 clear/reload 改道为向参与方 control/ 写控制请求（与 stop/pause/restart 同族
+# 协议，见 agentd/agent-file-protocol.md §4.3/§5.2）：写请求 → 轮询等回执 → 返回结果。
+#   op=clear  → control/clear（弃历史换代：杀进程→备份会话文件→截断→空白新代）
+#   op=reload → control/restart（保历史换代）
+# 跨机维持拒绝：建桥咽喉（agentd_route）已拒跨机会话，此处再按 spec.host 纵深防御一道。
+
+AGENTD_CONTROL_TIMEOUT = 30.0   # 等回执超时（杀进程+备份+换代通常秒级）
+AGENTD_CONTROL_POLL = 0.2
+
+
+def _agentd_control_proxy(b, action, reason):
+    """socket 会话代理 control 动词：写 <adir>/control/<id>.req → 轮询 control/ack/<id>。
+    返回响应元组：{ok, session, gen?, outcome?, detail?}。"""
+    sup = b.sup
+    pid_ = getattr(sup, "participant_id", None)
+    if not pid_ or pid_.count("/") != 1:
+        return _j({"ok": False,
+                   "error": "socket session without participant id; cannot "
+                            "proxy control/%s" % action}, '500 Internal Server Error')
+    family, name = pid_.split("/", 1)
+    adir = _os.path.join(_proc.WS, "agents", family, name)
+    # 跨机纵深防御（拉起/生命周期归登记机；建桥咽喉已拦一道）
+    try:
+        with open(_os.path.join(adir, "spec.json")) as f:
+            host = (_json.load(f) or {}).get("host")
+    except (OSError, ValueError):
+        host = None
+    me = _proc._self_host()
+    if isinstance(host, str) and host.strip() and me is not None \
+            and host.strip() != me:
+        return _j({"ok": False,
+                   "error": "该会话宿主=%s，控制面请通过 %s 的服务发起（本机=%s）"
+                            % (host.strip(), host.strip(), me)}, '403 Forbidden')
+    # 不依赖 agentd/proto（w 仓独立）：自拼信封文件名与原子落盘（口径同协议 §4.3/§5.1）
+    import random as _random
+    import string as _string
+    import time as _time
+    ts = _time.strftime("%Y-%m-%d-%H-%M-%S", _time.localtime()) + \
+        (".%03d" % (int(_time.time() * 1000) % 1000))
+    rand = "".join(_random.choices(_string.ascii_lowercase + _string.digits, k=4))
+    rid = ts + "-web.sessiond-" + rand
+    cdir = _os.path.join(adir, "control")
+    req = {"id": rid, "from": "web.sessiond", "ts": ts,
+           "action": action, "reason": reason}
+    try:
+        _os.makedirs(cdir, exist_ok=True)
+        tmp = _os.path.join(cdir, ".tmp-%d-%s" % (_os.getpid(), rand))
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(_json.dumps(req, ensure_ascii=False, indent=1) + "\n")
+            f.flush()
+            _os.fsync(f.fileno())
+        _os.rename(tmp, _os.path.join(cdir, rid + ".req"))
+    except OSError as e:
+        return _j({"ok": False,
+                   "error": "write control/%s request failed: %s" % (action, e)},
+                  '500 Internal Server Error')
+    _log.info("agentd control proxy: %s %s -> %s", pid_, action, rid)
+    ack_path = _os.path.join(cdir, "ack", rid)
+    deadline = _time.monotonic() + AGENTD_CONTROL_TIMEOUT
+    ack = None
+    while _time.monotonic() < deadline:
+        try:
+            with open(ack_path) as f:
+                ack = _json.load(f)
+            break
+        except OSError:
+            _time.sleep(AGENTD_CONTROL_POLL)
+        except ValueError:
+            ack = None
+            _time.sleep(AGENTD_CONTROL_POLL)  # 半截文件下轮重读（协议 §11.6 同口径）
+    if ack is None:
+        return _j({"ok": False,
+                   "error": "control/%s ack not received within %.0fs "
+                            "(req %s)" % (action, AGENTD_CONTROL_TIMEOUT, rid)},
+                  '504 Gateway Timeout')
+    outcome = ack.get("outcome")
+    detail = ack.get("detail", "")
+    if outcome == "rejected":
+        return _j({"ok": False, "session": b.session, "outcome": outcome,
+                   "error": "control/%s rejected: %s" % (action, detail)},
+                  '409 Conflict')
+    gen = None
+    try:
+        with open(_os.path.join(adir, "pid.json")) as f:
+            gen = (_json.load(f) or {}).get("gen")
+    except (OSError, ValueError):
+        pass
+    return _j({"ok": True, "session": b.session, "gen": gen,
+               "outcome": outcome, "detail": detail,
+               "controlReq": rid})
+
+
 # ---------------- .agent 文件类型（任务 kcywpy；fw2ll1 cwd/sessionDir 拆分） ----------------
 # xxx.agent = agent 规格 JSON（字段参考 ~/m/agents/ 任务 spec.json 风格，多余字段宽容）。
 # 访问 /xxx.agent → 聊天视图，会话启动参数改从该 JSON 读取（用户拍板 2026-08-31）：
@@ -292,10 +386,10 @@ def interp(store, op='', session='', cmd='', **kw):
                    "inspect": r["doc"]})
     if op == 'reload':
         if isinstance(b.sup, _proc.SocketSupervisor):
-            return _j({"ok": False,
-                       "error": "socket-mode (agentd task) session: reload "
-                                "not available (lifecycle owned by agentd "
-                                "runner)"}, '403 Forbidden')
+            # socket 会话：代理 control/restart（保历史换代，任务 dsuqbi）
+            b.note_activity()
+            return _agentd_control_proxy(
+                b, "restart", "user /reload via socket session")
         b.note_activity()   # 去保活：主动操作计在场/空闲时钟（任务 ja0vr7）
         r = b.sup.reload()
         if not r.get("ok"):
@@ -306,10 +400,11 @@ def interp(store, op='', session='', cmd='', **kw):
                    "gen": r.get("gen"), "pid": r.get("pid")})
     if op == 'clear':
         if isinstance(b.sup, _proc.SocketSupervisor):
-            return _j({"ok": False,
-                       "error": "socket-mode (agentd task) session: clear "
-                                "not available (lifecycle owned by agentd "
-                                "runner)"}, '403 Forbidden')
+            # socket 会话：代理 control/clear（弃历史换代：杀进程→备份→截断→空白新代，
+            # 任务 dsuqbi）；跨机参与者维持拒绝（建桥咽喉 + 代理内纵深校验）。
+            b.note_activity()
+            return _agentd_control_proxy(
+                b, "clear", "user /clear via socket session")
         # 保留会话路径、清空全部内容：杀会话进程→截断 jsonl 到 0 + 去 replica 标记→立即重拉（顺序在
         # Supervisor.clear 内保证：先杀透再删，防旧进程把内存历史回写）。
         b.note_activity()   # 去保活：主动操作计在场/空闲时钟（任务 ja0vr7）
