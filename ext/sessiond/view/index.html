@@ -149,14 +149,13 @@ details summary::-webkit-details-marker { display: none; }
 .retrybox { margin: 4px 0; border: 1px solid #eed888;
   background: #fff8c5; border-radius: 8px; padding: 8px 10px; color: var(--warn);
   font-size: 13px; white-space: pre-wrap; word-break: break-word; }
-/* 探针面板（任务 s0f1la /inspect）：瞬态渲染进 #stream（不进 jsonl，heal/刷新
-   后消失，与 sysLine/flash 同类）；工具清单逐条 + 系统提示词全文限高滚动 */
+/* 探针面板（任务 s0f1la /inspect；任务 55qdzm 做减法：工具清单段删除——
+   系统提示词全文本身已含工具描述，重复渲染冗余）：瞬态渲染进 #stream
+   （不进 jsonl，heal/刷新后消失，与 sysLine/flash 同类）；/slash 命令段 +
+   系统提示词全文限高滚动 */
 .inspectbox { margin: 4px 0; border: 1px solid #c9d4e3; background: #f6f9fc;
   border-radius: 8px; padding: 6px 10px; font-size: 13px; }
 .inspectbox > summary { cursor: pointer; color: #46607e; }
-.inspectbox .tools { margin: 6px 0; font-size: 12px; }
-.inspectbox .tools div { margin: 1px 0; word-break: break-word; }
-.inspectbox .tools b { color: #25435f; }
 .inspectbox pre { font-size: 11px; margin: 4px 0; padding: 6px; background: #eef2f7;
   border-radius: 6px; max-height: 320px; overflow: auto; white-space: pre-wrap;
   word-break: break-word; }
@@ -1725,39 +1724,33 @@ function slashStatusLine() {
 }
 // ---------------- 已加载命令清单（任务 a16jpj 引入，de3opk 迁至 /inspect 面板） ----------------
 // 数据源 = op=commands（pi rpc get_commands）：会话实际加载的 extension 斜杠命令 /
-// prompt 模板 / skill。/inspect 打开时并行现拉（不缓存），渲染进探针面板独立段。
-// 展示规则沿用现状：extension/prompt 组逐条 `name — description`（desc 截 80 字符），
-// 单组超 CMD_GROUP_LIMIT 折叠为计数摘要；skill 组去 `skill:` 前缀逗号拼段（x6wp1z）。
+// prompt 模板。/inspect 打开时并行现拉（不缓存），渲染进探针面板独立段。
+// 任务 55qdzm 做减法：skill 组不再渲染——系统提示词全文本身已含 skill 清单，
+// 重复展示冗余（同批删除的还有工具清单段）；本段只留 /slash 命令（不在提示词里）。
+// 展示规则：extension/prompt 组逐条 `name — description`（desc 截 80 字符），
+// 单组超 CMD_GROUP_LIMIT 折叠为计数摘要。
 // 失败/空清单 → 该段不渲染、不闪 err（优雅降级）。
 // 局限：仅列出注册了斜杠命令的 extension；只注册工具/事件钩子的不出现（预期）。
-const CMD_GROUP_LIMIT = 8;          // extension/prompt 组展示条数阈值，超出折叠为计数摘要；skill 组逗号拼段不受限（a16jpj/x6wp1z）
+const CMD_GROUP_LIMIT = 8;          // extension/prompt 组展示条数阈值，超出折叠为计数摘要（a16jpj）
 const CMD_DESC_LIMIT = 80;          // description 截断长度（a16jpj）
 
 // 纯函数：入参为命令清单数组；非数组/空 → 返回 ""（调用方据此不渲染该段）。
 function loadedCommandsText(cmds) {
   if (!Array.isArray(cmds) || cmds.length === 0) return "";
-  const groups = {"extension": [], "prompt": [], "skill": []};
+  const groups = {"extension": [], "prompt": []};
   for (const c of cmds) {
     const src = c && c.source ? "" + c.source : "other";
+    if (src === "skill") continue;          // skill 清单在系统提示词全文里，不重复渲染（55qdzm）
     (groups[src] || (groups[src] = [])).push(c);
   }
-  const labels = {"extension": "extension", "prompt": "prompt", "skill": "skills"};
-  const order = ["extension", "prompt", "skill"];
+  const labels = {"extension": "extension", "prompt": "prompt"};
+  const order = ["extension", "prompt"];
   for (const src of Object.keys(groups)) if (order.indexOf(src) < 0) order.push(src);
   const lines = [];
   for (const src of order) {
     const list = groups[src];
     if (!list || !list.length) continue;
     const label = labels[src] || src;
-    if (src === "skill") {   // skill 组：名字逗号拼段，去 skill: 前缀，无描述、不折叠（x6wp1z）
-      const names = list.map(c => {
-        let n = (c && c.name) ? "" + c.name : "?";
-        if (n.indexOf("skill:") === 0) n = n.slice(6);
-        return n;
-      });
-      lines.push("\u00b7 " + label + ": " + names.join(", "));
-      continue;
-    }
     if (list.length > CMD_GROUP_LIMIT) { lines.push("\u00b7 " + label + ": " + list.length); continue; }
     for (const c of list) {
       let name = (c && c.name) ? "" + c.name : "?";
@@ -1831,7 +1824,7 @@ function handleSlash(msg) {
       // 任务 s0f1la：探针 = 后端 op=inspect（编排 -e 注入的探针扩展命令）；前端只拉取并渲染。
       // 任务 de3opk：已加载命令清单并行复用 op=commands 现拉（不缓存，面板每次打开按需拉取）；
       // commands 失败/空 → 该段不渲染、不闪 err，不拖累探针主体。
-      flash("Inspecting session (system prompt + tools)…");
+      flash("Inspecting session (system prompt + commands)…");
       Promise.all([
         api("inspect", {session: attached}),
         api("commands", {session: attached})
@@ -1860,8 +1853,10 @@ function handleSlash(msg) {
 
 // ---------------- 探针面板渲染（任务 s0f1la：op=inspect 转储） ----------------
 // 瞬态面板：追加进 #stream，不进 jsonl；heal/刷新后消失（与 sysLine/flash 同类，预期）。
-// 展示：工具清单逐条（名 + description 首行）+ 已加载命令清单段（任务 de3opk 从
-// slashNotice 迁入，数据源 = op=commands 前端并行拉取，cmds 为 null/空时该段不渲染）
+// 任务 55qdzm 做减法：删除工具清单段与 skill 段——系统提示词全文本身已含工具描述与
+// skill 清单，重复渲染冗余；转储里的 tools 字段保留不消费（探针/后端零改动）。
+// 展示：已加载 /slash 命令清单段（任务 de3opk 从 slashNotice 迁入，数据源 =
+// op=commands 前端并行拉取，仅 extension/prompt 组；cmds 为 null/空时该段不渲染）
 // + 系统提示词全文（限高滚动 <pre>）。
 function renderInspectPanel(doc, cmds) {
   if (!doc || typeof doc !== "object") {
@@ -1870,31 +1865,18 @@ function renderInspectPanel(doc, cmds) {
   if (doc.ok === false) {
     flash("Inspect probe error: " + (doc.error || "?"), "err"); return;
   }
-  const tools = Array.isArray(doc.tools) ? doc.tools : [];
   const prompt = typeof doc.systemPrompt === "string" ? doc.systemPrompt : "";
   const box = document.createElement("details");
   box.className = "ev inspectbox";
   box.open = true;
   const sum = document.createElement("summary");
-  sum.textContent = "Session inspect · " + tools.length + " tools · system prompt "
-    + prompt.length + " chars · " + (doc.generatedAt || "?");
+  sum.textContent = "Session inspect · system prompt " + prompt.length
+    + " chars · " + (doc.generatedAt || "?");
   box.appendChild(sum);
-  const tl = document.createElement("div");
-  tl.className = "tools";
-  for (const t of tools) {
-    const line = document.createElement("div");
-    const b = document.createElement("b");
-    b.textContent = (t && t.name) ? t.name : "?";
-    line.appendChild(b);
-    const desc = ((t && t.description) || "").split("\n")[0].trim();
-    if (desc) line.appendChild(document.createTextNode(" — " + trunc(desc, 160)));
-    tl.appendChild(line);
-  }
-  box.appendChild(tl);
   const cl = loadedCommandsText(cmds);        // null/空清单 → 该段不渲染、不闪 err（de3opk）
   if (cl) {
     const ch = document.createElement("div");
-    ch.textContent = "Loaded commands (extension/prompt/skill):";
+    ch.textContent = "Loaded slash commands (extension/prompt):";
     box.appendChild(ch);
     const cpre = document.createElement("pre");
     cpre.textContent = cl;
