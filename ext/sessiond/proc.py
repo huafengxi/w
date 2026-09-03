@@ -41,6 +41,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -124,18 +125,16 @@ LINE_LIMIT = 16 * 1024 * 1024  # 单行 JSONL 上限，超限丢弃该行（口�
 ORPHAN_GRACE = 15.0         # 等待旧宿主自然退出的宽限（秒）
 
 # 剥除调度/任务身份与上游会话身份（PI_* 经 make 链泄漏会投毒子进程的会话归属，
-# 实测案例：任务环境 PI_SESSION_FILE 漏进会话进程；p0h6fk 起整族 PI_ 前缀剥除，
-# 口径同 svc/svc.py）。
-ENV_SCRUB_EXACT = {"AGENTD_TASK", "AGENT_SELF", "AGENT_HOME", "AGENT_ROOT",
-                   "DISPATCH_TASK_ID"}
-ENV_SCRUB_PREFIXES = ("DISPATCH_TASK_", "PI_")
+# 实测案例：任务环境 PI_SESSION_FILE 漏进会话进程）。名单单一事实源 =
+# agentd/envscrub.py（任务 fsmkvy 收敛：原本处独立拷贝漂移，改与 svc/runner
+# 同源共享；keep 空集、不剥第三方 API key 族——会话进程用钥走自身配置路径）。
+sys.path.insert(0, os.path.join(WS, "agentd"))
+import envscrub  # noqa: E402
 
 
 def clean_env():
-    """剥除调度/任务身份环境变量（口径同 svc/svc.py clean_env）。"""
-    return {k: v for k, v in os.environ.items()
-            if k not in ENV_SCRUB_EXACT
-            and not any(k.startswith(p) for p in ENV_SCRUB_PREFIXES)}
+    """剥除调度/任务身份环境变量（口径单点 = agentd/envscrub.py）。"""
+    return envscrub.scrub_env()
 
 
 def _claim_origin(path):
