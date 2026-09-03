@@ -1761,7 +1761,8 @@ function handleSlash(msg) {
     }
     case "/image":
       // 任务 0830-1139-yao1：手机上粘贴取图别扭，低频场景用命令唤起系统文件选择器。
-      // 必须在本同步调用链内触发 input.click()（见 pickImages 注释）。
+      // click() 依赖用户手势激活：Enter → sendPrompt → handleSlash → pickImages 同步链内调用；
+      // Android 分支在 pickImages 内先 blur 收起软键盘、再延迟 ~250ms 触发 click()（见 pickImages 注释）。
       pickImages(); return;
     case "/inspect":
       // 任务 s0f1la：探针 = 后端 op=inspect（编排 -e 注入的探针扩展命令）；前端只拉取并渲染。
@@ -1872,6 +1873,11 @@ $("promptInput").addEventListener("paste", e => {
 // /image 命令（任务 0830-1139-yao1）：动态创建隐藏 file input 并程序化 click()，
 // 唤起系统文件选择器（手机弹相册/文件）。浏览器安全策略要求 click() 处于用户手势的
 // 同步调用链内：Enter → sendPrompt → handleSlash → pickImages，中途无 await，合法。
+// Android 分支（任务 hjgty3）：点发送瞬间软键盘收起触发视口重排，Android Chrome 会把
+// 选择器启动排到键盘动画之后 → 弹出延迟明显。故先 blur() 主动启动键盘收起，再延迟 250ms
+// 触发 inp.click()：延迟太短仍与键盘收起动画竞争，太长浪费瞬态激活窗口；250ms 在 Chrome
+// transient activation（~5s 有效期，setTimeout 不消耗激活）窗口内，仍可合法唤起 file input。
+// 桌面侧无软键盘，仅多 ~250ms，无功能差异。
 // 读取逻辑与粘贴取图同构：{mime, b64, dataUrl} push 进 pendingImages + renderAttachBar。
 function pickImages() {
   const inp = document.createElement("input");
@@ -1894,7 +1900,11 @@ function pickImages() {
   };
   inp.oncancel = () => inp.remove();                 // 用户取消也回收（现代浏览器支持）
   document.body.appendChild(inp);
-  inp.click();                                       // 同步触发，处于用户手势链内
+  // 任务 hjgty3：先 blur 启动软键盘收起（Android 上输入框聚焦着），再延迟 250ms 触发 click——
+  // 仍处瞬态用户激活窗口内（~5s，setTimeout 不使其失效），避开键盘收起动画的视口重排竞争。
+  const active = document.activeElement;
+  if (active && active !== document.body) active.blur();
+  setTimeout(() => inp.click(), 250);
 }
 function renderAttachBar() {
   const bar = $("attachBar");
