@@ -176,10 +176,17 @@ class Handler:
         if not vmeta.get('type'):
             return None
         try:
-            return do_view(self.store, vpath, vmeta, build_dict(meta, vmeta, args))
+            resp_meta, resp_body = do_view(self.store, vpath, vmeta, build_dict(meta, vmeta, args))
         except Exception as e:
             logging.error(traceback.format_exc())
             return dict(type='text/plain', http_status='500 Internal Server Error'), rpc_encode(None, traceback.format_exc())
+        # 聊天窗页 no-cache（任务 daigh0）：浏览器旧 tab 会驻留旧 JS 直到手动刷新，
+        # no-cache 让每次访问都回源校验。仅命中 sessiond 聊天视图（?v=chat、
+        # .jsonl/.agent/spec.json 各入口同款映射），不动其它资源缓存策略。
+        if vpath == '/sessiond/view/index.html':
+            resp_meta = dict(resp_meta, extra_headers=(resp_meta.get('extra_headers') or [])
+                             + [('Cache-Control', 'no-cache')])
+        return resp_meta, resp_body
 
 # setup script deps
 import sys
