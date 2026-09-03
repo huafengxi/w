@@ -3,6 +3,8 @@
 This is a document edit server. see [design.md](design.md).
 once deployed, you can creat file with special extensions for different purpose.
 
+> **SPA shell 路由**：GET 任意路径都返 200 + HTML 外壳，服务端无 404（真实性由客户端取内容时才见分晓）。因此页面内容里的链接必须写**绝对路径**并按需带 `?v=...` 参数，相对链接会被当作页面路径吃掉。（2026-09-01 事故教训，任务 oln8xf）
+
 ## start service
 
 ```
