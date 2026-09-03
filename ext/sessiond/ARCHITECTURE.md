@@ -80,9 +80,9 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 熔断 | `FAIL_WINDOW=300s` 窗口内连续崩溃超 `FAIL_LIMIT=6` → `disabled`，停监督，广播 `sessiond.session_disabled`；仅 `reload/clear` 可解除 |
 | 稳定期重置 | 上轮存活超 `STABLE_RESET=120s` → 崩溃计数与 `restarts` 清零 |
 | 单行上限 | `LINE_LIMIT=16MiB`，超限丢弃该行 |
-| 进程参数 | `pi --mode rpc --session <jsonl 绝对路径> --name <basename 去 .jsonl> -e <探针扩展>`（探针见下小节；文件不存在则跳过 `-e` 不拖垮会话），`start_new_session=True`（web 被整组杀时不连带杀会话），stderr 继承 web（并入 `run/logs/web.log`） |
+| 进程参数 | `pi --mode rpc --session <jsonl 绝对路径> --name <显示名> -e <探针扩展>`（显示名 = 命中 `.agent` 声明者非空 `name` 字段则用之（`proc.py:declared_display_name`，对外会话标识带族前缀，如 `bot/dev-dispatcher`；要求声明者推导会话文件 == 目标），否则回落 `proc.py:display_name` 的 basename 去 `.jsonl`；探针见下小节，文件不存在则跳过 `-e` 不拖垮会话），`start_new_session=True`（web 被整组杀时不连带杀会话），stderr 继承 web（并入 `run/logs/web.log`） |
 | 环境清洗 | `proc.py:clean_env` 剥除调度/任务身份变量（`AGENTD_TASK`/`DISPATCH_TASK_*`/`PI_SESSION*` 等），防会话归属投毒 |
-| 旧宿主识别 | 零文件：spawn 注入 environ 标记 `SESSIOND_SESSION_FILE=<jsonl>`（`proc.py:HOST_MARKER`）；`proc.py:find_hosts` 扫 `/proc/*/environ` 精确匹配（pi 会 setproctitle 重写 argv，cmdline 匹配不可行；无 starttime 校验） |
+| 旧宿主识别 | 零文件：spawn 注入 environ 标记 `SESSIOND_SESSION_FILE=<jsonl>`（`proc.py:HOST_MARKER`）；`proc.py:find_hosts` 扫 `/proc/*/environ` 精确匹配后经 `proc.py:is_pi_host` 交叉校验——命中进程须同时满足 `comm == 'pi'`（pi 会 setproctitle 把 argv 重写为裸 `pi`，cmdline 匹配不可行，comm 反映改写后 title）且 `/proc/<pid>/exe` 指向 node 二进制；仅凭 environ 标记会误杀带标记的旁观进程，任一读取失败 → 拒绝认宿主（宁可漏杀不可误杀）；无 starttime 校验 |
 | 双宿主清场 | `proc.py:_clear_stale_proc`（首次拉起时，主要面向 web 重启/跨进程场景）：等旧宿主自然退出（stdin EOF，宽限 `ORPHAN_GRACE=15s`）→ SIGTERM → 3s → SIGKILL |
 | 就位等待 | `proc.py:wait_ready` 默认 25s（覆盖清场 15s + SIGTERM 3s + spawn 余量） |
 
