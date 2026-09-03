@@ -1625,11 +1625,13 @@ function sendStatusQuery() {
       curGen = (typeof d.gen === "number") ? d.gen : curGen;
       curRestarts = (typeof d.restarts === "number") ? d.restarts : curRestarts;
       // 普通会话 host/workDir/sessionDir 回填（任务 bjhzvj）：.agent 会话仍以
-      // op=agent 回执为准（resolveAgentAndAttach），此处不覆盖；缺值保留 `?`。
+      // op=agent 回执为准（resolveAgentAndAttach），此处不覆盖；三值整体替换——
+      // null 显式清回 `?`（任务 8r0tww，评审捎带项：会话进程先跑后被空闲回收/停止时，
+      // op=status 返回 null 须把已回填旧值清掉，不得残留已停进程的旧 workDir）。
       if (!AGENT) {
-        if (d.host) agentHost = d.host;
-        if (d.sessionDir) agentSessionDir = d.sessionDir;
-        if (d.workDir) agentWorkDir = d.workDir;
+        agentHost = d.host || null;
+        agentSessionDir = d.sessionDir || null;
+        agentWorkDir = d.workDir || null;
       }
       refreshSlashNoticeIfVisible();
     }
