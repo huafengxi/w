@@ -185,7 +185,10 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
    数据源 = queue_update 事件（后端权威，任务 0829-2131-pdop）；本地待发记录退化为
    发送瞬间的乐观补位，同文本不重复展示。 */
 #queuedPanel { margin: 8px 16px 0; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--panel); padding: 8px 10px; }
+  background: var(--panel); padding: 8px 10px;
+  /* 通知风暴防挤没（任务 gl2mnd）：条目无上限时面板无限增高会把 #inputbar 挤出视口，
+     加高度上限 + 内部滚动，保证输入框始终可见 */
+  max-height: 30vh; overflow-y: auto; }
 #queuedPanel .qp-head { font-size: 11px; color: var(--dim); letter-spacing: .5px;
   font-weight: 600; margin-bottom: 4px; }
 #queuedPanel .qp-item { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
@@ -201,7 +204,9 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 /* 待发送图片附件条（任务 0829-2103-8etk）：输入栏上方缩略图行 */
 #attachBar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0;
   border-top: 1px solid var(--line); background: var(--panel);
-  align-items: center; }
+  align-items: center;
+  /* 同类隐患同修（任务 gl2mnd）：flex-wrap 缩略图行无高度上限，附件多时同样挤没输入框 */
+  max-height: 30vh; overflow-y: auto; }
 .attach-thumb { position: relative; width: 56px; height: 56px;
   border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
   background: var(--bg); }
