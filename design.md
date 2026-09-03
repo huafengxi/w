@@ -120,9 +120,7 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
 - **host 跨机路由（后续）**：按 host 把请求经反向通道/各机 8080 代理转发到目标机的
   同名端点（配套：多机 8080 + 代理 + rsh 端口转发），只需改 `_resolve_agent` 单点与
   其返回的路由指示。
-- **存量约定**：`assistant/dev-dispatcher/dev-dispatcher.agent`（cwd=`~/m/assistant`，会话文件在 .agent 旁）、
-  `assistant/operator.agent`（sessionDir=`~/m/agents/bot/operator`；operator 的 cwd
-  随之为 `~/m/assistant`，会话文件位置不变，将加载 assistant 扩展——约定自然结果）。
+- **存量约定**：`assistant/dev-dispatcher/dev-dispatcher.agent`（cwd=`~/m/assistant`，会话文件在 .agent 旁）。
 - **UI 约定**：会话名/页标题 = agent 名（文件名）；`/agents/bot/` 下会话豁免
   双宿主盲区警示（该目录是 .agent 会话的约定归属地，sessiond 自家拉起）。
 - **同名会话单机不变量**（ogwtb4 评审建议，任务 kqhweh）：同一 session jsonl 同一时刻
