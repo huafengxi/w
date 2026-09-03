@@ -9,6 +9,7 @@
 - **sessiond 是 web 服务（8080，全局 Basic Auth，凭据 `~/.auth/passwd`）内嵌的**路径驱动聊天系统**，任务会话与 bot 会话同构（任务 ybzvbn 起：任务会话 = 普通会话，见 §10）：
 
 - **会话 = 站内任意 `.jsonl` 路径**。`<path>/<name>.jsonl?v=chat` 打开聊天窗；路由键 = 完整路径（不同目录的同名文件 = 不同会话，可并存）。会话工作目录（cwd）= 该 jsonl 所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展，预期行为，不特判）。
+- **`.agent`/bot 会话的扩展接线约定**：pi 项目级扩展只从 `cwd/.pi/extensions` 自动发现（无祖先上溯），故需要加载 agentd 项目扩展（receiver 等）的 bot 会话，把 `agents/bot/<名字>/.pi/extensions` 软链 → `~/m/assistant/.pi/extensions`；项目信任无需新条目——`~/.pi/agent/trust.json` 的 `/home/yuanqi.xhf` 祖先条目上溯命中。爆炸半径声明：如此接线的会话获得全部 agentd 工具（dispatch/task_*/send_message），评估为可接受增益；如需收窄另立改进事项。
 - **每会话 = 一个受监督的 `pi --mode rpc` 子进程**。由 `proc.py:Supervisor` 在 web 进程内直接监督（stdin/stdout 管道，进程内直连，无 unix socket），崩溃自动退避重启并从该 jsonl resume。
 - **bridge 事件环**：`bridge.py:Bridge` 每会话路径一个，持有有界事件环（默认 2000 条），对多个 SSE 订阅者多播，并代理 `get_entries` 基线。
 - **前端单文件页**：`view/index.html`（无构建、仅外部依赖 `marked.min.js`），从 `location.pathname` 解析会话路径。
@@ -81,7 +82,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 单行上限 | `LINE_LIMIT=16MiB`，超限丢弃该行 |
 | 进程参数 | `pi --mode rpc --session <jsonl 绝对路径> --name <basename 去 .jsonl> -e <探针扩展>`（探针见下小节；文件不存在则跳过 `-e` 不拖垮会话），`start_new_session=True`（web 被整组杀时不连带杀会话），stderr 继承 web（并入 `run/logs/web.log`） |
 | 环境清洗 | `proc.py:clean_env` 剥除调度/任务身份变量（`AGENTD_TASK`/`DISPATCH_TASK_*`/`PI_SESSION*` 等），防会话归属投毒 |
-| 旧宿主识别 | 零文件：spawn 注入 environ 标记 `SESSIOND_SESSION_FILE=<jsonl>`（`proc.py:HOST_MARKER`）；`proc.py:find_hosts` 扫 `/proc/*/environ` 精确匹配（pi 会 setproctitle 重写 argv，cmdline 匹配不可行） |
+| 旧宿主识别 | 零文件：spawn 注入 environ 标记 `SESSIOND_SESSION_FILE=<jsonl>`（`proc.py:HOST_MARKER`）；`proc.py:find_hosts` 扫 `/proc/*/environ` 精确匹配（pi 会 setproctitle 重写 argv，cmdline 匹配不可行；无 starttime 校验） |
 | 双宿主清场 | `proc.py:_clear_stale_proc`（首次拉起时，主要面向 web 重启/跨进程场景）：等旧宿主自然退出（stdin EOF，宽限 `ORPHAN_GRACE=15s`）→ SIGTERM → 3s → SIGKILL |
 | 就位等待 | `proc.py:wait_ready` 默认 25s（覆盖清场 15s + SIGTERM 3s + spawn 余量） |
 
