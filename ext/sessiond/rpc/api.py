@@ -36,7 +36,12 @@ def _j(obj, status='200 OK'):
 
 
 def _bridge_or_err(session):
-    """按路径取桥接；缺失/非法路径返回错误响应元组，否则返回 (bridge, None)。"""
+    """按路径取桥接；缺失/非法路径返回错误响应元组，否则返回 (bridge, None)。
+    前置 agentd 族入口归一（任务 60grqq）：spec.json 声明者入口 → 归一为会话产物路径；
+    产物路径直开 → 400 + 指引（入口唯一化，用户拍板）。"""
+    session, entry_err = _proc.agentd_entry(session)
+    if entry_err:
+        return None, _j({"ok": False, "error": entry_err}, '400 Bad Request')
     if not session:
         return None, _j({"ok": False,
                          "error": "missing required param: session"},

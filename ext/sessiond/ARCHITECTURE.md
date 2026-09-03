@@ -350,7 +350,7 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 
 ## 10. agentd 登记会话（任务与常驻，rpc 封装形态；任务 ybzvbn / 票 hegipc，去保活二期 ja0vr7 泛化）
 
-task/bot 两族在本系统内同构：`/agents/(task|bot)/<名>/session/session.jsonl?v=chat` 直开即聊天窗，前端零改动，契约全对齐 §3–§5。生命周期所有权在 agentd runner（web = 纯 attach 客户端，无杀权、**零启动权**：只透传、永不 spawn）。
+task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径（任务 60grqq，用户拍板：裸 jsonl 入口废除）：`/agents/(task|bot)/<名>/spec.json?v=chat` 打开即聊天窗，请求入口层（`rpc/api.py` + `rpc/stream.py`）经 `proc.agentd_entry` 归一为会话产物路径（`<族目录>/session/session.jsonl`）后进既有 `agentd_route` 透传链路（零新路由分支、零新 spawn 面；产物路径直开被拒 400 + 指引，它是数据不是入口）。前端契约全对齐 §3–§5。生命周期所有权在 agentd runner（web = 纯 attach 客户端，无杀权、**零启动权**：只透传、永不 spawn）。
 
 ### 路由判定（`proc.py:agentd_route`，get_bridge 内单一决策点，匹配 `^/agents/(task|bot)/<名>/session/session.jsonl$`）
 

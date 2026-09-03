@@ -8,6 +8,7 @@
 # 再从最旧可用位续流；前端据此走 entries 基线自愈。
 import json as _json
 from ext.sessiond import bridge as _b
+from ext.sessiond import proc as _proc
 
 
 def _j(obj, status='200 OK'):
@@ -19,6 +20,11 @@ def interp(store, session='', since='', **kw):
     if not session:
         return _j({"ok": False, "error": "missing required param: session"},
                   '400 Bad Request')
+    # agentd 族入口归一（任务 60grqq）：spec.json 声明者入口 → 会话产物路径；
+    # 产物路径直开 → 400 + 指引（与 rpc/api.py 同口径单点，_proc.agentd_entry）。
+    session, entry_err = _proc.agentd_entry(session)
+    if entry_err:
+        return _j({"ok": False, "error": entry_err}, '400 Bad Request')
     try:
         b = _b.get_bridge(session)
     except ValueError as e:

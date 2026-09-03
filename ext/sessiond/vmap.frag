@@ -1,6 +1,7 @@
 # vmap: ?v=chat → URL 路径驱动聊天窗口（任务 0829-1958-od0t；R1：路径路由）。
 # 会话 = 请求路径指向的站内任意 .jsonl（/assistant/foo.jsonl?v=chat、
-# /a/b/x.jsonl?v=chat 均可）；前端从 location.pathname 解析，后端经
+# /a/b/x.jsonl?v=chat 均可）；agentd 登记会话（/agents/(task|bot)/<名>/）入口唯一 =
+# spec.json 声明者路径（任务 60grqq，服务端归一，见 ARCHITECTURE.md §10）；前端从 location.pathname 解析，后端经
 # session 参数路由；路径校验锁定 ~/m 内（proc.resolve_session_path）。
 chat: /sessiond/view/index.html
 

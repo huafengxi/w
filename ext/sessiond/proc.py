@@ -770,7 +770,7 @@ class SocketSupervisor:
     CONNECT_WINDOW = 25.0    # 首次连接等待窗（对齐 wait_ready 缺省口径）
     CONNECT_RETRY = 0.3
 
-    def __init__(self, session_path, on_event, sock_path):
+    def __init__(self, session_path, on_event, sock_path, participant_id=None):
         # 路径处理与 Supervisor 同口径（兼容站内路径与已解析绝对路径）。
         if os.path.isabs(session_path) and session_path.endswith(".jsonl"):
             rp = os.path.realpath(session_path)
@@ -784,6 +784,9 @@ class SocketSupervisor:
         self.name = display_name(self.session_file)
         self.cwd = os.path.dirname(self.session_file)
         self.sock_path = sock_path
+        # agentd 参与方路径式 id（如 task/<id>，agentd_route 载荷透传，任务 dsuqbi）：
+        # 控制面代理（op=clear/reload → control/clear|restart）写请求/等回执的寻址依据。
+        self.participant_id = participant_id
         self.on_event = on_event
         self.on_lost = None          # 断连回调（桥接注入：摘注册表 + 终结标记）
         self.gen = 1                 # 单世代（无重拉概念）
@@ -840,7 +843,8 @@ class SocketSupervisor:
                     "disabled": self.disabled, "session_file": self.session_file,
                     "cwd": self.cwd, "mode": "socket", "sock": self.sock_path}
 
-    # ---- 无杀权：生命周期属 agentd runner ----
+    # ---- 无杀权：生命周期属 agentd runner（reload/clear 由 rpc/api.py 改道代理
+    # control 动词，不落到本类；保留拒绝返回作为纵深防御，任务 dsuqbi） ----
 
     def reload(self, timeout=20.0):
         return {"ok": False,
@@ -945,6 +949,12 @@ class SocketSupervisor:
 _AGENTD_SESSION_RE = re.compile(
     r"^/agents/(task|bot)/([^/]+)/session/session\.jsonl$")
 
+# spec.json 声明者入口（任务 60grqq，用户拍板口径收紧）：agents/ 下会话的 ?v=chat
+# 入口唯一 = spec.json 声明者路径；会话产物路径（session/session.jsonl）是数据，
+# 不再支持当 URL 入口直开。
+_AGENTD_SPEC_RE = re.compile(
+    r"^/agents/(task|bot)/([^/]+)/spec\.json$")
+
 
 def _site_path(session_path):
     """站内路径归一：绝对路径还原为站内形式（/…），其余原样。"""
@@ -1031,3 +1041,26 @@ def agentd_route(session_path):
     return ("reject",
             "会话进程缺席（%s，无活跃观测通道）：拉起/复活归 agentd 监督"
             "（restartPolicy=auto 会自动拉起），请稍候重试" % participant_id)
+
+
+def agentd_entry(session_path):
+    """agentd 族会话入口归一（任务 60grqq，用户拍板：入口唯一化）。
+    HTTP 请求入口层前置（rpc/api.py + rpc/stream.py 两处单点调用）：
+      /agents/(task|bot)/<名>/spec.json      → 归一为 session/session.jsonl 站内路径，
+                                               其后链路（get_bridge → agentd_route 三态）
+                                               与旧直开完全同一代码路径，零新路由/零新 spawn 面
+      /agents/(task|bot)/<名>/session/session.jsonl 直开 → 错误消息（调用方回 400；
+                                               产物路径是数据不是入口，视图内部解析目标仍是它）
+      其余路径                                → 原样放行（.agent/普通 .jsonl 口径不变）
+    返回 (归一路径, None) 或 (None, 错误消息)。"""
+    p = _site_path(session_path)
+    m = _AGENTD_SPEC_RE.match(p)
+    if m:
+        return "/agents/%s/%s/session/session.jsonl" % (m.group(1), m.group(2)), None
+    m = _AGENTD_SESSION_RE.match(p)
+    if m:
+        return None, (
+            "直开会话产物路径已废除（任务 60grqq）：agentd 登记会话的入口 = spec.json "
+            "声明者路径（/agents/%s/%s/spec.json?v=chat）；session.jsonl 是数据，不是入口"
+            % (m.group(1), m.group(2)))
+    return session_path, None
