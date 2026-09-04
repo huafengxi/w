@@ -89,7 +89,8 @@
          var interp = getInterp(content);
          var body = content.replace(/^#!cmd-interp .*$/m, '');
          var widgets = [];
-         var replaced = body.replace(/\$\{([^}]+)\}/g, function(_, cmd){
+         var replaced = body.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|\$\{([^}]+)\}/g, function(m, code, cmd){
+            if (code) return code;
             var id = 'cmdw' + widgets.length;
             widgets.push({id: id, cmd: cmd});
             return '<span id="' + id + '"></span>';
