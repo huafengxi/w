@@ -99,6 +99,7 @@
          $('run-all').style.display = disp;
          $('refresh-all').style.display = disp;
          $('log-all').style.display = disp;
+         autoExpandInlinePreviews(); // _v=inline links: open on every render
       }
 
       var lastRendered = null; // updated by the editor save callback (makeEditor)
@@ -139,32 +140,42 @@
       // inline iframe right below the link (click toggles; several may stay open).
       // `_v=` is the client-private param namespace (underscore-prefix convention):
       // the server never consumes it, so it is stripped when building the iframe
-      // src (all other params kept).
-      function iframePreviewInit() {
-         function hrefNoPreviewParam(a) {
-            try {
-               var u = new URL(a.getAttribute('href'), window.location.href);
-               return u.searchParams.get('_v') === 'inline' ? (u.searchParams.delete('_v'), u.href) : null;
-            } catch (e) { return null; }
+      // src (all other params kept). Such links also auto-expand after every
+      // render (autoExpandInlinePreviews in renderDoc).
+      function hrefNoPreviewParam(a) {
+         try {
+            var u = new URL(a.getAttribute('href'), window.location.href);
+            return u.searchParams.get('_v') === 'inline' ? (u.searchParams.delete('_v'), u.href) : null;
+         } catch (e) { return null; }
+      }
+      function togglePreview(a) {
+         if (a.__iframeBox) {
+            var old = a.__iframeBox.querySelector('iframe');
+            if (old && old.__fitRO) old.__fitRO.disconnect(); // no observer leak on collapse
+            a.__iframeBox.remove(); a.__iframeBox = null; return;
          }
+         var src = hrefNoPreviewParam(a);
+         if (!src) return;
+         var box = $n('div'); box.className = 'iframe-preview';
+         var f = $n('iframe'); f.src = src;
+         autoFitPreview(f);
+         box.appendChild(f);
+         var anchor = a.closest('li') || a.closest('p') || a;
+         anchor.parentNode.insertBefore(box, anchor.nextSibling);
+         a.__iframeBox = box;
+      }
+      function autoExpandInlinePreviews() {
+         $('doc').querySelectorAll('a[href]').forEach(function (a) {
+            if (!a.__iframeBox && hrefNoPreviewParam(a)) togglePreview(a);
+         });
+      }
+      function iframePreviewInit() {
          $('doc').addEventListener('click', function (ev) {
             if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button !== 0) return; // modifier click: browser default (new tab)
             var a = ev.target.closest ? ev.target.closest('a[href]') : null;
-            var src = a && hrefNoPreviewParam(a);
-            if (!src) return; // not a _v=inline link: leave default behavior untouched
+            if (!a || !hrefNoPreviewParam(a)) return; // not a _v=inline link: leave default behavior untouched
             ev.preventDefault();
-            if (a.__iframeBox) {
-               var old = a.__iframeBox.querySelector('iframe');
-               if (old && old.__fitRO) old.__fitRO.disconnect(); // no observer leak on collapse
-               a.__iframeBox.remove(); a.__iframeBox = null; return;
-            }
-            var box = $n('div'); box.className = 'iframe-preview';
-            var f = $n('iframe'); f.src = src;
-            autoFitPreview(f);
-            box.appendChild(f);
-            var anchor = a.closest('li') || a.closest('p') || a;
-            anchor.parentNode.insertBefore(box, anchor.nextSibling);
-            a.__iframeBox = box;
+            togglePreview(a);
          });
       }
       function initApp(){
