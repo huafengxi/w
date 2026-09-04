@@ -50,6 +50,7 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 - [/w/demo/interp.py?cmd=hello](/w/demo/interp.py?cmd=hello) call remote function `interp()` defined in python file.
 - [/w/demo/interp.py?v=q](/w/demo/interp.py?v=q) interactive `interp()` defined in python file.
 - [/w/demo/demo.ish](/w/demo/demo.ish) ctrl+click to execute cmd.
+- [/w/demo/cmd-demo.md](/w/demo/cmd-demo.md) markdown `${...}` inline cmd widget: default raw server-side shell, output streams into the page (syntax & semantics: ext/markdown/README.md).
 
 ## table
 
