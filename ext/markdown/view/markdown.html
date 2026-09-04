@@ -100,6 +100,10 @@
          $('refresh-all').style.display = disp;
          $('log-all').style.display = disp;
          autoExpandInlinePreviews(); // _v=inline links: open on every render
+         // _v=autorun (client-private param namespace, see hrefNoPreviewParam):
+         // auto run-all after every render — for dashboards that want data on
+         // open. Existence of the `_v` param is the switch; value ignored.
+         if (cmdRunners.length && new URLSearchParams(window.location.search).has('_v')) runAll();
       }
 
       var lastRendered = null; // updated by the editor save callback (makeEditor)
