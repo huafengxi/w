@@ -11,7 +11,6 @@
       #doc li > p { margin: 0.2em 0; }
       /* manual cmd widget (${!cmd}): skipped by _v=autorun and run-all/refresh-all */
       button.cmdw-manual { color: #b35900; border: 1px solid #b35900; }
-      .cmdw-manual-badge { color: #b35900; font-size: 11px; font-weight: bold; margin-right: 4px; }
       .iframe-preview { margin: 0.4em 0 0.8em; }
       /* height is set to content height by autoFitPreview(); the small 4em is only
          the pre-load placeholder. max-height caps absurdly long docs — the iframe
@@ -41,17 +40,13 @@
       // to the bare-shell endpoint (sh.py runs them via `bash -c`), which
       // streams output line-framed with a leading tag byte ('1'=stdout,
       // '2'=stderr). refresh simply re-runs the command. Manual widgets
-      // (w.manual, from `${!cmd}`) get a visual marker; their run/refresh
-      // semantics are identical — the flag only opts them out of autorun and
-      // run-all/refresh-all (see renderDoc).
+      // (w.manual, from `${!cmd}`) are marked by the orange run-button
+      // outline; their run/refresh semantics are identical — the flag only
+      // opts them out of autorun and run-all/refresh-all (see renderDoc).
       function buildCmdWidget(w) {
          var ph = $(w.id);
          if (!ph) return null;
          var box = $n('div');
-         if (w.manual) {
-            var badge = $n('span'); badge.className = 'cmdw-manual-badge'; badge.textContent = 'manual';
-            box.appendChild(badge);
-         }
          var btn = $n('button'); btn.textContent = 'run: ' + w.cmd;
          if (w.manual) {
             btn.classList.add('cmdw-manual');
