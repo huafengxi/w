@@ -263,6 +263,9 @@
       }
       function selectTab(idx) {
          var t0 = performance.now();  // 埋点（任务 8a1xdz）：切换耗时，真机 DevTools Console 可观测
+         // 仅重复点击当前已选中 tab 才刷新（任务 ca5yee 收窄 klkidf）：
+         // 必须在 currentTab 赋值前捕获；初始 -1 使 buildApp 首次 selectTab 不算 reclick。
+         var reclick = (currentTab == idx);
          currentTab = idx;
          for (var j = 0; j < items.length; j++) {
              var it = items[j];
@@ -273,9 +276,10 @@
                  } else if (layoutMode == 'tab') {
                      stackFrame(it.active, true);   // 布局常驻，只切 visibility，无全量 reflow
                      applyHeight(it.active);
-                     // 点 tab 即刷新该行（任务 klkidf）：双缓冲后台预加载，就绪后无白屏换入。
+                     // 重复点当前 tab 即刷新该行（任务 klkidf；ca5yee 收窄为仅 reclick）：
+                     // 双缓冲后台预加载，就绪后无白屏换入。切换过来不刷新。
                      // !it.standby 守卫：连续快速点击/与周期刷新重叠时不重复启动。
-                     if (!it.standby) {
+                     if (reclick && !it.standby) {
                          startStandby(it);
                          // refresh=N 行：手动刷新后顺延周期，避免 refreshAll 紧接着重复刷新
                          if (it.refreshSec > 0) it.nextRefresh = Date.now() + it.refreshSec * 1000;
