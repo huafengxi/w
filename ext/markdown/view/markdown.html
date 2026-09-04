@@ -102,8 +102,8 @@
          autoExpandInlinePreviews(); // _v=inline links: open on every render
          // _v=autorun (client-private param namespace, see hrefNoPreviewParam):
          // auto run-all after every render — for dashboards that want data on
-         // open. Existence of the `_v` param is the switch; value ignored.
-         if (cmdRunners.length && new URLSearchParams(window.location.search).has('_v')) runAll();
+         // open. Only the exact value `autorun` triggers it.
+         if (cmdRunners.length && new URLSearchParams(window.location.search).get('_v') === 'autorun') runAll();
       }
 
       var lastRendered = null; // updated by the editor save callback (makeEditor)
