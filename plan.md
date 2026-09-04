@@ -1,73 +1,55 @@
-# plan — markdown.html base target + edit/split 修复（w1uh3g，M 级）
+# plan — markdown 视图 `?v=iframe` 页内预览（task 9ey94j，M 级）
 
-## 定位结论
+## 需求回顾
+`?v=text/md` 页面（`w/ext/markdown/view/markdown.html`）中，链接 URL 带 `?v=iframe`/`&v=iframe`
+时点击不导航，改为在页内就近内联展开 iframe 预览（src = 去掉该参数后的 URL）；再点收起；
+可同时展开多个；普通链接行为不变（`<base target="_blank">` 弹新 tab）。
 
-### 根因 1：edit（及 head-bar 所有 `javascript:` 锚点）被 `<base target="target">` 吞掉
-`<a href="javascript:toggle_editor()">` 的点击是一次超链接导航，目标浏览上下文由
-`<base target>` 决定（HTML 规范：following hyperlinks → navigate targetNavigable）。
-名为 "target" 的上下文不存在 → 每次点击新建/复用一个名为 "target" 的窗口，
-`javascript:` 在**那个窗口**（空白 about:blank，无 toggle_editor）里求值，主页面毫无反应。
-这也正是用户看到的「内容链接复用同一个名为 target 的 tab」的同源行为。
+## 交互细节
+- **触发**：事件委托绑在 `#doc` 上（一次绑定，renderDoc 重渲染不失效，`?refresh=` 轮询场景安全）。
+  点击目标向上找最近 `a[href]`；href 的 query 含 `v=iframe` 才拦截（`preventDefault`），否则放行。
+- **展开位置**：锚点所在的最近 `li` 之后；无 `li` 则最近 `p` 之后；再无则锚点自身之后。
+  即列表项/段落下方就地展开。
+- **toggle**：拦截的锚点记 `__iframeBox` 属性（指向已插入的容器 div）。已存在 → 移除（收起）；
+  不存在 → 新建容器插入。多个链接各自独立，可同时展开多个。
+- **iframe src 构造**：`new URL(a.getAttribute('href'), location.href)` 解析（兼容相对链接），
+  用 `URLSearchParams` 删除 `v=iframe`（仅当值为 `iframe` 时；值非 iframe 的 `?v=` 视为服务端
+  视图参数不动、不拦截），其余参数（如 `refresh=`）原样保留。容器带 `data-src` 记录真实地址便于验证。
+- **样式**：容器 `.iframe-preview`：上下 margin、`1px solid #999` 边框感由既有 my.css `iframe{}`
+  规则承担（宽 100%、黑边）；本任务仅内联 `<style>` 补 `height: 32em`（固定高度 + iframe 自身滚动）
+  与容器 margin。不引外部依赖、不改 my.css。
+- **iframe 内 markdown 页**：`initApp()` 既有 `inIframe() → hide head-bar`（`my.js:inIframe`
+  判 `window.self !== window.top`），iframe 载入即自动生效，验证时断言。
 
-**实证**（mac Chrome headless，fixture 页程序化点击锚点后读标志位）：
-- `<base target="target">` + `javascript:` 锚点 → 主文档函数未执行（`ran=false`）。
-- `<base target="_blank">` + `javascript:` 锚点 → 主文档函数仍未执行（`ran=0`）——
-  所以**仅改 base target 不能修好 edit**，必须同时改锚点写法。
-- `href="#" onclick="...; return false;"` → 正常执行（`ranFix=1`）。
+## 改动点（逐项）
+1. `w/ext/markdown/view/markdown.html`（唯一代码改动）
+   - `<style>` 追加 `.iframe-preview iframe { height: 32em; display:block; }` 与容器 margin；
+   - 新增 `iframePreviewInit()`：`#doc` click 委托（逻辑如上）；`initApp()` 末尾调用（仅一次绑定）。
+2. `w/README.md`：shell 路由条目（引用块）补一句 `?v=iframe` 页内预览约定（稳定结论式措辞）。
+3. `~/m/index.md`（主仓）：挑 1-2 个小文件链接（`notes/README.md`、`bin/README.md`）加 `?v=iframe` 示范。
+4. `w/ext/markdown/README.md`：若实施时已存在（前序文档任务产出），在其参数小节补 `?v=iframe`
+   约定；不存在则跳过并在报告说明（调度员 inform 追加项）。
 
-同仓 `ext/org/view/org.html` 的 edit/split 锚点用的就是可用写法（`href="#" onclick=...; return false;`），
-markdown.html 是残留的旧写法。
+## 影响面
+- 仅 markdown 视图模板（按请求读取，无需重启服务）；不动其他视图、不动 my.css、不动服务端。
+- 无 `v=iframe` 参数的页面行为零变化（委托逻辑先判参数再拦截）。
+- `v=iframe` 纯客户端消费：剥离后才进 iframe，绝不会原样发给服务端。
 
-### 根因 2：split 双重失效
-1. 锚点点击同被 base target 吞（同根因 1）；
-2. 即使点击生效，`split()` 跳 `getUrl() + "?type=split"`：
-   - `getUrl()` 只取 pathname，丢弃现有查询参数；
-   - 服务端（`core/handler.py do_req`）只认 `?v=`，`type` 无路由；
-   - 老 `split:` vmap 条目与 `view/split.html`（左导航 iframe + 右 "target" iframe）
-     已在 ea1613a「drop obsolete split/hsplit/tsplit views」被有意删除。
-   → `?type=split` 从 2021 首版起就是只会原样重载的死链接。
-3. 语义基础消失：老 split 的意义是「链接落入右栏 target 窗格」，本任务已拍板
-   base target → `_blank`（链接弹新 tab），该语义不复存在。
+## 验证方案
+1. 语法自查：node 解析内联脚本（提取 `<script>` 跑 `node --check`）。
+2. **线上 8080 真实页面 E2E**（沿用前序任务 harness）：mac headless Chrome + CDP
+   （Node ≥22 原生 WebSocket 驱动），Basic auth 经 `Network.setExtraHTTPHeaders` 注入
+   （凭据取 dev `~/.auth/passwd`，**不**走 URL 内嵌凭据——前序任务已证会破坏页内 fetch）。
+   导航到含 `?v=iframe` 示范链接的页面，`Runtime.evaluate` 程序化点击并断言：
+   - 点击后容器/iframe 出现于锚点所属 `li` 之后；再点收起（toggle）；
+   - 两个链接分别点击 → 同时展开 2 个 iframe；
+   - iframe `src` 不含 `v=iframe`、其余参数保留；
+   - 无 `v=iframe` 的普通链接不被拦截（点击未被 preventDefault，target 继承 `_blank`）；
+   - iframe 内页面 `inIframe()` 成立、`#head-bar` 隐藏、正文渲染非空。
+3. 人工验证清单写入 report.md。
 
-**用户拍板（ask 2026-09-04-17-02）**：选 A —— 删除 split 按钮与 `split()` 函数
-（确认无其他引用：全仓仅 markdown.html / org.html 各一处，org 不在本任务范围）。
-
-### 附带发现（同文件同缺陷）
-head-bar 的 `run-all` / `refresh-all` / `log` 三个按钮同为 `javascript:` 锚点，
-同被 base target 吞（平时 `display:none`，有内联 `${cmd}` widget 的 md 才出现）。
-同根因、同文件、同一行内修法，一并修复（不修则 base 改 `_blank` 后依然全灭）。
-
-## 改动点（全部在 `ext/markdown/view/markdown.html`）
-1. `<base target="target">` → `<base target="_blank">`（用户拍板①）。
-2. edit 锚点：`<a href="javascript:toggle_editor()">` → `<a href="#" onclick="toggle_editor(); return false;">`（org.html 同款模式）。
-3. 删除 split 锚点与 `function split()` 一行（用户拍板②）。
-4. run-all/refresh-all/log 锚点同改 `href="#" onclick="...; return false;"`。
-
-## inform 追加项（3 条，已 ack，以最后一条为准）
-5. `README.md` 第 6 行改写为（措辞以 16:58 inform 最终稿为准）：
-   > **shell 路由**：GET 已映射视图的扩展名路径（如 `.md`）即使文件不存在也返 200 + HTML 外壳（内容真实性由客户端取内容时才见分晓）；其余不存在路径返 404（`w/view/404.html`）。页面内容里的链接必须写**绝对路径**，相对链接会被当作页面路径吃掉；`.md` 链接无需 `?v=text/md` 后缀（服务端按扩展名推断视图），仅 `.py` 等非 md 文件渲 md 视图时才带 `?v=...`。
-   即：删「SPA」提法、删「服务端无 404」、删行尾历史叙述（任务 oln8xf 归 git history）。
-   附带检查 `grep -n SPA README.md design.md` 无残留（现仅 README 第 6 行一处）。
-   注：不存在目录路径返 500 的问题已另行登记任务，不处理。
-
-## base target 改动影响面
-- `grep -rn '"target"' w/`（w 仓内）现存依赖：`ext/media/view/album.html`、
-  `ext/encrypt/view/encrypt.html`、`ext/org/view/org.html`（运行时注入）、
-  `core/rpc/core_read.py`（dir 列表链接 `target="target"`）。
-  这些是**其他视图**，本任务只动 markdown 视图；markdown 渲染出的正文链接
-  改 `_blank` 后每次点击弹新 tab，不影响上述视图各自的 target 语义。
-  曾消费 "target" 窗格的 `view/split.html` 已删除，无代码依赖 markdown 页的 "target" 窗。
-  风险说明入报告，不阻塞（用户已拍板）。
-
-## 验证方式
-1. 语法：抽出 markdown.html 内联 `<script>` → `node --check`。
-2. grep 验收：`grep -n 'base target' ext/markdown/view/markdown.html` 仅剩 `_blank` 一行；
-   `grep -n '?v=text/md' README.md` 不再出现在推荐风格描述中；`grep -n SPA README.md` 无。
-3. 行为：mac Chrome headless 对**线上 8080 真实页面**（改动即生效，模板按请求读取）
-   程序化点击 edit → 断言 `#editor` 面板可见 / 再点隐藏；确认无 split 残留、
-   正文链接 `target=_blank` 生效。凭据取 `~/.auth/passwd`。
-4. git：commit（message 含 w1uh3g）+ push origin。
-
-## 服务影响
-静态模板按请求读取，无需重启（w 服务 version 不动）。若浏览器实测发现旧缓存，
-在报告说明（预期无：8080 对视图未加特殊缓存头，普通刷新即回源）。
+## 提交
+- w 仓：plan.md + markdown.html + README.md（+ ext/markdown/README.md 若适用）
+  分逻辑提交，message 含 9ey94j，push origin。
+- 主仓：index.md，message 含 9ey94j，push origin。
+- 均基于最新 HEAD 操作（先 git pull --ff-only / 确认无冲突）。
