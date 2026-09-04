@@ -107,42 +107,12 @@
          $('log-all').style.display = disp;
       }
 
-      // Optional ?refresh=N query param: poll the markdown source every N
-      // seconds and re-render only when the content actually changed.
-      // Absent or <=0 keeps the original load-once behavior untouched.
-      function getRefreshSec() {
-         var m = window.location.search.match(/[?&]refresh=(\d+)/);
-         return m ? parseInt(m[1], 10) : 0;
-      }
-      var lastRendered = null;
-      var pollInFlight = false;
-      function pollRefresh() {
-         if (getRefreshSec() <= 0 || pollInFlight) return;
-         var url = getUrl();
-         if (document.hidden) return; // paused while tab hidden; next tick resumes
-         var y = window.scrollY;
-         pollInFlight = true;
-         // 任务 8a1xdz：同步 read() 改异步——慢源（如 svc 聚合 2-3s）同步请求会冻结
-         // 同源 tab 共享的主线程，期间容器切 tab/点击全部卡顿。?t= 仍只做缓存破坏。
-         readAsync(url + '?t=' + Date.now(), function (content) {
-            pollInFlight = false;
-            if (content === lastRendered) return;
-            lastRendered = content;
-            renderDoc(content);
-            window.scrollTo(0, y);
-         }, function () { pollInFlight = false; /* transient fetch error; retry on next tick */ });
-      }
-      (function(){
-         var sec = getRefreshSec();
-         if (sec <= 0) return;
-         document.addEventListener('visibilitychange', pollRefresh); // catch up right after unhiding
-         setInterval(pollRefresh, sec * 1000);
-      })();
+      var lastRendered = null; // updated by the editor save callback (makeEditor)
 
       // Auto-fit a preview iframe's height to its content. The embedded md view
       // renders asynchronously (readAsync fetches the source after load), so a
       // ResizeObserver on the content document re-measures whenever the body
-      // resizes (initial render, ?refresh= re-renders, images). Same-origin only.
+      // resizes (initial render, edit re-renders, images). Same-origin only.
       function autoFitPreview(f) {
          function fit() {
             try {
@@ -171,21 +141,23 @@
          f.addEventListener('load', attach);
          attach();
       }
-      // Link whose URL carries v=iframe: instead of navigating, preview it in an
+      // Link whose URL carries _v=inline: instead of navigating, preview it in an
       // inline iframe right below the link (click toggles; several may stay open).
-      // The server has no v=iframe view — the param is purely client-side, so it is
-      // stripped when building the iframe src (all other params, e.g. refresh=, kept).
+      // `_v=` is the client-private param namespace (underscore-prefix convention):
+      // the server never consumes it, so it is stripped when building the iframe
+      // src (all other params kept).
       function iframePreviewInit() {
-         function hrefNoIframeParam(a) {
+         function hrefNoPreviewParam(a) {
             try {
                var u = new URL(a.getAttribute('href'), window.location.href);
-               return u.searchParams.get('v') === 'iframe' ? (u.searchParams.delete('v'), u.href) : null;
+               return u.searchParams.get('_v') === 'inline' ? (u.searchParams.delete('_v'), u.href) : null;
             } catch (e) { return null; }
          }
          $('doc').addEventListener('click', function (ev) {
+            if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button !== 0) return; // modifier click: browser default (new tab)
             var a = ev.target.closest ? ev.target.closest('a[href]') : null;
-            var src = a && hrefNoIframeParam(a);
-            if (!src) return; // not a v=iframe link: leave default behavior untouched
+            var src = a && hrefNoPreviewParam(a);
+            if (!src) return; // not a _v=inline link: leave default behavior untouched
             ev.preventDefault();
             if (a.__iframeBox) {
                var old = a.__iframeBox.querySelector('iframe');
