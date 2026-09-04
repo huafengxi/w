@@ -10,7 +10,10 @@
     <style>
       #doc li > p { margin: 0.2em 0; }
       .iframe-preview { margin: 0.4em 0 0.8em; }
-      .iframe-preview iframe { display: block; height: 32em; }
+      /* height is set to content height by autoFitPreview(); the small 4em is only
+         the pre-load placeholder. max-height caps absurdly long docs — the iframe
+         then scrolls internally instead of stretching the page. */
+      .iframe-preview iframe { display: block; height: 4em; max-height: 80vh; }
     </style>
     <script type="application/javascript">
       function toggle_editor() { toggleVisible($('editor')); }
@@ -136,6 +139,38 @@
          setInterval(pollRefresh, sec * 1000);
       })();
 
+      // Auto-fit a preview iframe's height to its content. The embedded md view
+      // renders asynchronously (readAsync fetches the source after load), so a
+      // ResizeObserver on the content document re-measures whenever the body
+      // resizes (initial render, ?refresh= re-renders, images). Same-origin only.
+      function autoFitPreview(f) {
+         function fit() {
+            try {
+               var d = f.contentDocument;
+               if (!d || !d.documentElement) return;
+               // Collapse first: documentElement.scrollHeight never reports less
+               // than the viewport, so a tall iframe would otherwise pin itself
+               // and never shrink when content gets smaller.
+               f.style.height = '1px';
+               void f.offsetHeight; // reflow so the measurement sees the collapse
+               var h = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0);
+               f.style.height = (h > 0 ? h : 1) + 'px';
+            } catch (e) { /* not same-origin: keep placeholder height */ }
+         }
+         function attach() {
+            var d = f.contentDocument;
+            if (!d || !d.body) return;
+            fit();
+            if (f.__fitRO) f.__fitRO.disconnect();
+            if (typeof ResizeObserver !== 'undefined') {
+               f.__fitRO = new ResizeObserver(fit);
+               f.__fitRO.observe(d.body);
+               f.__fitRO.observe(d.documentElement);
+            }
+         }
+         f.addEventListener('load', attach);
+         attach();
+      }
       // Link whose URL carries v=iframe: instead of navigating, preview it in an
       // inline iframe right below the link (click toggles; several may stay open).
       // The server has no v=iframe view — the param is purely client-side, so it is
@@ -152,9 +187,14 @@
             var src = a && hrefNoIframeParam(a);
             if (!src) return; // not a v=iframe link: leave default behavior untouched
             ev.preventDefault();
-            if (a.__iframeBox) { a.__iframeBox.remove(); a.__iframeBox = null; return; }
+            if (a.__iframeBox) {
+               var old = a.__iframeBox.querySelector('iframe');
+               if (old && old.__fitRO) old.__fitRO.disconnect(); // no observer leak on collapse
+               a.__iframeBox.remove(); a.__iframeBox = null; return;
+            }
             var box = $n('div'); box.className = 'iframe-preview';
             var f = $n('iframe'); f.src = src;
+            autoFitPreview(f);
             box.appendChild(f);
             var anchor = a.closest('li') || a.closest('p') || a;
             anchor.parentNode.insertBefore(box, anchor.nextSibling);
