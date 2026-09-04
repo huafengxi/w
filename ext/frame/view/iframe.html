@@ -90,20 +90,12 @@
              if (doc && doc.body) doc.body.offsetHeight;
          } catch (e) { /* 跨源/未就绪：静默跳过 */ }
       }
-      // 行隐藏判定：display:none（未加载/复选框 off）或 tab 模式 visibility:hidden
-      //（已加载未选中行，预布局态）。
-      function rowHidden(it) {
-         if (it.active.style.display == 'none') return true;
-         return layoutMode == 'tab' && it.active.style.visibility == 'hidden';
-      }
-      var items = [];        // {name, link, active, standby, standbyTimer, pendingSwap, checkbox, tab, refreshSec, nextRefresh}
+      var items = [];        // {name, link, active, standby, standbyTimer, pendingSwap, checkbox, tab}
                              // 双缓冲（任务 24ha97）：active = 当前显示的 iframe；
                              // standby = 隐藏的预加载 iframe（加载完成后无闪换入），任一时刻每行 ≤2 个。
       var currentTab = -1;   // last selected tab index in tab layout
-      // 行级 auto-refresh：refresh 是容器层行为，不污染内容 URL——以行级属性表达。
       // 行语法：`名字 URL [key=value ...]`（URL 后空格分隔的属性，未知键忽略，
-      // 解析按可扩展写）。行带 refresh=N 时，容器每 N 秒重载该行 iframe
-      //（?t= 缓存破坏；服务端忽略未知参数）；页面隐藏时暂停；无属性行不受影响。
+      // 解析按可扩展写）。（历史上的 refresh=N 行属性已随周期刷新机制移除，残留无效。）
       function parseRow(s) {
          var parts = s.trim().split(/\s+/);
          var attrs = {};
@@ -112,10 +104,6 @@
             if (eq > 0) attrs[parts[i].slice(0, eq)] = parts[i].slice(eq + 1);
          }
          return { name: parts[0] || '', link: parts[1] || parts[0] || '', attrs: attrs };
-      }
-      function refreshSecOf(attrs) {
-         var v = parseInt(attrs && attrs.refresh, 10);
-         return v > 0 ? v : 0;
       }
       function reloadSrc(link) {
          return link + (link.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
@@ -229,7 +217,7 @@
              var link = row.link;
              var iframe = appendIframe(body);
              var tab = appendTab(tabbar, name, items.length);
-             var item = { name: name, link: link, active: iframe, standby: null, standbyTimer: null, pendingSwap: false, checkbox: null, tab: tab, refreshSec: refreshSecOf(row.attrs), nextRefresh: 0 };
+             var item = { name: name, link: link, active: iframe, standby: null, standbyTimer: null, pendingSwap: false, checkbox: null, tab: tab };
              item.checkbox = appendIndex(checklist, item, name, link);
              items.push(item);
              // tab mode: lazy load — hidden tabs keep an empty src and are
@@ -265,17 +253,17 @@
              selectTab(currentTab >= 0 ? currentTab : 0);
          }
       }
-      // ⟳ 刷新按钮（任务 8xs9iv）：对当前选中行触发双缓冲刷新——隐藏 standby 预加载，
-      // 就绪后无白屏换入。!it.standby 守卫：连点/与周期刷新重叠时不重复启动。
+      // 双缓冲刷新（⟳ 按钮与再点当前 tab 共用）：隐藏 standby 预加载，就绪后无白屏换入。
+      // !it.standby 守卫：连点不重复启动。
+      function refreshItem(it) {
+         if (!it.standby) startStandby(it);
+      }
+      // ⟳ 刷新按钮（任务 8xs9iv）：对当前选中行触发双缓冲刷新。
       function refreshCurrentTab() {
          if (layoutMode != 'tab') return;
          var it = items[currentTab];
          if (!it || !iframeLoaded(it)) return; // 行未加载（lazy load 未到）：无内容可刷
-         if (!it.standby) {
-             startStandby(it);
-             // refresh=N 行：手动刷新后顺延周期，避免 refreshAll 紧接着重复刷新
-             if (it.refreshSec > 0) it.nextRefresh = Date.now() + it.refreshSec * 1000;
-         }
+         refreshItem(it);
       }
       function iframeLoaded(item) {
          // indexOf (not endsWith): container-level refresh appends a ?t=<ts>
@@ -284,7 +272,13 @@
       }
       function selectTab(idx) {
          var t0 = performance.now();  // 埋点（任务 8a1xdz）：切换耗时，真机 DevTools Console 可观测
-         // 点击 tab 只切显示，不触发刷新（任务 8xs9iv：刷新改由独立的 ⟳ 按钮承担）。
+         // 再点当前可见 tab = 双缓冲刷新（与 ⟳ 按钮等价）；切其他 tab 只切显示。
+         // 首次选中（currentTab 初值 -1）不走此分支。
+         if (idx === currentTab) {
+             var cur = items[idx];
+             if (cur && iframeLoaded(cur)) refreshItem(cur);
+             return;
+         }
          currentTab = idx;
          for (var j = 0; j < items.length; j++) {
              var it = items[j];
@@ -353,27 +347,7 @@
       });
       // poll for async content growth (lazy load, fold/expand, late render)
       setInterval(refitFlow, 2000);
-      // container-level per-row refresh: reload each row's iframe on its own
-      // cadence (only rows with a refresh=N row attribute). 双缓冲：到期只创建/复用
-      // 隐藏 standby 预加载，可见 active 不动；standby 就绪后 swap，全程无白屏。
-      function refreshAll() {
-         if (document.hidden) return; // paused while page hidden; resumes next tick
-         var now = Date.now();
-         for (var j = 0; j < items.length; j++) {
-             var it = items[j];
-             if (it.refreshSec <= 0 || !iframeLoaded(it)) continue;
-             if (rowHidden(it)) {
-                it.nextRefresh = now + it.refreshSec * 1000; // hidden: reschedule, no fetch
-                continue;
-             }
-             if (now < it.nextRefresh) continue;
-             it.nextRefresh = now + it.refreshSec * 1000;
-             if (it.standby) continue; // 上一个 standby 还在加载（30s 超时兜底丢弃后下周期重试）
-             startStandby(it);
-         }
-      }
-      // 页面恢复可见：执行被推迟的 swap（standby onload 时页面隐藏的情形），
-      // 然后 refreshAll 下一 tick 自然恢复周期。
+      // 页面恢复可见：执行被推迟的 swap（standby onload 时页面隐藏的情形）。
       document.addEventListener('visibilitychange', function () {
          if (document.hidden) return;
          for (var j = 0; j < items.length; j++) {
@@ -384,7 +358,6 @@
              }
          }
       });
-      setInterval(refreshAll, 1000);
     </script>
   </head>
   <body onload="initApp()" style="margin:0">
