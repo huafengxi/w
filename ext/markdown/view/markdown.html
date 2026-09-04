@@ -134,9 +134,6 @@
       })();
 
       function initApp(){
-        var url = window.location.pathname;
-        var gitlab_url = "http://gitlab.alibaba-inc.com/yuanqi.xhf/mysite-mirror/blob/master/";
-        $("gitlab_link").href = gitlab_url + url;
         if (inIframe())hide($('head-bar'));
         makeEditor($('editor'), function (content){ lastRendered = content; renderDoc(content); });
       }
@@ -145,9 +142,6 @@
   <body onload="initApp()">
     <nav id="head-bar"><a href="javascript:toggle_editor()">edit</a><a  href="javascript:split()">split</a><a id="run-all" href="javascript:runAll()" style="display:none">run-all</a><a id="refresh-all" href="javascript:runAll(true)" style="display:none">refresh-all</a><a id="log-all" href="javascript:toggleLogs()" style="display:none">log</a>
       <!-- <a href="https://www.google.com/cse/publicurl?cx=005037642699962415424:bbpmoxhiswm">search</a> -->
-      <span style="float:right">
-        <a id="gitlab_link" href="#">gitlab</a>
-    </span>
     <hr style="margin:0;"/>
     </nav>
     <div id="editor"></div>
