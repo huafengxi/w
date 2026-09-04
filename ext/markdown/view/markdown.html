@@ -7,7 +7,11 @@
     <script type="application/javascript" src="/w/view/my.js"></script>
     <script type="application/javascript" src="/w/view/editor.js"></script>
     <script type="application/javascript" src="/w/ext/markdown/deps/marked.min.js"></script>
-    <style>#doc li > p { margin: 0.2em 0; }</style>
+    <style>
+      #doc li > p { margin: 0.2em 0; }
+      .iframe-preview { margin: 0.4em 0 0.8em; }
+      .iframe-preview iframe { display: block; height: 32em; }
+    </style>
     <script type="application/javascript">
       function toggle_editor() { toggleVisible($('editor')); }
       function dirname(path) { return path.match(/.*\//);  }
@@ -132,9 +136,35 @@
          setInterval(pollRefresh, sec * 1000);
       })();
 
+      // Link whose URL carries v=iframe: instead of navigating, preview it in an
+      // inline iframe right below the link (click toggles; several may stay open).
+      // The server has no v=iframe view — the param is purely client-side, so it is
+      // stripped when building the iframe src (all other params, e.g. refresh=, kept).
+      function iframePreviewInit() {
+         function hrefNoIframeParam(a) {
+            try {
+               var u = new URL(a.getAttribute('href'), window.location.href);
+               return u.searchParams.get('v') === 'iframe' ? (u.searchParams.delete('v'), u.href) : null;
+            } catch (e) { return null; }
+         }
+         $('doc').addEventListener('click', function (ev) {
+            var a = ev.target.closest ? ev.target.closest('a[href]') : null;
+            var src = a && hrefNoIframeParam(a);
+            if (!src) return; // not a v=iframe link: leave default behavior untouched
+            ev.preventDefault();
+            if (a.__iframeBox) { a.__iframeBox.remove(); a.__iframeBox = null; return; }
+            var box = $n('div'); box.className = 'iframe-preview';
+            var f = $n('iframe'); f.src = src;
+            box.appendChild(f);
+            var anchor = a.closest('li') || a.closest('p') || a;
+            anchor.parentNode.insertBefore(box, anchor.nextSibling);
+            a.__iframeBox = box;
+         });
+      }
       function initApp(){
         if (inIframe())hide($('head-bar'));
         makeEditor($('editor'), function (content){ lastRendered = content; renderDoc(content); });
+        iframePreviewInit();
       }
     </script>
   </head>
