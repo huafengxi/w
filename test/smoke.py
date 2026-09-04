@@ -28,9 +28,9 @@ def req(path, qs=''):
         print('ERR  %-24s %-10s %r' % (path, qs, e))
 
 if __name__ == '__main__':
-    req('/w/readme.md')
-    req('/w/readme.md', 'v=read')
-    req('/w/readme.md', 'v=head')
+    req('/w/README.md')
+    req('/w/README.md', 'v=read')
+    req('/w/README.md', 'v=head')
     req('/w/', '')
     req('/w/', 'v=dir')
     print('--- smoke done ---')
