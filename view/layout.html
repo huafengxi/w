@@ -24,7 +24,7 @@
     </style>
   </head>
   <body>
-      <nav>
+      <nav id="head-bar">
           <a href='?v=tar'>tar </a>
           <a href='?v=expo'>expo</a>
           <a href='?v=album'>album </a>
@@ -32,6 +32,13 @@
       <div>
           $body
       </div>
+      <script>
+        (function () {
+            var embedded = true;
+            try { embedded = window.self !== window.top; } catch (e) { embedded = true; }
+            if (embedded) { document.getElementById('head-bar').style.display = 'none'; }
+        })();
+      </script>
   </body>
 </html>
 
