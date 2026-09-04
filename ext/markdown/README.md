@@ -28,9 +28,9 @@
 
 + **run**：执行命令。输出按行流式到达：
   - **stdout** → 累积后按 markdown 渲染，内嵌展示在 widget 结果区（边跑边更新）；
-  - **stderr** → 进 widget 自带的 log 控制台（**log** 按钮切换显隐）。
+  - **stderr** → 进 widget 自带的 log 控制台（**log** 按钮切换显隐）。log 控制台缺省收起：完成时 stderr 为空保持隐藏、非空自动展开（流错误同样自动展开）。
 + **refresh**：重跑命令。
-+ **log**：切换本 widget 的 stderr 控制台。
++ **log**：切换本 widget 的 stderr 控制台；按钮后小号灰字显示该 widget 最近一次完成时间（本地 `HH:MM:SS`，未跑过为空）。
 
 ### 执行语义 = 裸 shell
 

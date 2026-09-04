@@ -45,15 +45,21 @@
          var btn = $n('button'); btn.textContent = 'run: ' + w.cmd;
          var refreshBtn = $n('button'); refreshBtn.textContent = 'refresh';
          var logBtn = $n('button'); logBtn.textContent = 'log';
+         var ts = $n('span'); ts.style.fontSize = '11px'; ts.style.color = '#999'; ts.style.marginLeft = '4px';
          var log = $n('pre'); log.className = 'output console'; hide(log);
          var result = $n('div'); result.className = 'doc';
          logBtn.onclick = function(){ toggleVisible(log); };
-         box.appendChild(btn); box.appendChild(refreshBtn); box.appendChild(logBtn); box.appendChild(log); box.appendChild(result);
+         box.appendChild(btn); box.appendChild(refreshBtn); box.appendChild(logBtn); box.appendChild(ts); box.appendChild(log); box.appendChild(result);
+         function stamp(){
+            var d = new Date();
+            function p(n){ return (n < 10 ? '0' : '') + n; }
+            ts.textContent = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+         }
          ph.parentNode.replaceChild(box, ph);
          var outText, logText, buf;
          function run(done){
             outText = ''; logText = ''; buf = '';
-            result.innerHTML = ''; log.textContent = ''; show(log);
+            result.innerHTML = ''; log.textContent = ''; hide(log); // stays collapsed; on_done shows it only if stderr arrived
             rpc_stream('/w/ext/shell/rpc/sh.py', {v: 'script', src: getUrl(), cmd: w.cmd, stream: 2},
                function(text){
                   buf += text; var i;
@@ -64,8 +70,8 @@
                      else { outText += data; result.innerHTML = renderMarkdown(outText); }
                   }
                },
-               function(){ if (done) done(); },
-               function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); if (done) done(); });
+               function(){ if (logText) show(log); else hide(log); stamp(); if (done) done(); },
+               function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); stamp(); if (done) done(); });
          }
          btn.onclick = function(){ run(); };
          refreshBtn.onclick = function(){ run(); };
