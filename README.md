@@ -3,7 +3,7 @@
 This is a document edit server. see [design.md](design.md).
 once deployed, you can creat file with special extensions for different purpose.
 
-> **shell 路由**：GET 已映射视图的扩展名路径（如 `.md`）即使文件不存在也返 200 + HTML 外壳（内容真实性由客户端取内容时才见分晓）；其余不存在路径返 404（`w/view/404.html`）。页面内容里的链接必须写**绝对路径**，相对链接会被当作页面路径吃掉；`.md` 链接无需 `?v=text/md` 后缀（服务端按扩展名推断视图），仅 `.py` 等非 md 文件渲 md 视图时才带 `?v=...`；md 视图链接带 `_v=inline`（如 `?_v=inline`）表示点击在页内 iframe 就地预览（再点收起，可多个同开；`_v=` 是客户端私有参数命名空间——下划线前缀约定，服务端不消费，构造内嵌 iframe 前剥离）。
+> **shell 路由**：GET 已映射视图的扩展名路径（如 `.md`）即使文件不存在也返 200 + HTML 外壳（内容真实性由客户端取内容时才见分晓）；其余不存在路径返 404（`w/view/404.html`）。页面内容里的链接必须写**绝对路径**，相对链接会被当作页面路径吃掉；`.md` 链接无需 `?v=text/md` 后缀（服务端按扩展名推断视图），仅 `.py` 等非 md 文件渲 md 视图时才带 `?v=...`；md 视图链接带 `_v=inline`（如 `?_v=inline`）表示渲染后默认在页内 iframe 就地展开（点击收起/再展开，可多个同开；`_v=` 是客户端私有参数命名空间——下划线前缀约定，服务端不消费，构造内嵌 iframe 前剥离）。
 
 > **运维要点**：8080 basic auth 凭证 = `~/.auth/passwd`（`env/pi-web.auth` 是 8192 的）；`w/stores/cmd_store.py` 不得删。
 
