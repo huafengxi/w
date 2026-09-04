@@ -273,6 +273,13 @@
                  } else if (layoutMode == 'tab') {
                      stackFrame(it.active, true);   // 布局常驻，只切 visibility，无全量 reflow
                      applyHeight(it.active);
+                     // 点 tab 即刷新该行（任务 klkidf）：双缓冲后台预加载，就绪后无白屏换入。
+                     // !it.standby 守卫：连续快速点击/与周期刷新重叠时不重复启动。
+                     if (!it.standby) {
+                         startStandby(it);
+                         // refresh=N 行：手动刷新后顺延周期，避免 refreshAll 紧接着重复刷新
+                         if (it.refreshSec > 0) it.nextRefresh = Date.now() + it.refreshSec * 1000;
+                     }
                  } else {
                      it.active.style.display = 'block';
                      applyHeight(it.active);
