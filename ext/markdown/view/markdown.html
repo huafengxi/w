@@ -9,6 +9,9 @@
     <script type="application/javascript" src="/w/ext/markdown/deps/marked.min.js"></script>
     <style>
       #doc li > p { margin: 0.2em 0; }
+      /* manual cmd widget (${!cmd}): skipped by _v=autorun and run-all/refresh-all */
+      button.cmdw-manual { color: #b35900; border: 1px solid #b35900; }
+      .cmdw-manual-badge { color: #b35900; font-size: 11px; font-weight: bold; margin-right: 4px; }
       .iframe-preview { margin: 0.4em 0 0.8em; }
       /* height is set to content height by autoFitPreview(); the small 4em is only
          the pre-load placeholder. max-height caps absurdly long docs — the iframe
@@ -37,12 +40,23 @@
       // console, and a stdout result rendered as markdown. Commands always go
       // to the bare-shell endpoint (sh.py runs them via `bash -c`), which
       // streams output line-framed with a leading tag byte ('1'=stdout,
-      // '2'=stderr). refresh simply re-runs the command.
+      // '2'=stderr). refresh simply re-runs the command. Manual widgets
+      // (w.manual, from `${!cmd}`) get a visual marker; their run/refresh
+      // semantics are identical — the flag only opts them out of autorun and
+      // run-all/refresh-all (see renderDoc).
       function buildCmdWidget(w) {
          var ph = $(w.id);
          if (!ph) return null;
          var box = $n('div');
+         if (w.manual) {
+            var badge = $n('span'); badge.className = 'cmdw-manual-badge'; badge.textContent = 'manual';
+            box.appendChild(badge);
+         }
          var btn = $n('button'); btn.textContent = 'run: ' + w.cmd;
+         if (w.manual) {
+            btn.classList.add('cmdw-manual');
+            btn.title = '手动 widget：不参与 autorun / run-all，仅手点执行';
+         }
          var refreshBtn = $n('button'); refreshBtn.textContent = 'refresh';
          var logBtn = $n('button'); logBtn.textContent = 'log';
          var ts = $n('span'); ts.style.fontSize = '11px'; ts.style.color = '#999'; ts.style.marginLeft = '4px';
@@ -78,6 +92,8 @@
          return {run: run, log: log};
       }
       var cmdRunners = [], cmdLogs = [];
+      // Runs the AUTO set only (manual `${!cmd}` widgets are excluded); used
+      // by run-all, refresh-all and _v=autorun alike.
       function runAll(){
          var i = 0;
          (function next(){ if (i < cmdRunners.length) cmdRunners[i++](next); })();
@@ -90,25 +106,39 @@
          var widgets = [];
          var replaced = content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|\$\{([^}]+)\}/g, function(m, code, cmd){
             if (code) return code;
+            // `${!cmd}` = manual widget: skipped by _v=autorun and
+            // run-all/refresh-all (block-level flag; the `!` is stripped
+            // before the command ever reaches the server).
+            var manual = cmd.charAt(0) === '!';
             var id = 'cmdw' + widgets.length;
-            widgets.push({id: id, cmd: cmd});
+            widgets.push({id: id, cmd: manual ? cmd.slice(1) : cmd, manual: manual});
             return '<span id="' + id + '"></span>';
          });
          setWindowTitle(getTitle(content));
          $("doc").innerHTML = renderMarkdown(replaced);
+         // cmdRunners = the AUTO set only: manual widgets (${!cmd}) are
+         // deliberately excluded so run-all / refresh-all / _v=autorun can
+         // never trigger mutating commands. Manual widgets stay clickable via
+         // their own run/refresh buttons; their log consoles still join log-all.
          cmdRunners = []; cmdLogs = [];
+         var anyWidget = false;
          for (var i = 0; i < widgets.length; i++) {
             var w = buildCmdWidget(widgets[i]);
-            if (w) { cmdRunners.push(w.run); cmdLogs.push(w.log); }
+            if (w) {
+               anyWidget = true;
+               if (!widgets[i].manual) cmdRunners.push(w.run);
+               cmdLogs.push(w.log);
+            }
          }
-         var disp = cmdRunners.length ? 'inline' : 'none';
-         $('run-all').style.display = disp;
-         $('refresh-all').style.display = disp;
-         $('log-all').style.display = disp;
+         var dispAuto = cmdRunners.length ? 'inline' : 'none';
+         $('run-all').style.display = dispAuto;
+         $('refresh-all').style.display = dispAuto;
+         $('log-all').style.display = anyWidget ? 'inline' : 'none';
          autoExpandInlinePreviews(); // _v=inline links: open on every render
          // _v=autorun (client-private param namespace, see hrefNoPreviewParam):
          // auto run-all after every render — for dashboards that want data on
-         // open. Only the exact value `autorun` triggers it.
+         // open. Only the exact value `autorun` triggers it. Manual widgets
+         // are never part of runAll(), so they are never auto-executed.
          if (cmdRunners.length && new URLSearchParams(window.location.search).get('_v') === 'autorun') runAll();
       }
 
