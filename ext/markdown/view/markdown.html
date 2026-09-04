@@ -33,15 +33,21 @@
          var html = window.marked.parse(underscore_escape_filter(text));
          return html.replace(/<li>\s*<p>/g, '<li>').replace(/<\/p>\s*<\/li>/g, '</li>');
       }
+      // Parse the `#!cmd-interp <path> [<dispatch>]` directive (first token =
+      // rpc endpoint, optional second token = dispatch function name). No
+      // directive or a single token = bare shell: sh.py runs the command via
+      // `bash -c` directly; a dispatch name is forwarded as the `i` param.
       function getInterp(content) {
          var m = content.match(/^#!cmd-interp (.*)$/m);
-         return m ? m[1].trim() : '/w/ext/shell/rpc/sh.py';
+         var toks = m ? m[1].trim().split(/\s+/) : [];
+         return {path: toks[0] || '/w/ext/shell/rpc/sh.py', dispatch: toks[1] || ''};
       }
       // Build an inline-command widget: a run button, a hideable stderr log
-      // console, and a stdout result rendered as markdown. #!cmd-interp names
-      // the rpc endpoint (default sh.py, dispatched via i=ido_report_cmd),
-      // which streams output line-framed with a leading tag byte
-      // ('1'=stdout, '2'=stderr).
+      // console, and a stdout result rendered as markdown. The rpc endpoint
+      // streams output line-framed with a leading tag byte ('1'=stdout,
+      // '2'=stderr). refresh appends ` _fresh_` (dispatch-side skip-cache
+      // convention) only when a dispatch function is configured — in bare
+      // shell mode it would corrupt the command itself.
       function buildCmdWidget(w, interp) {
          var ph = $(w.id);
          if (!ph) return null;
@@ -58,8 +64,9 @@
          function run(done, fresh){
             outText = ''; logText = ''; buf = '';
             result.innerHTML = ''; log.textContent = ''; show(log);
-            var params = {v: 'script', i: 'ido_report_cmd', src: getUrl(), cmd: w.cmd + (fresh ? ' _fresh_' : ''), stream: 2};
-            rpc_stream(interp, params,
+            var params = {v: 'script', src: getUrl(), cmd: w.cmd + ((fresh && interp.dispatch) ? ' _fresh_' : ''), stream: 2};
+            if (interp.dispatch) params.i = interp.dispatch;
+            rpc_stream(interp.path, params,
                function(text){
                   buf += text; var i;
                   while ((i = buf.indexOf('\n')) >= 0) {

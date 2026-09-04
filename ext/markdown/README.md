@@ -29,19 +29,34 @@
 + **run**：执行命令。输出按行流式到达：
   - **stdout** → 累积后按 markdown 渲染，内嵌展示在 widget 结果区（边跑边更新）；
   - **stderr** → 进 widget 自带的 log 控制台（**log** 按钮切换显隐）。
-+ **refresh**：重跑，但在参数末尾附加 `_fresh_`（调用约定：执行侧据此强制
-  重算、跳过缓存——如 report 树 ido 的 result cache）。
++ **refresh**：重跑；仅当配置了派发函数时（见下节）在参数末尾附加 `_fresh_`
+  （调用约定：派发侧据此强制重算、跳过缓存——如 report 树 ido 的 result
+  cache）。裸 shell 模式下不附加，避免误伤命令。
 + **log**：切换本 widget 的 stderr 控制台。
 
-### `#!cmd-interp <path>` → 指定 rpc 解释器端点
+### `#!cmd-interp <path> [<派发函数>]` → 指定 rpc 端点与派发方式
 
-文档首行写 `#!cmd-interp <path>`，指定所有 `${...}` 命令提交到哪个服务端
-rpc 端点；缺省 `/w/ext/shell/rpc/sh.py`。渲染时该指令行本身不显示。
+文档首行可选写 `#!cmd-interp <path> [<派发函数>]`：第一个空白分隔的 token 指
+定所有 `${...}` 命令提交到哪个服务端 rpc 端点（缺省 `/w/ext/shell/rpc/sh.py`），
+可选的第二个空白分隔的 token 指定派发函数。渲染时该指令行本身不显示。
 
-缺省端点（sh.py）的执行语义：命令以 `bash -c` 在服务端运行，`src` 环境变量
-指向文档路径；缺省派发函数把命令当作 report 树 ido 的 `<sub> [args...]`
-派发（目标由文档路径推导），派发过程提示走 stderr（log 控制台可见），
-ido 的 markdown 结果走 stdout（结果区）。
+**缺省语义（无指令或只有单 token）= 裸 shell**：命令以 `bash -c` 在服务端直接执
+行（不经过任何派发）：
+
++ **stdout** → 结果区，按 markdown 渲染，边跑边更新；
++ **stderr** → log 控制台；
++ `src` 环境变量指向文档路径。
+
+**显式派发（双 token）**：第二个 token 作为派发函数名传给端点，命令不再当
+裸 shell 执行，而是交由该函数处理。典型用法是显式开启 report 树 ido 派发：
+
+```md
+#!cmd-interp /w/ext/shell/rpc/sh.py ido_report_cmd
+```
+
+此时命令被当作 report 树 ido 的 `<sub> [args...]` 派发（目标由文档路径推导），
+派发过程提示走 stderr（log 控制台可见），ido 的 markdown 结果走 stdout（结果区）；
+refresh 的 `_fresh_` 约定也只在这一模式下生效。
 
 **流式协议要点**（理解输出行为所需）：端点以行帧流式返回，每行带一个前导
 标签字节——`'1'` = stdout（进结果区，按 markdown 渲染）、`'2'` = stderr
@@ -71,9 +86,9 @@ ido 的 markdown 结果走 stdout（结果区）。
 
 ## 最小示例
 
-```md
-#!cmd-interp /w/ext/shell/rpc/sh.py
+缺省（裸 shell）——无需任何指令行，`${...}` 即真实可执行：
 
+```md
 # Demo 页
 
 当前时间（点 run 后内嵌显示，流式更新）：
@@ -81,9 +96,14 @@ ${date}
 
 磁盘概览（stdout 按 markdown 渲染，stderr 进 log 控制台）：
 ${df -h | head -3}
+```
 
-# 本工作区典型用法：report 树 ido 派发——缺省端点把 `${<sub> [args...]}`
-# 派发到由文档路径推导出的 report 树 ido 的执行项 <sub>，结果以 markdown
-# 流式内嵌（派发约定见 ../shell/ 的 sh.rc）：
+显式开启 report 树 ido 派发（第二个 token 指定派发函数）：
+`${<sub> [args...]}` 派发到由文档路径推导出的 report 树 ido 的执行项 <sub>，
+结果以 markdown 流式内嵌（派发约定见 ../shell/ 的 sh.rc）：
+
+```md
+#!cmd-interp /w/ext/shell/rpc/sh.py ido_report_cmd
+
 ${summary}
 ```
