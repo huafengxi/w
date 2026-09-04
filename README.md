@@ -3,7 +3,7 @@
 This is a document edit server. see [design.md](design.md).
 once deployed, you can creat file with special extensions for different purpose.
 
-> **SPA shell 路由**：GET 任意路径都返 200 + HTML 外壳，服务端无 404（真实性由客户端取内容时才见分晓）。因此页面内容里的链接必须写**绝对路径**并按需带 `?v=...` 参数，相对链接会被当作页面路径吃掉。（2026-09-01 事故教训，任务 oln8xf）
+> **shell 路由**：GET 已映射视图的扩展名路径（如 `.md`）即使文件不存在也返 200 + HTML 外壳（内容真实性由客户端取内容时才见分晓）；其余不存在路径返 404（`w/view/404.html`）。页面内容里的链接必须写**绝对路径**，相对链接会被当作页面路径吃掉；`.md` 链接无需 `?v=text/md` 后缀（服务端按扩展名推断视图），仅 `.py` 等非 md 文件渲 md 视图时才带 `?v=...`。
 
 > **运维要点**：8080 basic auth 凭证 = `~/.auth/passwd`（`env/pi-web.auth` 是 8192 的）；`w/stores/cmd_store.py` 不得删。
 
