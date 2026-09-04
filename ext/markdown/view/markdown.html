@@ -33,22 +33,12 @@
          var html = window.marked.parse(underscore_escape_filter(text));
          return html.replace(/<li>\s*<p>/g, '<li>').replace(/<\/p>\s*<\/li>/g, '</li>');
       }
-      // Parse the `#!cmd-interp <path> [<dispatch>]` directive (first token =
-      // rpc endpoint, optional second token = dispatch function name). No
-      // directive or a single token = bare shell: sh.py runs the command via
-      // `bash -c` directly; a dispatch name is forwarded as the `i` param.
-      function getInterp(content) {
-         var m = content.match(/^#!cmd-interp (.*)$/m);
-         var toks = m ? m[1].trim().split(/\s+/) : [];
-         return {path: toks[0] || '/w/ext/shell/rpc/sh.py', dispatch: toks[1] || ''};
-      }
       // Build an inline-command widget: a run button, a hideable stderr log
-      // console, and a stdout result rendered as markdown. The rpc endpoint
+      // console, and a stdout result rendered as markdown. Commands always go
+      // to the bare-shell endpoint (sh.py runs them via `bash -c`), which
       // streams output line-framed with a leading tag byte ('1'=stdout,
-      // '2'=stderr). refresh appends ` _fresh_` (dispatch-side skip-cache
-      // convention) only when a dispatch function is configured — in bare
-      // shell mode it would corrupt the command itself.
-      function buildCmdWidget(w, interp) {
+      // '2'=stderr). refresh simply re-runs the command.
+      function buildCmdWidget(w) {
          var ph = $(w.id);
          if (!ph) return null;
          var box = $n('div');
@@ -61,12 +51,10 @@
          box.appendChild(btn); box.appendChild(refreshBtn); box.appendChild(logBtn); box.appendChild(log); box.appendChild(result);
          ph.parentNode.replaceChild(box, ph);
          var outText, logText, buf;
-         function run(done, fresh){
+         function run(done){
             outText = ''; logText = ''; buf = '';
             result.innerHTML = ''; log.textContent = ''; show(log);
-            var params = {v: 'script', src: getUrl(), cmd: w.cmd + ((fresh && interp.dispatch) ? ' _fresh_' : ''), stream: 2};
-            if (interp.dispatch) params.i = interp.dispatch;
-            rpc_stream(interp.path, params,
+            rpc_stream('/w/ext/shell/rpc/sh.py', {v: 'script', src: getUrl(), cmd: w.cmd, stream: 2},
                function(text){
                   buf += text; var i;
                   while ((i = buf.indexOf('\n')) >= 0) {
@@ -80,23 +68,21 @@
                function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); if (done) done(); });
          }
          btn.onclick = function(){ run(); };
-         refreshBtn.onclick = function(){ run(null, true); };
+         refreshBtn.onclick = function(){ run(); };
          return {run: run, log: log};
       }
       var cmdRunners = [], cmdLogs = [];
-      function runAll(fresh){
+      function runAll(){
          var i = 0;
-         (function next(){ if (i < cmdRunners.length) cmdRunners[i++](next, fresh); })();
+         (function next(){ if (i < cmdRunners.length) cmdRunners[i++](next); })();
       }
       function toggleLogs(){
          var anyVisible = cmdLogs.some(function(l){ return isVisible(l); });
          cmdLogs.forEach(function(l){ anyVisible ? hide(l) : show(l); });
       }
       function renderDoc(content) {
-         var interp = getInterp(content);
-         var body = content.replace(/^#!cmd-interp .*$/m, '');
          var widgets = [];
-         var replaced = body.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|\$\{([^}]+)\}/g, function(m, code, cmd){
+         var replaced = content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|\$\{([^}]+)\}/g, function(m, code, cmd){
             if (code) return code;
             var id = 'cmdw' + widgets.length;
             widgets.push({id: id, cmd: cmd});
@@ -106,7 +92,7 @@
          $("doc").innerHTML = renderMarkdown(replaced);
          cmdRunners = []; cmdLogs = [];
          for (var i = 0; i < widgets.length; i++) {
-            var w = buildCmdWidget(widgets[i], interp);
+            var w = buildCmdWidget(widgets[i]);
             if (w) { cmdRunners.push(w.run); cmdLogs.push(w.log); }
          }
          var disp = cmdRunners.length ? 'inline' : 'none';
@@ -189,7 +175,7 @@
     </script>
   </head>
   <body onload="initApp()">
-    <nav id="head-bar"><a href="#" onclick="toggle_editor(); return false;">edit</a><a id="run-all" href="#" onclick="runAll(); return false;" style="display:none">run-all</a><a id="refresh-all" href="#" onclick="runAll(true); return false;" style="display:none">refresh-all</a><a id="log-all" href="#" onclick="toggleLogs(); return false;" style="display:none">log</a>
+    <nav id="head-bar"><a href="#" onclick="toggle_editor(); return false;">edit</a><a id="run-all" href="#" onclick="runAll(); return false;" style="display:none">run-all</a><a id="refresh-all" href="#" onclick="runAll(); return false;" style="display:none">refresh-all</a><a id="log-all" href="#" onclick="toggleLogs(); return false;" style="display:none">log</a>
       <!-- <a href="https://www.google.com/cse/publicurl?cx=005037642699962415424:bbpmoxhiswm">search</a> -->
     <hr style="margin:0;"/>
     </nav>

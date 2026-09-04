@@ -13,11 +13,3 @@ ${df -h | head -3}
 系统负载：
 
 ${uptime}
-
----
-
-如需显式指定解释器/派发函数，须在文档开头写 `#!cmd-interp` 指令行。示例（下方代码块仅字面展示，不会生成 widget）：
-
-```
-#!cmd-interp /w/ext/shell/rpc/sh.py ido_report_cmd
-```

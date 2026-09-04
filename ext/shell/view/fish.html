@@ -9,8 +9,8 @@
     <script type="application/javascript">
     // Resolve the interp endpoint: an explicit interp= query arg (server-injected
     // via $QUERY_ARGS from the vmap route, like lish.html) wins; else a
-    // '#!interp: <endpoint>' directive in the buffer (mirroring markdown.html's
-    // #!cmd-interp) is used; else the sh.py bash streamer.
+    // '#!interp: <endpoint>' directive in the buffer is used; else the sh.py
+    // bash streamer.
     var qarg = dict_merge(dict_merge({dir: ''}, $QUERY_ARGS), getQueryArgs());
     var __interp = '/w/ext/shell/rpc/sh.py';
     function getInterp(content) {
