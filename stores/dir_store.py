@@ -48,7 +48,10 @@ class DirStore:
         header_vars = dict()
         real_path = self.get_real_path(path)
         if _path_is_dir(path):
-            mime_type = 'dir'
+            # 目录不存在时不给 type：否则 vmap 仍映射到目录视图脚本，
+            # read_dir 对不存在目录 os.listdir 崩成 500（任务 xf8ie9），
+            # 无 type 走 handler 404 兜底。
+            mime_type = 'dir' if os.path.isdir(real_path) else None
             header_vars = dict(rpath=real_path)
         else:
             content = safe_read(real_path, 1024)
