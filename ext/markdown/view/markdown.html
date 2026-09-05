@@ -35,14 +35,14 @@
          var html = window.marked.parse(underscore_escape_filter(text));
          return html.replace(/<li>\s*<p>/g, '<li>').replace(/<\/p>\s*<\/li>/g, '</li>');
       }
-      // Build an inline-command widget: a run button, a hideable stderr log
-      // console, and a stdout result rendered as markdown. Commands always go
-      // to the bare-shell endpoint (sh.py runs them via `bash -c`), which
-      // streams output line-framed with a leading tag byte ('1'=stdout,
-      // '2'=stderr). refresh simply re-runs the command. Manual widgets
-      // (w.manual, from `${!cmd}`) are marked by the orange run-button
-      // outline; their run/refresh semantics are identical — the flag only
-      // opts them out of autorun and run-all/refresh-all (see renderDoc).
+      // Build an inline-command widget: a '$ <cmd>' button that toggles the
+      // output area (stderr log console + stdout result), and a run button
+      // that (re-)runs the command. Commands always go to the bare-shell
+      // endpoint (sh.py runs them via `bash -c`), which streams output
+      // line-framed with a leading tag byte ('1'=stdout, '2'=stderr).
+      // Manual widgets (w.manual, from `${!cmd}`) are marked by the orange
+      // command-button outline; their semantics are identical — the flag
+      // only opts them out of autorun and run-all/refresh-all (see renderDoc).
       function buildCmdWidget(w) {
          var ph = $(w.id);
          if (!ph) return null;
@@ -50,9 +50,9 @@
          var btn = $n('button'); btn.textContent = '$ ' + w.cmd;
          if (w.manual) {
             btn.classList.add('cmdw-manual');
-            btn.title = '手动 widget：不参与 autorun / run-all，仅手点执行';
+            btn.title = '手动 widget：不参与 autorun / run-all，仅手点 run 执行';
          }
-         var refreshBtn = $n('button'); refreshBtn.textContent = 'refresh';
+         var refreshBtn = $n('button'); refreshBtn.textContent = 'run';
          var logBtn = $n('button'); logBtn.textContent = 'log';
          var ts = $n('span'); ts.style.fontSize = '11px'; ts.style.color = '#999'; ts.style.marginLeft = '4px';
          var log = $n('pre'); log.className = 'output console'; hide(log);
@@ -82,7 +82,10 @@
                function(){ if (logText) show(log); else hide(log); stamp(); if (done) done(); },
                function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); stamp(); if (done) done(); });
          }
-         btn.onclick = function(){ run(); };
+         btn.onclick = function(){ // toggle the whole output area (log + result)
+            if (isVisible(result)) { hide(result); hide(log); }
+            else { show(result); if (logText) show(log); }
+         };
          refreshBtn.onclick = function(){ run(); };
          return {run: run, log: log};
       }
@@ -114,7 +117,7 @@
          // cmdRunners = the AUTO set only: manual widgets (${!cmd}) are
          // deliberately excluded so run-all / refresh-all / _v=autorun can
          // never trigger mutating commands. Manual widgets stay clickable via
-         // their own run/refresh buttons; their log consoles still join log-all.
+         // their own run button; their log consoles still join log-all.
          cmdRunners = []; cmdLogs = [];
          var anyWidget = false;
          for (var i = 0; i < widgets.length; i++) {
