@@ -47,7 +47,7 @@
          var ph = $(w.id);
          if (!ph) return null;
          var box = $n('div');
-         var btn = $n('button'); btn.textContent = 'run: ' + w.cmd;
+         var btn = $n('button'); btn.textContent = '$ ' + w.cmd;
          if (w.manual) {
             btn.classList.add('cmdw-manual');
             btn.title = '手动 widget：不参与 autorun / run-all，仅手点执行';
