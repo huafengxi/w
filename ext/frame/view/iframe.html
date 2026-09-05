@@ -241,15 +241,6 @@
              fsBtn.textContent = '⛶';
              fsBtn.onclick = toggleFullscreen;
              tabbar.insertBefore(fsBtn, tabbar.firstChild);
-             // 独立刷新按钮（任务 8xs9iv）：对当前选中行触发双缓冲刷新。
-             // 与 fs-toggle 一起右浮动（后插 firstChild → 显示在 fs 左侧）。
-             var refreshBtn = document.createElement('div');
-             refreshBtn.id = 'refresh-toggle';
-             refreshBtn.className = 'tab';
-             refreshBtn.style.cssFloat = 'right';
-             refreshBtn.textContent = '⟳';
-             refreshBtn.onclick = refreshCurrentTab;
-             tabbar.insertBefore(refreshBtn, tabbar.firstChild);
              selectTab(currentTab >= 0 ? currentTab : 0);
          }
       }
@@ -257,13 +248,6 @@
       // !it.standby 守卫：连点不重复启动。
       function refreshItem(it) {
          if (!it.standby) startStandby(it);
-      }
-      // ⟳ 刷新按钮（任务 8xs9iv）：对当前选中行触发双缓冲刷新。
-      function refreshCurrentTab() {
-         if (layoutMode != 'tab') return;
-         var it = items[currentTab];
-         if (!it || !iframeLoaded(it)) return; // 行未加载（lazy load 未到）：无内容可刷
-         refreshItem(it);
       }
       function iframeLoaded(item) {
          // indexOf (not endsWith): container-level refresh appends a ?t=<ts>
