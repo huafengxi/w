@@ -108,13 +108,53 @@ def do_view(store, path, meta, args):
     else:
         return response_part_file(store, path, meta, range_req)
 
-def _redact_log_args(args):
-    """日志脱敏（任务 0829-2134-n8i2：op=cmd 日志全量脱敏）：
-    op=cmd 请求的日志统一降级——只记 type + 各字段长度/计数摘要，
-    prompt 文本（message 等字符串字段）与 images 一律不全文入日志。
-    例：{"type": "prompt", "message": "<12 chars>", "images": "[1 x image/png]"}
-    steer/follow_up 及其它 cmd 类型同口径。只作用于日志面，
+# 通用 secret 参数名（任务 fnv23x / todo t-m2v9②）：按**参数名**脱敏，命中值不进日志。
+# 词边界式匹配（前后不得紧邻字母）——`user_nonce`/`next_token`/`api_key`/`dashscope_api_key`
+# 命中，而 `author`/`monkey`/`keyword` 之类不误伤。键名族参考 env/ 凭据命名
+# （PI_WEB_PASSWORD、RSH_TOKEN、DASHSCOPE_API_KEY、TOKENFLOW_API_KEY、PIKPAK_PASSWORD、
+# WEBDAV_PASSWORD、hf-token、civitai token）与端点侧一次性 nonce。
+_SECRET_ARG_RE = re.compile(
+    r'(?<![a-z])('
+    r'nonce|tokens?|passw(?:or)?d|pwd|secrets?|credentials?|cookies?|'
+    r'auth|authorization|signatures?|sig|(?:api|access|private|secret|session)[_-]?key|key'
+    r')(?![a-z])', re.I)
+
+def _is_secret_arg(name):
+    return bool(_SECRET_ARG_RE.search(str(name).lower()))
+
+def _redact_secret_args(args):
+    """按参数名脱敏 secret 值（保留长度/计数便于排障，明文一律不落日志）。
+    无命中时原对象直返（不做无谓复制）；有命中时返回浅拷贝——只作用于日志面，
     不触碰透传给执行路径的原始 args。"""
+    hits = [k for k in args if _is_secret_arg(k)]
+    if not hits:
+        return args
+    red = dict(args)
+    for k in hits:
+        v = red[k]
+        if isinstance(v, str):
+            red[k] = '<redacted %d chars>' % len(v)
+        elif isinstance(v, (list, tuple, set)):
+            red[k] = '<redacted %d items>' % len(v)
+        elif isinstance(v, dict):
+            red[k] = '<redacted %d keys>' % len(v)
+        elif v is None:
+            red[k] = v
+        else:
+            red[k] = '<redacted>'
+    return red
+
+def _redact_log_args(args):
+    """日志脱敏，两层：
+    ① 通用 secret 参数名（任务 fnv23x）：任何请求的 args 里名字命中 _SECRET_ARG_RE
+       的值（nonce/token/password/api_key/…）一律替换为 `<redacted N chars>`，
+       使 `RESOLVE:` 行不再明文落 run/logs/web.log。
+    ② op=cmd 深度脱敏（任务 0829-2134-n8i2）：只记 type + 各字段长度/计数摘要，
+       prompt 文本（message 等字符串字段）与 images 一律不全文入日志。
+       例：{"type": "prompt", "message": "<12 chars>", "images": "[1 x image/png]"}
+       steer/follow_up 及其它 cmd 类型同口径。
+    两层都只作用于日志面，不触碰透传给执行路径的原始 args。"""
+    args = _redact_secret_args(args)
     if args.get('op') != 'cmd':
         return args
     cmd = args.get('cmd')

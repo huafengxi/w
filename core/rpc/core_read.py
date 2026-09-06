@@ -27,5 +27,8 @@ def interp(store, v='echo', src=None, **kw):
             content = store.find(src)
         else:
             content = store.read(src).split('\n')
-        li = ['<li><a href="%s" target="target" ><code>%s</code></a></li>'%(name, name) for name in content]
+        # target=_blank（任务 fnv23x）：旧写法指向名为 target 的浏览上下文，那是早已
+        # 删除的 split 视图右栏窗格（全仓已无任何同名 frame 承接），只会让浏览器新开/
+        # 复用一个叫 target 的普通 tab；统一为有效的新标签页语义。
+        li = ['<li><a href="%s" target="_blank" ><code>%s</code></a></li>'%(name, name) for name in content]
         return dict(type='text/html'), make_html(title=src, css='code{margin-top:0; margin-bottom:0;} code:hover{background-color: lightgray;}', body='<ul>%s</ul>' % '\n'.join(li))

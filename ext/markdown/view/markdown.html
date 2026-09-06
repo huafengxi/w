@@ -11,6 +11,11 @@
       #doc li > p { margin: 0.2em 0; }
       /* manual cmd widget (${!cmd}): skipped by _v=autorun and run-all/refresh-all */
       button.cmdw-manual { color: #b35900; border: 1px solid #b35900; }
+      /* the '$ <cmd>' label shows the whole command, which can be a long line
+         (e.g. an rsh one-liner): cap the width and ellipsis instead of
+         stretching the layout. Full command stays in the button's title. */
+      button.cmdw-cmd { max-width: 32em; overflow: hidden; text-overflow: ellipsis;
+                        white-space: nowrap; vertical-align: bottom; }
       .iframe-preview { margin: 0.4em 0 0.8em; }
       /* height is set to content height by autoFitPreview(); the small 4em is only
          the pre-load placeholder. max-height caps absurdly long docs — the iframe
@@ -48,9 +53,11 @@
          if (!ph) return null;
          var box = $n('div');
          var btn = $n('button'); btn.textContent = '$ ' + w.cmd;
+         btn.classList.add('cmdw-cmd'); // ellipsis cap for long commands (see <style>)
+         btn.title = w.cmd;             // full command on hover (the label may be truncated)
          if (w.manual) {
             btn.classList.add('cmdw-manual');
-            btn.title = '手动 widget：不参与 autorun / run-all，仅手点 run 执行';
+            btn.title += '\n手动 widget：不参与 autorun / run-all，仅手点 run 执行';
          }
          var refreshBtn = $n('button'); refreshBtn.textContent = 'run';
          var logBtn = $n('button'); logBtn.textContent = 'log';
@@ -104,12 +111,26 @@
          var widgets = [];
          var replaced = content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|\$\{([^}]+)\}/g, function(m, code, cmd){
             if (code) return code;
+            // Leading whitespace is normalized away before the flag is read, so
+            // `${ !cmd}` cannot silently degrade into an AUTO widget: `!` is the
+            // manual flag and a stray leading space used to hide it, which would
+            // have let a mutating command join autorun / run-all (bash treats a
+            // leading `!` as pipeline negation and still runs the body). Only the
+            // leading run is stripped — trailing whitespace and the command body
+            // (newlines, heredoc indentation) are untouched.
+            var body = cmd.replace(/^\s+/, '');
             // `${!cmd}` = manual widget: skipped by _v=autorun and
             // run-all/refresh-all (block-level flag; the `!` is stripped
             // before the command ever reaches the server).
-            var manual = cmd.charAt(0) === '!';
+            var manual = body.charAt(0) === '!';
+            if (manual) body = body.slice(1).replace(/^\s+/, '');
+            // Degenerate input (`${!}`, `${ }`, `${! }`): nothing to run — keep
+            // the source text as a literal instead of building a widget whose
+            // run button would exec a bare `sh` (sh.py falls back to `cmd or 'sh'`)
+            // or an empty `bash -c`.
+            if (!body) return m;
             var id = 'cmdw' + widgets.length;
-            widgets.push({id: id, cmd: manual ? cmd.slice(1) : cmd, manual: manual});
+            widgets.push({id: id, cmd: body, manual: manual});
             return '<span id="' + id + '"></span>';
          });
          setWindowTitle(getTitle(content));
