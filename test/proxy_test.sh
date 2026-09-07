@@ -22,12 +22,25 @@ cleanup(){
 trap cleanup EXIT
 
 say "start test upstream on 127.0.0.1:$UP_PORT"
+# 端口被残留进程占用时上游起不来，后续用例会拿到别人的 404 页面而难定位
+# （lzful1 实遇：一个 4 天前的孤儿 `python3 -m http.server 18099`）
+if ss -ltn 2>/dev/null | grep -q ":$UP_PORT "; then
+  echo "FATAL: port $UP_PORT already in use — kill the stale listener first:"
+  ss -ltnp 2>/dev/null | grep ":$UP_PORT "
+  exit 1
+fi
 python3 w/test/proxy_upstream.py $UP_PORT &
 UP_PID=$!
 sleep 0.5
 cp "$ROUTES" "$ROUTES.bak"
 
 write_routes(){ printf '%s' "$1" > "$ROUTES"; }
+
+# 用例 0-3 靠一条指向测试上游的 demo 规则：仓内 routes.json 只含真实机器路由
+# （48306a2 起已无 /proxy/demo），测试自带规则、不依赖仓内内容（lzful1 修正既有漂移）
+DEMO_ROUTES='{"routes": [{"prefix": "/proxy/demo", "upstream": "http://127.0.0.1:'$UP_PORT'"}]}'
+write_routes "$DEMO_ROUTES"
+sleep 0.2
 
 say "0. 未认证请求不得代理（代理在 BasicAuth 之后）"
 code=$($CURL -o /dev/null -w '%{http_code}' "$BASE/proxy/demo/echo")
@@ -84,6 +97,8 @@ sleep 0.2
 resp=$($CURL -i -u "$AUTH" "$BASE/proxy/demo/echo")
 echo "$resp" | head -1 | grep -q ' 502 ' && bad "broken routes still proxying" || ok "broken routes => proxy disabled ($(echo "$resp" | head -1 | awk '{print $2}'))"
 cp "$ROUTES.bak" "$ROUTES"
+sleep 0.2
+write_routes "$DEMO_ROUTES"   # .bak = 仓内真实路由（无 demo 规则），恢复后重写测试规则
 sleep 0.2
 resp=$($CURL -u "$AUTH" "$BASE/proxy/demo/echo")
 echo "$resp" | grep -q '"method": "GET"' && ok "valid routes restored, proxy back" || bad "restore: $resp"
