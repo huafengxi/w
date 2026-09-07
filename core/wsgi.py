@@ -104,9 +104,14 @@ def run_use_wsgiserver(app, host, port, daemon):
     if os.getenv('nossl') == '1':
         cert, keyfile = None, None
         logging.warning('nossl mode: run with danger')
-    elif not os.path.exists(cert) or not os.path.exists(keyfile):
-        logging.warning("ssl key %s/%s not exists: run with danger", cert, keyfile)
-        cert, keyfile = None, None
+    else:
+        # cert 与 key 分别独立检查、分别报告（旧写法 "%s/%s"%(cert,keyfile) 把两条绝对
+        # 路径拼成一个串，告警不准确也无从判断缺哪个，票 0cd59y）。降级行为不变：
+        # 任一文件缺失 → certfile/keyfile 置 None，以 HTTP 运行。
+        missing = [p for p in (cert, keyfile) if not os.path.exists(p)]
+        if missing:
+            logging.warning("ssl file not exists: %s: run with danger", ', '.join(missing))
+            cert, keyfile = None, None
     timeout = get_socket_timeout()
     logging.info("run use wsgiserver: socket timeout: %s", timeout)
     server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout, numthreads=30)
