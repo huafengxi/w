@@ -10,13 +10,19 @@
 {
   "routes": [
     {"prefix": "/proxy/demo", "upstream": "http://127.0.0.1:18099",
-     "strip_prefix": false, "timeout": 10}
+     "strip_prefix": false, "timeout": 10},
+    {"prefix": "/mac/", "upstream": "unix:///home/yuanqi.xhf/m/run/rsh-fwd/mac.sock",
+     "strip_prefix": true, "timeout": 65, "local_on": ["mac"]}
   ]
 }
 ```
 
 - `prefix`（必填）：路径前缀，以 `/` 开头；多条规则取**最长前缀**匹配。
-- `upstream`（必填）：`http://host[:port]` 或 `https://...`。
+- `upstream`（必填）：`http://host[:port]`、`https://...`，或 `unix:///绝对路径.sock`
+  （任务 lzful1：经 AF_UNIX 连**本机** socket，无跨机面。只认 `unix:///abs/path`
+  形态——host 位必须为空，否则解析报错；纯标准库 `http.client` 子类实现）。
+  unix 上游的典型用途 = rsh 反向端口转发的 hub 侧监听（`rsh/rshd.py` 的
+  `run/rsh-fwd/<worker>.sock`），路径须与提供方一致。
 - `strip_prefix`（可选，缺省 `false`）：转发时是否剥掉前缀。
 - `timeout`（可选，缺省 `10`）：上游连接/读取超时（秒）。
 - `local_on`（可选，缺省无）：规范名列表（规范名 = `~/m/env/host-id` 按 `$(hostname)`
@@ -34,12 +40,16 @@
   需要统一地址的带前缀链接由使用方自行控制；2026-09-01 用户拍板撤销 se6t32 的 302）。
 - `local_on` 命中本机 → 剥前缀本地直读（不经代理转发）。
 - 方法与请求体原样转发；请求头透传（剔除 hop-by-hop），补
-  `X-Forwarded-For` / `X-Forwarded-Proto`，`Host` 改写为上游。
+  `X-Forwarded-For` / `X-Forwarded-Proto`，`Host` 改写为上游（unix 上游无
+  netloc → `localhost`）。
 - 上游响应的 status / 头 / 体原样回传（剔除 hop-by-hop）。
-  响应体一次性读完中转，不做流式透传。
-- 上游不可达 / 超时 → `502 Bad Gateway`。
+  流式响应（SSE / 无 Content-Length）按块透传，unix 与 http 上游同语义。
+- 上游不可达 / 超时 → `502 Bad Gateway`（日志与响应文案里的上游标识：
+  http 为 `scheme://netloc`、unix 为 `unix:/绝对路径`）。
 
 ## 测试
 
 `w/test/proxy_test.sh`（需先 `make web.start`）：起临时上游，覆盖
-转发/方法体透传/响应透传/502/未命中回落/热更新/解析失败降级。
+转发/方法体透传/响应透传/502/未命中回落/热更新/解析失败降级，
+以及 `unix://` 上游（用例 8b；上游由 `w/test/proxy_upstream.py /abs/path.sock`
+以 unix socket 形式拉起）。

@@ -210,7 +210,12 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 
 - `prefix`：以 `/` 开头的路径前缀；多条规则取**最长前缀**匹配（朴素
   `startswith` 语义，不强制路径段边界）。
-- `upstream`：`http(s)://host[:port]`；`strip_prefix` 缺省 false；`timeout` 缺省 10 秒。
+- `upstream`：`http(s)://host[:port]`，或 `unix:///绝对路径.sock`（任务 lzful1：经
+  AF_UNIX 连**本机** socket，纯标准库 `http.client` 子类；只认 host 位为空的
+  `unix:///abs/path` 形态，其余写法解析报错 → 代理整体关闭）。unix 上游用于 rsh
+  反向端口转发的 hub 侧监听（`~/m/rsh/rshd.py` 的 `run/rsh-fwd/<worker>.sock`，
+  节点 0600/目录 0700），路径须与 rshd 的 `--fwd-dir`/`RSH_FWD_DIR` 约定一致；
+  `strip_prefix` 缺省 false；`timeout` 缺省 10 秒。
 - `local_on`：可选，规范名列表（规范名 = `~/m/env/host-id` 映射，未命中回退 hostname）。
   本机命中时该前缀**不走代理**：wsgi 层在进管线前剥前缀改本地直读
   （`core/wsgi.py` 调 `rewrite_local`），本机服务自己的前缀不必绕自己一跳——
@@ -224,15 +229,17 @@ echo 调试器之后、主路由 `Handler.handle_req` 之前），位于 `BasicA
 
 **转发语义**：保留原方法与请求体；请求头透传（剔除 hop-by-hop：
 Connection/Keep-Alive/Transfer-Encoding/TE/Trailers/Upgrade/Proxy-Auth* 等），
-补 `X-Forwarded-For`（追加）/`X-Forwarded-Proto`，`Host` 改写为上游；上游响应的
-status/头/体原样回传（同样剔 hop-by-hop）。上游不可达/超时 → 502 Bad Gateway；
-上游返回什么就透传什么。
+补 `X-Forwarded-For`（追加）/`X-Forwarded-Proto`，`Host` 改写为上游（unix 上游无
+netloc → `localhost`）；上游响应的 status/头/体原样回传（同样剔 hop-by-hop）。
+上游不可达/超时 → 502 Bad Gateway（文案里的上游标识：http 为 `scheme://netloc`、
+unix 为 `unix:/绝对路径`）；上游返回什么就透传什么。
 
 **限制**：非流式响应一次性读完中转（大文件会占内存、延迟到完整才回包）；
 流式响应（Content-Type=text/event-stream 或无 Content-Length）按块生成器透传，
 wsgi 层出 chunked（任务 xt2sj3，SSE 聊天流经代理嵌入的前提）；`timeout` 对流式连接
 即空闲超时（每操作独立计时），SSE 类路由须配大于上游 keep-alive 周期的值；
-无连接池复用，每请求新建到上游的连接；不支持 WebSocket 等协议升级。
+无连接池复用，每请求新建到上游的连接（unix 上游同样是每请求一次 connect）；
+不支持 WebSocket 等协议升级。
 请求头按规范透传（含客户端 `Authorization`，非 hop-by-hop）——因此上游只应配给可信目标，
 避免把本站凭据带到不可信第三方。
 响应面由 `handle_request` 统一出头的约定不破：代理把上游头放入 `meta['extra_headers']`

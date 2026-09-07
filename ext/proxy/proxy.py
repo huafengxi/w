@@ -7,8 +7,10 @@
 # 规则文件按 mtime 热加载：每个请求检查 stat，变更才重读，无需重启服务。
 #
 # 转发语义（纯标准库 http.client 实现，不引三方依赖）：
+# - upstream 支持 http(s)://host[:port] 与 unix:///abs/path.sock（后者经 AF_UNIX
+#   连本机 socket，任务 lzful1：/mac/ 走 rshd 的反向转发 unix 监听，不再是 TCP 端口）；
 # - 保留原方法与请求体；透传请求头（剔除 hop-by-hop），补 X-Forwarded-For /
-#   X-Forwarded-Proto，Host 改写为上游；
+#   X-Forwarded-Proto，Host 改写为上游（unix 上游无 netloc → localhost）；
 # - 上游响应的 status/头/体原样回传（同样剔除 hop-by-hop）；
 # - 流式透传（任务 xt2sj3）：上游响应 Content-Type 为 text/event-stream 或无
 #   Content-Length 时，按块生成器透传（不设 content_len → wsgi 层走 chunked），
@@ -52,8 +54,13 @@ def _parse_rules(obj):
         if not isinstance(prefix, str) or not prefix.startswith('/'):
             raise ValueError('route.prefix must be a string starting with "/": %r' % (r,))
         u = urllib.parse.urlparse(upstream if isinstance(upstream, str) else '')
-        if u.scheme not in ('http', 'https') or not u.netloc:
-            raise ValueError('route.upstream must be http(s)://host[:port]: %r' % (r,))
+        if u.scheme == 'unix':
+            # 只认 unix:///abs/path.sock（netloc 位必须为空）：否则
+            # `unix://relative/x.sock` 会被误读成绝对路径 /x.sock
+            if u.netloc or not u.path.startswith('/'):
+                raise ValueError('route.upstream unix must be unix:///abs/path.sock (empty host part): %r' % (r,))
+        elif u.scheme not in ('http', 'https') or not u.netloc:
+            raise ValueError('route.upstream must be http(s)://host[:port] or unix:///abs/path.sock: %r' % (r,))
         local_on = r.get('local_on')
         if local_on is not None:
             if not isinstance(local_on, list) or not all(isinstance(h, str) for h in local_on):
@@ -153,6 +160,36 @@ def match_route(routes, path):
     return best
 
 
+class UnixHTTPConnection(http.client.HTTPConnection):
+    """http.client 跑在 AF_UNIX socket 上（纯标准库，任务 lzful1）。
+
+    基类只为 host 头与请求构造服务；实际连接由 connect() 连 unix path。
+    其余语义（keep-alive/chunked/超时/异常面）与 HTTPConnection 完全一致，
+    因此流式透传与 502 兜底路径无需分支。"""
+
+    def __init__(self, unix_path, host='localhost', timeout=None):
+        http.client.HTTPConnection.__init__(self, host, timeout=timeout)
+        self.unix_path = unix_path
+
+    def connect(self):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.settimeout(self.timeout)
+            s.connect(self.unix_path)
+        except OSError:
+            s.close()
+            raise
+        self.sock = s
+
+
+def upstream_label(u):
+    """日志/错误文案里的上游标识：http(s) 沿用 `scheme://netloc`（格式逐字未变），
+    unix 用 `unix:/abs/path`（netloc 为空，不能再拼 `unix://`）。"""
+    if u.scheme == 'unix':
+        return 'unix:%s' % u.path
+    return '%s://%s' % (u.scheme, u.netloc)
+
+
 def _req_headers(env, upstream_netloc):
     """WSGI env → 上游请求头：透传（剔 hop-by-hop），改写 Host，补 X-Forwarded-*。"""
     headers = {}
@@ -200,11 +237,18 @@ def forward(env, path, rule):
     method = env.get('REQUEST_METHOD', 'GET')
     length = int(env.get('CONTENT_LENGTH') or 0)
     body = env['wsgi.input'].read(length) if length > 0 else b''
-    headers = _req_headers(env, u.netloc)
+    if u.scheme == 'unix':
+        # unix 上游无 netloc：Host 送 localhost（= 在目标机本机直连时的 Host；
+        # 上游不依赖 Host 做虚拟主机分发）
+        headers = _req_headers(env, 'localhost')
+        conn = UnixHTTPConnection(u.path, timeout=rule['timeout'])
+    else:
+        headers = _req_headers(env, u.netloc)
+        conn_cls = http.client.HTTPSConnection if u.scheme == 'https' else http.client.HTTPConnection
+        conn = conn_cls(u.hostname, u.port or (443 if u.scheme == 'https' else 80),
+                        timeout=rule['timeout'])
     headers['Content-Length'] = str(len(body))
-    conn_cls = http.client.HTTPSConnection if u.scheme == 'https' else http.client.HTTPConnection
-    conn = conn_cls(u.hostname, u.port or (443 if u.scheme == 'https' else 80),
-                    timeout=rule['timeout'])
+    label = upstream_label(u)
     streaming = False
     try:
         conn.request(method, target, body=body, headers=headers)
@@ -229,8 +273,8 @@ def forward(env, path, rule):
                 'http_status': '%d %s' % (resp.status, resp.reason or ''),
                 'extra_headers': _resp_headers(resp),
             }
-            logging.info('%s: %s %s -> %s://%s%s => %d',
-                         stream_tag, method, path, u.scheme, u.netloc, target, resp.status)
+            logging.info('%s: %s %s -> %s%s => %d',
+                         stream_tag, method, path, label, target, resp.status)
 
             def gen():
                 nbytes = 0
@@ -246,8 +290,8 @@ def forward(env, path, rule):
                         yield chunk
                 except Exception as e:
                     # 响应头已出、无法再改状态码：断流 + 日志，前端自带重连兜底。
-                    logging.warning('%s CUT: %s %s -> %s://%s after %d bytes: %s',
-                                    stream_tag, method, path, u.scheme, u.netloc, nbytes, e)
+                    logging.warning('%s CUT: %s %s -> %s after %d bytes: %s',
+                                    stream_tag, method, path, label, nbytes, e)
                 finally:
                     try:
                         conn.close()
@@ -262,12 +306,14 @@ def forward(env, path, rule):
             'content_len': len(data),
             'extra_headers': _resp_headers(resp),
         }
-        logging.info('PROXY: %s %s -> %s://%s%s => %d (%d bytes)',
-                     method, path, u.scheme, u.netloc, target, resp.status, len(data))
+        logging.info('PROXY: %s %s -> %s%s => %d (%d bytes)',
+                     method, path, label, target, resp.status, len(data))
         return meta, data
     except Exception as e:
-        logging.warning('PROXY FAIL: %s %s -> %s://%s: %s', method, path, u.scheme, u.netloc, e)
-        msg = '502 Bad Gateway: upstream %s://%s unreachable (%s)' % (u.scheme, u.netloc, e)
+        # unix 上游下 u.netloc 为空：文案统一走 upstream_label，避免拼出
+        # `unix://`（无意义）或取 hostname/port 崩掉
+        logging.warning('PROXY FAIL: %s %s -> %s: %s', method, path, label, e)
+        msg = '502 Bad Gateway: upstream %s unreachable (%s)' % (label, e)
         return {'type': 'text/plain', 'http_status': '502 Bad Gateway'}, msg
     finally:
         if not streaming:

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # 测试用临时上游（0831-0937-sh7l）：echo 请求方法/路径/头/体为 JSON；
 # /custom 路径返回 201 + 自定义头，用于验证上游响应透传。
-# 用法: python3 proxy_upstream.py [port]（缺省 18099）
+# 用法: python3 proxy_upstream.py [port|/abs/unix.sock]（缺省 18099；
+#       以 / 开头的参数 = 监听 unix socket，任务 lzful1）
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,5 +40,20 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 18099
-    ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()
+    arg = sys.argv[1] if len(sys.argv) > 1 else '18099'
+    if arg.startswith('/'):
+        # unix socket 上游（任务 lzful1）：proxy 的 unix:// upstream 回归用
+        import os
+        import socketserver
+
+        class ThreadingUnixHTTPServer(socketserver.ThreadingMixIn,
+                                      socketserver.UnixStreamServer):
+            daemon_threads = True
+
+        try:
+            os.unlink(arg)
+        except FileNotFoundError:
+            pass
+        ThreadingUnixHTTPServer(arg, H).serve_forever()
+    else:
+        ThreadingHTTPServer(('127.0.0.1', int(arg)), H).serve_forever()

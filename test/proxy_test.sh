@@ -15,6 +15,8 @@ ok(){ echo "PASS: $*"; pass=$((pass+1)); }
 bad(){ echo "FAIL: $*"; fail=$((fail+1)); }
 cleanup(){
   [[ -n "${UP_PID:-}" ]] && kill "$UP_PID" 2>/dev/null
+  [[ -n "${UP_SOCK_PID:-}" ]] && kill "$UP_SOCK_PID" 2>/dev/null
+  [[ -n "${UP_SOCK:-}" ]] && rm -f "$UP_SOCK"
   if [[ -f "$ROUTES.bak" ]]; then mv "$ROUTES.bak" "$ROUTES"; echo "== routes.json restored"; fi
 }
 trap cleanup EXIT
@@ -85,6 +87,29 @@ cp "$ROUTES.bak" "$ROUTES"
 sleep 0.2
 resp=$($CURL -u "$AUTH" "$BASE/proxy/demo/echo")
 echo "$resp" | grep -q '"method": "GET"' && ok "valid routes restored, proxy back" || bad "restore: $resp"
+
+say "8b. unix:// upstream（AF_UNIX 转发，任务 lzful1）"
+UP_SOCK="/tmp/lzful1-proxy-up-$$.sock"
+python3 w/test/proxy_upstream.py "$UP_SOCK" &
+UP_SOCK_PID=$!
+sleep 0.5
+write_routes '{"routes": [{"prefix": "/proxy/unix", "upstream": "unix://'"$UP_SOCK"'", "strip_prefix": true, "timeout": 10}]}'
+sleep 0.2
+resp=$($CURL -u "$AUTH" "$BASE/proxy/unix/echo?u=1")
+echo "$resp" | grep -q '"path": "/echo?u=1"' && echo "$resp" | grep -q '"host": "localhost"' \
+  && echo "$resp" | grep -q 'x-forwarded-for' \
+  && ok "unix upstream forwarded (strip_prefix + Host=localhost + XFF)" || bad "unix forward: $resp"
+resp=$($CURL -u "$AUTH" -X POST --data 'unix=1' "$BASE/proxy/unix/echo")
+echo "$resp" | grep -q '"method": "POST"' && echo "$resp" | grep -q 'unix=1' \
+  && ok "unix upstream POST method+body passthrough" || bad "unix POST: $resp"
+write_routes '{"routes": [{"prefix": "/proxy/unix", "upstream": "unix:///tmp/lzful1-nope-'"$$"'.sock", "timeout": 3}]}'
+sleep 0.2
+resp=$($CURL -i -u "$AUTH" "$BASE/proxy/unix/echo")
+echo "$resp" | head -1 | grep -q ' 502 ' && echo "$resp" | grep -q 'unix:/tmp/lzful1-nope' \
+  && ok "dead unix socket => 502 with unix: label" || bad "unix 502: $(echo "$resp" | head -1)"
+kill "$UP_SOCK_PID" 2>/dev/null; rm -f "$UP_SOCK"
+cp "$ROUTES.bak" "$ROUTES"
+sleep 0.2
 
 say "9. 规则文件缺失 = 代理关闭"
 rm -f "$ROUTES"
