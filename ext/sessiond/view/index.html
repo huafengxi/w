@@ -649,6 +649,13 @@ function renderEntryMessage(m) {
       }
     }
     renderMarkdownInto(mdDiv(el), text);                // 不擦除 thinking/工具子节点
+    // 空气泡摘除（7i6a5g）：基线回放里「只有 thinking + toolCall 而无 text part」的消息
+    // （以及 content: [] 的空消息）渲染成空 div，每个仅贡献 .ev 的 margin-bottom:8px，
+    // 一长串纯工具调用回合堆叠成大片空白带 → 收尾判定渲染文本为空且无模型错误红框
+    // 即摘除 el 并清锚点。el 在整个 part 循环期间仍在场，故 process-group 的 turn 级
+    // 插入锚点（组定位在该 turn 首个 assistant 元素之前）语义不变；thinking 块挂 turn
+    // 组、toolResult 走 toolBlocks map，均不依赖 el 在场。
+    if (!String(text || "").trim() && !emsg) removeEmptyAssistant(el);
     if (emsg) renderErrorBox(emsg);
     return;
   }
@@ -946,6 +953,10 @@ function renderEvent(o) {
           if (p && p.type === "thinking" && p.thinking)
             grpAddBlock(processGroup(true), thinkingDetails(p.thinking), false);  // turn 粒度 = 0830-1047-ehzc
       }
+      // 空气泡摘除（7i6a5g）：与基线同口径（无文本 assistant 消息不留空 div）。
+      // 放在 thinking 兜底之后 = 兜底仍以 curAssistantEl 为 process-group 锚点；
+      // 错误红框由下面的 errMsgOf 分支独立出框（addDiv 直挂聊天流末），不受摘除影响。
+      if (!String(txt || "").trim() && !errMsgOf(m)) removeEmptyAssistant(curAssistantEl);
     }
     if (m.role === "assistant") {
       for (const p of m.content || [])
@@ -2139,6 +2150,14 @@ function addDiv(cls, text) {
 function sysLine(text, cls) {
   // 前端自生成的提示（挂接/自愈/错误等）经 flash 轻提示承载，错误不静默吞掉
   flash(text, cls);
+}
+// 摘除无文本 assistant 空气泡（7i6a5g）：只删这一个 div（其内仅有空 .mdtext 子容器），
+// thinking/工具块都不在 el 内（分别挂 turn 级 process-group 与 toolBlocks），故内容零丢失；
+// el 正是当前锚点时同步清 curAssistantEl，避免后续 message_update 把 delta 写进已离场的节点。
+function removeEmptyAssistant(el) {
+  if (!el || !el.parentNode) return;
+  el.parentNode.removeChild(el);
+  if (curAssistantEl === el) curAssistantEl = null;
 }
 function esc(s) {
   return String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;",
