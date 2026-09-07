@@ -53,3 +53,14 @@
 转发/方法体透传/响应透传/502/未命中回落/热更新/解析失败降级，
 以及 `unix://` 上游（用例 8b；上游由 `w/test/proxy_upstream.py /abs/path.sock`
 以 unix socket 形式拉起）。
+
+`w/test/proxy_unix_test.py`（无需起任何服务：直接 import `proxy.py` 驱动
+`forward()`，假上游在临时目录/临时端口）：`unix://` 上游单测——规则解析与非法写法
+被拒、unix 转发/头/SSE/502 文案、http TCP 路径不变、仓内 `routes.json` 形状一致性。
+
+```bash
+python3 w/test/proxy_unix_test.py    # 预期 RESULT: PASS (20/20 passed)，退出码 0
+```
+
+判定以末尾 `RESULT: PASS (20/20 passed)` 汇总行为准（不要只数 `PASS:` 行数）；
+`SKIP:` 行 = 该项在本环境不适用（如无 `routes.json`），汇总行会带 `N skipped`。
