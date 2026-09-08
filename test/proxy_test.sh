@@ -2,6 +2,14 @@
 # reverse proxy 端到端测试（0831-0937-sh7l）
 # 前置：8080 web 服务已启动（make web.start）且加载了代理代码。
 # 用法：bash w/test/proxy_test.sh
+#
+# ⚠ 本脚本会替换现网热加载的路由规则：用例把 `w/ext/proxy/routes.json`（web 每请求按 mtime
+#   热加载）临时换成 demo 规则，退出时才从 `.bak` 恢复 → 在承载真实流量的 8080 上直接跑，
+#   测试期间现网机器前缀路由（`/dev/`、`/nv1/`、`/mac/`、`/nv2/`）会短暂消失。
+#   执行前二选一：① 先 `make web.stop`，改在隔离实例上跑（另起一份 web，路由文件用临时副本）；
+#   ② 把脚本改指临时副本的 routes.json —— 当前做不到：路由文件路径由 `w/ext/proxy/proxy.py`
+#   的 `_routes_file` 按自身 realpath 定死，没有可重定向的变量，脚本无法在不改现网文件的前提下
+#   验证热加载。故保持现形态，以「不在现网 8080 上跑」为前置。
 set -u
 cd "$(dirname "$0")/../.." || exit 1   # ~/m（web 服务 cwd）
 
