@@ -11,7 +11,7 @@
   "routes": [
     {"prefix": "/proxy/demo", "upstream": "http://127.0.0.1:18099",
      "strip_prefix": false, "timeout": 10},
-    {"prefix": "/mac/", "upstream": "unix:///home/yuanqi.xhf/m/run/rsh-fwd/mac.sock",
+    {"prefix": "/mac/", "upstream": "unix:///${RSH_FWD_DIR}/mac.sock",
      "strip_prefix": true, "timeout": 65, "local_on": ["mac"]}
   ]
 }
@@ -23,6 +23,13 @@
   形态——host 位必须为空，否则解析报错；纯标准库 `http.client` 子类实现）。
   unix 上游的典型用途 = rsh 反向端口转发的 hub 侧监听（`rsh/rshd.py` 的
   `run/rsh-fwd/<worker>.sock`），路径须与提供方一致。
+
+  **`${RSH_FWD_DIR}` token**（任务 4ob5de）：unix 路径里可写 `unix:///${RSH_FWD_DIR}/<worker>.sock`，
+  解析时按 **rshd 的 FWD_DIR 约定**展开（单一事实源 = `rsh/rshd.py`：`RSH_FWD_DIR`
+  环境变量 > `<REPO_ROOT>/run/rsh-fwd`，`REPO_ROOT` 按 `proxy.py` 自身位置推导）——
+  这份被追踪且四机同步的配置里因此不再出现任何机器的绝对 home 路径。token 只认
+  **路径位**（`unix:///` 三斜杠之后）；写在 host 位（`unix://${RSH_FWD_DIR}/x.sock`）
+  按「netloc 必须为空」拒掉，不静默走偏。
 - `strip_prefix`（可选，缺省 `false`）：转发时是否剥掉前缀。
 - `timeout`（可选，缺省 `10`）：上游连接/读取超时（秒）。
 - `local_on`（可选，缺省无）：规范名列表（规范名 = `~/m/env/host-id` 按 `$(hostname)`
@@ -56,11 +63,13 @@
 
 `w/test/proxy_unix_test.py`（无需起任何服务：直接 import `proxy.py` 驱动
 `forward()`，假上游在临时目录/临时端口）：`unix://` 上游单测——规则解析与非法写法
-被拒、unix 转发/头/SSE/502 文案、http TCP 路径不变、仓内 `routes.json` 形状一致性。
+被拒、`${RSH_FWD_DIR}` token 展开（含 host 位写法被拒）、unix 转发/头/SSE/502 文案、
+http TCP 路径不变、仓内 `routes.json` 形状一致性（`/mac/` + `/nv2/` = unix、
+`/dev/` + `/nv1/` = http）。
 
 ```bash
-python3 w/test/proxy_unix_test.py    # 预期 RESULT: PASS (20/20 passed)，退出码 0
+python3 w/test/proxy_unix_test.py    # 预期 RESULT: PASS (22/22 passed)，退出码 0
 ```
 
-判定以末尾 `RESULT: PASS (20/20 passed)` 汇总行为准（不要只数 `PASS:` 行数）；
+判定以末尾 `RESULT: PASS (22/22 passed)` 汇总行为准（不要只数 `PASS:` 行数）；
 `SKIP:` 行 = 该项在本环境不适用（如无 `routes.json`），汇总行会带 `N skipped`。

@@ -2,7 +2,7 @@
 """Unit test for the w proxy `unix://` upstream support.
 
 Usage:  python3 w/test/proxy_unix_test.py [--proxy PATH] [--keep]
-Expect: RESULT: PASS (20/20 passed), exit code 0 (any FAIL -> exit code 1).
+Expect: RESULT: PASS (22/22 passed), exit code 0 (any FAIL -> exit code 1).
 
 Imports `w/ext/proxy/proxy.py` directly and drives `forward()` against fake
 upstreams — no web service, no routes rewrite, nothing production is touched
@@ -12,7 +12,10 @@ upstreams — no web service, no routes rewrite, nothing production is touched
 Covers:
   1. _parse_rules: `unix:///abs/path` accepted; 6 malformed forms rejected
      (relative path, netloc filled, empty path x2, foreign scheme, http
-     without netloc); `http://` parsing unchanged
+     without netloc); `http://` parsing unchanged; `${RSH_FWD_DIR}` token
+     expands to rshd's FWD_DIR (env override honoured) while the token in
+     host position stays rejected
+
   2. plain GET over a unix upstream -> 200 + body passthrough + log label
      `unix:/path`
   3. unix upstream sees Host=localhost + X-Forwarded-For/Proto; POST body
@@ -24,7 +27,8 @@ Covers:
   6. http:// TCP upstream unchanged (forward, log label `scheme://netloc`,
      Host=netloc, SSE)
   7. the shipped `routes.json` parses with the real proxy code and keeps the
-     agreed shape (`/mac/` = unix socket, every other route http)
+     agreed shape (`/mac/` + `/nv2/` = unix socket under rshd's fwd dir,
+     `/dev/` + `/nv1/` = http)
 """
 import argparse
 import importlib.util
@@ -44,7 +48,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROXY_DEFAULT = os.path.join(os.path.dirname(HERE), "ext", "proxy",
                              "proxy.py")
 BODY = b"plain-body-unix-test"
-MAC_SOCK_SUFFIX = "/run/rsh-fwd/mac.sock"
+# routes.json 里走 rsh 反向转发的前缀 -> (socket 路径后缀, timeout, local_on)。
+# 任务 4ob5de：/nv2/ 由 TCP 改 unix（dev->nv2:8080 被公司网络策略拦截），两条都用
+# `${RSH_FWD_DIR}` token 写法（配置文件不再硬编码 dev 的绝对 home 路径）。
+UNIX_ROUTES = {"/mac/": ("/run/rsh-fwd/mac.sock", 65.0, ["mac"]),
+               "/nv2/": ("/run/rsh-fwd/nv2.sock", 10.0, ["nv2"])}
+HTTP_ROUTES = {"/dev/": ["dev"], "/nv1/": ["nv1"]}
+FWD_DIR_TOKEN = "${RSH_FWD_DIR}"
 
 results = []          # (name, True/False)
 skipped = []          # (name, reason)
@@ -189,23 +199,56 @@ def parse_checks(proxy, base):
           == "192.0.2.7:8080" and ok_http[0]["timeout"] == 10.0)
 
 
+def fwd_dir_token_checks(proxy, base):
+    """1d/1e. `${RSH_FWD_DIR}` token expansion (rshd FWD_DIR convention)."""
+    saved = os.environ.get("RSH_FWD_DIR")
+    os.environ["RSH_FWD_DIR"] = base
+    try:
+        r = proxy._parse_rules({"routes": [
+            {"prefix": "/mac/",
+             "upstream": "unix:///%s/mac.sock" % FWD_DIR_TOKEN}]})[0]
+        check("1d. ${RSH_FWD_DIR} token expands to rshd's fwd dir",
+              r["upstream"].scheme == "unix"
+              and r["upstream"].path == os.path.join(base, "mac.sock"),
+              r["upstream"].path)
+        try:
+            proxy._parse_rules({"routes": [
+                {"prefix": "/x/",
+                 "upstream": "unix://%s/x.sock" % FWD_DIR_TOKEN}]})
+            check("1e. token in host position (unix://<token>/x) rejected",
+                  False, "accepted!")
+        except ValueError:
+            check("1e. token in host position (unix://<token>/x) rejected",
+                  True)
+    finally:
+        if saved is None:
+            os.environ.pop("RSH_FWD_DIR", None)
+        else:
+            os.environ["RSH_FWD_DIR"] = saved
+
+
 def shipped_routes_check(proxy):
     """7. the repo's routes.json still parses into the agreed shape."""
+    name = ("7. shipped routes.json: /mac/ + /nv2/ = unix (rsh fwd dir), "
+            "/dev/ + /nv1/ = http")
     path = getattr(proxy, "_routes_file", None)
     if not path or not os.path.exists(path):
-        skip("7. shipped routes.json: /mac/ = unix socket, others http",
-             "no routes.json at %s (proxy disabled there)" % path)
+        skip(name, "no routes.json at %s (proxy disabled there)" % path)
         return
     real = proxy.load_routes()
-    mac = [r for r in real if r["prefix"] == "/mac/"]
-    others = [r for r in real if r["prefix"] != "/mac/"]
-    check("7. shipped routes.json: /mac/ = unix socket, others http",
-          bool(mac) and mac[0]["upstream"].scheme == "unix"
-          and mac[0]["upstream"].path.endswith(MAC_SOCK_SUFFIX)
-          and mac[0]["timeout"] == 65.0
-          and mac[0]["local_on"] == ["mac"]
-          and bool(others)
-          and all(r["upstream"].scheme == "http" for r in others),
+    by_prefix = dict((r["prefix"], r) for r in real)
+    ok = set(by_prefix) == set(UNIX_ROUTES) | set(HTTP_ROUTES)
+    for prefix, (suffix, timeout, local_on) in UNIX_ROUTES.items():
+        r = by_prefix.get(prefix)
+        ok = ok and bool(r) and r["upstream"].scheme == "unix" \
+            and r["upstream"].path.endswith(suffix) \
+            and r["timeout"] == timeout and r["local_on"] == local_on \
+            and FWD_DIR_TOKEN not in r["upstream"].path
+    for prefix, local_on in HTTP_ROUTES.items():
+        r = by_prefix.get(prefix)
+        ok = ok and bool(r) and r["upstream"].scheme == "http" \
+            and r["upstream"].netloc and r["local_on"] == local_on
+    check(name, ok,
           str([(r["prefix"], proxy.upstream_label(r["upstream"]))
                for r in real]))
 
@@ -236,6 +279,7 @@ def main():
     logging.getLogger().setLevel(logging.INFO)
 
     parse_checks(proxy, base)
+    fwd_dir_token_checks(proxy, base)
 
     upath = os.path.join(base, "up.sock")
     usrv = ThreadingUnixServer(upath, Upstream)

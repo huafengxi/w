@@ -144,8 +144,58 @@ def _redact_secret_args(args):
             red[k] = '<redacted>'
     return red
 
+# 内容型键名（任务 4ob5de 项 5）：写类 RPC（ext/fileops/rpc/builtin_write.py 的
+# store_content/text/file，ext/shell/rpc/sh.py 的 input 等）把**正文**当参数传，
+# `RESOLVE:` 行按 `%.2000s` 明文落 run/logs/web.log → 写含 secret 的文件即泄漏。
+# 日志面只留长度摘要，键名与非内容字段（src/target/v/op）原样保留以便排障。
+_CONTENT_ARG_NAMES = frozenset([
+    'store_content', 'text', 'content', 'body', 'data', 'payload', 'file', 'input'])
+
+def _summarize_content_args(args):
+    """内容型键名 → 长度摘要（例 `text=<1234 chars>`）。只作用于日志面。
+    `file` 可能是**尚未读取的文件对象**（upload 分支）：一律不 read——读了就把流
+    吃掉，破坏执行路径。已被 ① 脱敏成 `<redacted …>` 的值原样保留，不二次摘要。"""
+    hits = [k for k in args if str(k).lower() in _CONTENT_ARG_NAMES]
+    if not hits:
+        return args
+    red = dict(args)
+    for k in hits:
+        v = red[k]
+        if isinstance(v, str):
+            if v.startswith('<redacted '):
+                continue
+            red[k] = '<%d chars>' % len(v)
+        elif isinstance(v, bytes):
+            red[k] = '<%d bytes>' % len(v)
+        elif hasattr(v, 'read'):
+            red[k] = '<file object>'
+        elif isinstance(v, (list, tuple, set)):
+            red[k] = '[%d items]' % len(v)
+        elif isinstance(v, dict):
+            red[k] = '{%d keys}' % len(v)
+        elif v is None:
+            red[k] = v
+        else:
+            red[k] = '<%s>' % type(v).__name__
+    return red
+
+def redact_query_string(qs):
+    """原始 query string 的日志面脱敏（任务 4ob5de 项 4，供 core/wsgi.py 的 DEBUG
+    行复用同一套键名族）：按 `&` 拆条，键名命中 _SECRET_ARG_RE 的值只留长度摘要，
+    其余原样保留（排障可用）。percent-encoded 的键名先解码再判定（`api%5Fkey=`
+    之类不绕过）；不改动、不消费任何执行路径数据。"""
+    if not qs:
+        return qs
+    out = []
+    for part in str(qs).split('&'):
+        k, sep, v = part.partition('=')
+        if sep and _is_secret_arg(urllib.parse.unquote(k)):
+            v = '<redacted %d chars>' % len(urllib.parse.unquote(v))
+        out.append(k + sep + v)
+    return '&'.join(out)
+
 def _redact_log_args(args):
-    """日志脱敏，两层：
+    """日志脱敏，三层：
     ① 通用 secret 参数名（任务 fnv23x）：任何请求的 args 里名字命中 _SECRET_ARG_RE
        的值（nonce/token/password/api_key/…）一律替换为 `<redacted N chars>`，
        使 `RESOLVE:` 行不再明文落 run/logs/web.log。
@@ -153,8 +203,10 @@ def _redact_log_args(args):
        prompt 文本（message 等字符串字段）与 images 一律不全文入日志。
        例：{"type": "prompt", "message": "<12 chars>", "images": "[1 x image/png]"}
        steer/follow_up 及其它 cmd 类型同口径。
-    两层都只作用于日志面，不触碰透传给执行路径的原始 args。"""
-    args = _redact_secret_args(args)
+    ③ 内容型键名长度摘要（任务 4ob5de 项 5）：`store_content`/`text`/`file`/`input`
+       等承载**正文**的键只记 `<N chars>`，写类 RPC 的正文不再随 `RESOLVE:` 落日志。
+    三层都只作用于日志面，不触碰透传给执行路径的原始 args。"""
+    args = _summarize_content_args(_redact_secret_args(args))
     if args.get('op') != 'cmd':
         return args
     cmd = args.get('cmd')

@@ -9,6 +9,8 @@
 # 转发语义（纯标准库 http.client 实现，不引三方依赖）：
 # - upstream 支持 http(s)://host[:port] 与 unix:///abs/path.sock（后者经 AF_UNIX
 #   连本机 socket，任务 lzful1：/mac/ 走 rshd 的反向转发 unix 监听，不再是 TCP 端口）；
+#   unix 路径里的 `${RSH_FWD_DIR}` token 按 rshd 的 FWD_DIR 约定展开（任务 4ob5de：
+#   配置文件不再硬编码 dev 的绝对 home 路径，见下 rsh_fwd_dir()）；
 # - 保留原方法与请求体；透传请求头（剔除 hop-by-hop），补 X-Forwarded-For /
 #   X-Forwarded-Proto，Host 改写为上游（unix 上游无 netloc → localhost）；
 # - 上游响应的 status/头/体原样回传（同样剔除 hop-by-hop）；
@@ -25,6 +27,7 @@
 import json
 import logging
 import os
+import re
 import socket
 import http.client
 import urllib.parse
@@ -38,6 +41,30 @@ HOP_BY_HOP = frozenset([
 _routes_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'routes.json')
 # mtime 缓存：{'mtime': float|None, 'routes': list}
 _cache = {'mtime': None, 'routes': [], 'loaded_key': None}
+
+# ---- rsh 反向转发入站 socket 目录（任务 4ob5de 项 3）----
+# 单一事实源 = rsh/rshd.py 的 FWD_DIR 约定：`RSH_FWD_DIR` 环境变量 >
+# `<REPO_ROOT>/run/rsh-fwd`（REPO_ROOT 按自身文件位置推导）。这里按同一口径推导，
+# routes.json 用 `unix:///${RSH_FWD_DIR}/<worker>.sock` 引用 —— 不再把 dev 的绝对
+# home 路径写进这份被追踪且四机同步的配置（home 或 --fwd-dir 约定任一变动即分叉）。
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.realpath(__file__)))))
+RSH_FWD_DIR_TOKEN = '${RSH_FWD_DIR}'
+
+
+def rsh_fwd_dir():
+    """rshd 的转发入站目录（与 rsh/rshd.py:FWD_DIR_DEFAULT 同口径，可被 RSH_FWD_DIR 覆盖）。"""
+    return os.environ.get('RSH_FWD_DIR') or os.path.join(_REPO_ROOT, 'run', 'rsh-fwd')
+
+
+def _expand_unix_path(path):
+    """unix 上游路径里的 `${RSH_FWD_DIR}` token 展开（无 token 时原样直返）。
+    规范写法 `unix:///${RSH_FWD_DIR}/x.sock`：token 展开成绝对目录后前导 '/' 与之
+    重复，收敛成一个（POSIX 下等价）。`unix://${RSH_FWD_DIR}/x.sock`（token 落在
+    host 位）不展开 → 由既有校验按「netloc 必须为空」拒掉，不静默走偏。"""
+    if RSH_FWD_DIR_TOKEN not in path:
+        return path
+    return re.sub(r'^/{2,}', '/', path.replace(RSH_FWD_DIR_TOKEN, rsh_fwd_dir()))
 
 
 def _parse_rules(obj):
@@ -59,6 +86,7 @@ def _parse_rules(obj):
             # `unix://relative/x.sock` 会被误读成绝对路径 /x.sock
             if u.netloc or not u.path.startswith('/'):
                 raise ValueError('route.upstream unix must be unix:///abs/path.sock (empty host part): %r' % (r,))
+            u = u._replace(path=_expand_unix_path(u.path))
         elif u.scheme not in ('http', 'https') or not u.netloc:
             raise ValueError('route.upstream must be http(s)://host[:port] or unix:///abs/path.sock: %r' % (r,))
         local_on = r.get('local_on')

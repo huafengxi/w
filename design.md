@@ -214,7 +214,10 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
   AF_UNIX 连**本机** socket，纯标准库 `http.client` 子类；只认 host 位为空的
   `unix:///abs/path` 形态，其余写法解析报错 → 代理整体关闭）。unix 上游用于 rsh
   反向端口转发的 hub 侧监听（`~/m/rsh/rshd.py` 的 `run/rsh-fwd/<worker>.sock`，
-  节点 0600/目录 0700），路径须与 rshd 的 `--fwd-dir`/`RSH_FWD_DIR` 约定一致；
+  节点 0600/目录 0700），路径须与 rshd 的 `--fwd-dir`/`RSH_FWD_DIR` 约定一致——
+  写法用 `unix:///${RSH_FWD_DIR}/<worker>.sock`，token 由 `proxy.py` 按该约定展开
+  （`RSH_FWD_DIR` 环境变量 > `<REPO_ROOT>/run/rsh-fwd`，单一事实源 = rshd），故这份
+  四机同步的配置里不写任何机器的绝对 home 路径（任务 4ob5de）；
   `strip_prefix` 缺省 false；`timeout` 缺省 10 秒。
 - `local_on`：可选，规范名列表（规范名 = `~/m/env/host-id` 映射，未命中回退 hostname）。
   本机命中时该前缀**不走代理**：wsgi 层在进管线前剥前缀改本地直读

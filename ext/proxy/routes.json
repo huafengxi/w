@@ -1,41 +1,33 @@
 {
-  "_comment": "reverse proxy 路由规则（0831-0937-sh7l；多机扩展 r71ydk；/mac/ 反向隧道任务 xt2sj3；local_on 本机直读；unix:// upstream 任务 lzful1）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port] 或 unix:///abs/path.sock)、strip_prefix(可选，缺省 false)、timeout(可选，秒，缺省 10；对流式响应 = 空闲超时，SSE 路由须 > 上游 keep-alive 周期)、local_on(可选，规范名列表；本机命中时不走代理，剥前缀本地直读——规范名按 ~/m/env/host-id 映射，见 README.md)。无前缀路径不强制跳转（2026-09-01 用户拍板撤销 se6t32 的 302）。详见 w/design.md「reverse proxy」小节。upstream 用 IP：dev/nv2 真实主机名（obrde.dev-yi3/ob-ai-115）在 nv1 上不可 DNS 解析，ssh 别名仅存在于 ~/.ssh/config；/nv1/ 同口径（nv1 短名不可靠，用真实 IP 30.249.210.114，SSE 流式故 timeout=65）。/mac/ = mac 无公网可达，走 rsh 反向端口转发：hub(dev) 的 rshd 在 unix socket 上监听入站（run/rsh-fwd/mac.sock，节点 0600/目录 0700）→ 隧道到 mac 127.0.0.1:8080；原 TCP 0.0.0.0:8083 形态已废（死 socket 占死端口，任务 lzful1）。upstream 路径 = dev 上 rshd 的 socket 绝对路径，须与 rshd 的 --fwd-dir/RSH_FWD_DIR 约定一致（env/rsh-forwards 只决定 mac 是否有转发，不含路径）；该路由只在 hub(dev) 上有意义，他机路径不存在 → 502（与改前 8083 不存在同结果），mac 本机命中 local_on 直读。",
+  "_comment": "reverse proxy 路由规则（0831-0937-sh7l；多机扩展 r71ydk；/mac/ 反向隧道任务 xt2sj3；local_on 本机直读；unix:// upstream 任务 lzful1；/nv2/ 改 unix + ${RSH_FWD_DIR} token 任务 4ob5de）。每请求按 mtime 热加载；文件缺失/空/解析失败 = 代理关闭。字段：prefix(必填，最长前缀匹配)、upstream(必填，http(s)://host[:port] 或 unix:///abs/path.sock；unix 路径里 ${RSH_FWD_DIR} 由 proxy.py 按 rsh/rshd.py 的 FWD_DIR 约定展开 = $RSH_FWD_DIR > <REPO_ROOT>/run/rsh-fwd，故本文件不写任何机器的绝对 home 路径)、strip_prefix(可选，缺省 false)、timeout(可选，秒，缺省 10；对流式响应 = 空闲超时，SSE 路由须 > 上游 keep-alive 周期)、local_on(可选，规范名列表；本机命中时不走代理，剥前缀本地直读——规范名按 ~/m/env/host-id 映射，见 README.md)。无前缀路径不强制跳转（2026-09-01 用户拍板撤销 se6t32 的 302）。详见 w/design.md「reverse proxy」小节。upstream 用 IP：dev/nv2 真实主机名（obrde.dev-yi3/ob-ai-115）在 nv1 上不可 DNS 解析，ssh 别名仅存在于 ~/.ssh/config；/nv1/ 同口径（nv1 短名不可靠，用真实 IP 30.249.210.114，SSE 流式故 timeout=65）。/mac/ 与 /nv2/ = 走 rsh 反向端口转发：hub(dev) 的 rshd 在 unix socket 上监听入站（${RSH_FWD_DIR}/<worker>.sock，节点 0600/目录 0700）→ 隧道到该 worker 的 127.0.0.1:8080；原 TCP 形态已废（mac: 0.0.0.0:8083 死 socket 占死端口，任务 lzful1；nv2: dev→nv2:8080 被公司网络策略拦截 → 从 dev 枢纽开 dash 的 nv2 页签必 502，任务 4ob5de）。unix 路由只在 hub(dev) 上有意义：他机无该 socket 路径 → 502（nv1 上 /nv2/ 由原 TCP 直达改为 502，已知取舍：dash 入口 = dev:8080，nv2 页签从 dev 打开；nv1 本机入口无 run/rsh-fwd/），mac/nv2 本机命中 local_on 直读。",
   "routes": [
     {
       "prefix": "/dev/",
       "upstream": "http://6.12.232.57:8080",
       "strip_prefix": true,
       "timeout": 10,
-      "local_on": [
-        "dev"
-      ]
+      "local_on": ["dev"]
     },
     {
       "prefix": "/nv2/",
-      "upstream": "http://30.249.210.115:8080",
+      "upstream": "unix:///${RSH_FWD_DIR}/nv2.sock",
       "strip_prefix": true,
       "timeout": 10,
-      "local_on": [
-        "nv2"
-      ]
+      "local_on": ["nv2"]
     },
     {
       "prefix": "/nv1/",
       "upstream": "http://30.249.210.114:8080",
       "strip_prefix": true,
       "timeout": 65,
-      "local_on": [
-        "nv1"
-      ]
+      "local_on": ["nv1"]
     },
     {
       "prefix": "/mac/",
-      "upstream": "unix:///home/yuanqi.xhf/m/run/rsh-fwd/mac.sock",
+      "upstream": "unix:///${RSH_FWD_DIR}/mac.sock",
       "strip_prefix": true,
       "timeout": 65,
-      "local_on": [
-        "mac"
-      ]
+      "local_on": ["mac"]
     }
   ]
 }

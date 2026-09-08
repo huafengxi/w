@@ -4,6 +4,16 @@ import sys
 import time
 import urllib.parse
 
+# DEBUG 面的 secret 脱敏（任务 4ob5de 项 4）：`REQ:`/`echo req:` 两行过去直打原始
+# query string 与整个 WSGI environ（nonce/token/cookie/Authorization 载体）——现网
+# log=info 不触发，但 `log=debug` 起服务（README「start service」的写法）即整体绕过
+# handler 的 `_redact_log_args`。这里复用 core/handler.py 同一套键名族（fnv23x 引入的
+# 词边界匹配）= 单一事实源，不再各写一份；`_debug_enabled()` 门控让 INFO 面零额外开销。
+from core.handler import _redact_secret_args, redact_query_string
+
+def _debug_enabled():
+    return logging.getLogger().isEnabledFor(logging.DEBUG)
+
 def fork_as_daemon(daemon):
     if not daemon: return
     if os.fork() > 0:
@@ -13,7 +23,8 @@ def fork_as_daemon(daemon):
 def make_wsgi_app(handlers):
     def echo_handler(env, path, query, post):
         if query.get('__echo__', None) == 'true':
-            logging.debug("echo req: %s, %s", path, query)
+            if _debug_enabled():
+                logging.debug("echo req: %s, %s", path, _redact_secret_args(query))
             return dict(type='text/plain'), '%s %s\n'%(path, query)
     def err_handler(env, path, query, post):
         logging.debug("HANDLE_404: %s", path)
@@ -30,7 +41,9 @@ def make_wsgi_app(handlers):
             return []
 
     def handle_request(env, path, query, post):
-        logging.debug("REQ: %s %s query=%s", path, env, repr(query))
+        if _debug_enabled():
+            logging.debug("REQ: %s env=%s query=%s", path,
+                          _redact_secret_args(env), repr(redact_query_string(query)))
         query_args = {k: v[-1] for k, v in urllib.parse.parse_qs(query).items()}
         meta, content = try_these([echo_handler] + handlers + [err_handler], env, path, query_args, post)
         logging.info("RESP: %s meta=%s", path, meta)
