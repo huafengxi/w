@@ -9,7 +9,7 @@ import urllib.parse
 # log=info 不触发，但 `log=debug` 起服务（README「start service」的写法）即整体绕过
 # handler 的 `_redact_log_args`。这里复用 core/handler.py 同一套键名族（fnv23x 引入的
 # 词边界匹配）= 单一事实源，不再各写一份；`_debug_enabled()` 门控让 INFO 面零额外开销。
-from core.handler import _redact_secret_args, redact_query_string
+from core.handler import _redact_secret_args, redact_env_for_log, redact_query_string
 
 def _debug_enabled():
     return logging.getLogger().isEnabledFor(logging.DEBUG)
@@ -43,7 +43,7 @@ def make_wsgi_app(handlers):
     def handle_request(env, path, query, post):
         if _debug_enabled():
             logging.debug("REQ: %s env=%s query=%s", path,
-                          _redact_secret_args(env), repr(redact_query_string(query)))
+                          redact_env_for_log(env), repr(redact_query_string(query)))
         query_args = {k: v[-1] for k, v in urllib.parse.parse_qs(query).items()}
         meta, content = try_these([echo_handler] + handlers + [err_handler], env, path, query_args, post)
         logging.info("RESP: %s meta=%s", path, meta)

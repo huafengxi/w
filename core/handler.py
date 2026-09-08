@@ -194,6 +194,29 @@ def redact_query_string(qs):
         out.append(k + sep + v)
     return '&'.join(out)
 
+# WSGI environ 里承载原始 query 的键（任务 4ob5de 项 4）：DEBUG 面直打整个 environ
+# 时，光靠键名族拦不住它们——QUERY_STRING 本体就是 nonce/token 的载体。
+_ENV_QUERY_KEYS = ('QUERY_STRING', 'RAW_QUERY_STRING', 'REQUEST_URI')
+
+def redact_env_for_log(env):
+    """WSGI environ 的日志面脱敏，两层：
+    ① 键名族（_SECRET_ARG_RE）：HTTP_COOKIE / HTTP_AUTHORIZATION / … 的值只留长度；
+    ② 原始 query 载体（QUERY_STRING / REQUEST_URI 等）再过一遍 redact_query_string。
+    只作用于日志面，不触碰执行路径用的 env。"""
+    red = _redact_secret_args(env)
+    hits = [k for k in _ENV_QUERY_KEYS if isinstance(red.get(k), str) and red[k]]
+    if not hits:
+        return red
+    red = dict(red)
+    for k in hits:
+        v = red[k]
+        if '?' in v:      # REQUEST_URI 形态 path?query：只脱 query 段
+            head, sep, qs = v.partition('?')
+            red[k] = head + sep + redact_query_string(qs)
+        else:
+            red[k] = redact_query_string(v)
+    return red
+
 def _redact_log_args(args):
     """日志脱敏，三层：
     ① 通用 secret 参数名（任务 fnv23x）：任何请求的 args 里名字命中 _SECRET_ARG_RE
