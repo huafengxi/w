@@ -364,7 +364,7 @@ task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径�
 
 #### 登记入口的第二形态：表单视图（`?v=form`，任务 9xn4wa）
 
-`/agents/bot/<名>/spec.json?v=form` 打开即登记表单（`view/form.html`，无框架纯 DOM、零外部依赖），字段预填自 URL 参数（`profile`/`workdir`）与路径段（`name`）；submit = 登记并拉起该 bot，成功后转聊天窗。**上节四条边界逐条适用，不在此重述**；表单形态特有的四条：
+`/agents/bot/<名>/spec.json?v=form` 打开即登记表单（模板 `view/form.html.tpl` 经 `rpc/api.py:_render_form_view` 服务端渲染，无框架纯 DOM、零外部依赖），字段预填自 URL 参数（`profile`/`workdir`）与路径段（`name`）；submit = 登记并拉起该 bot，成功后转聊天窗。**上节四条边界逐条适用，不在此重述**；表单形态特有的四条：
 
 ① **同一后端、不另开写盘路径**：submit 走同一个 `op=create_bot` → 同一个 `proc.ensure_bot_registration`；表单只多传四个可选字段（`description`/`restartPolicy`/`subscribes`/`reaper`），全缺省时行为与 URL 直创逐字一致（例外：reaper 缺省值，见上）。视图路由 = `vmap.frag` 新增一行 `form: /sessiond/rpc/api.py?v=form`——映射到 **script** 而非 text/html 视图：`rpc/api.py:_render_form_view` 读模板 `view/form.html.tpl`（`.tpl` 无 mime 映射 ⇒ 直开该路径按 `text/plain` 原样下发、占位符不替换，**不会被当 HTML 渲染**；渲染只发生在 `?v=form` 这一条路径上）并注入 `$META_JSON`（= 与 `op=bot_form_meta` **同一个** `proc.bot_form_meta` 的载荷）与 `$ARGS_JSON`（含 `src`，供前端求代理前缀）⇒ profile 枚举与 command 预览是**服务端渲染进 HTML** 的（curl/禁用 JS 也可见），首屏不多一次往返；`op=bot_form_meta` 的 RPC 形态保留同载荷，供前端改名时重拉。
 ② **严格 create-only**：已登记的 bot 表单转只读形态（现役 spec 全字段铺陈，含未识别键）+ submit 禁用 + 一行提示「要改字段 = 人工编辑后 `agentctl control restart bot/<名>`」；submit 竞态（页面加载后才被别人登记）回 `created:false` ⇒ 就地重取现值转只读，**不跳转**。表单页改名会重拉该名的登记现值（防「表单说未登记、其实已登记」）。
