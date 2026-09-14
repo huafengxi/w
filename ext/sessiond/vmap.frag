@@ -13,9 +13,10 @@ chat: /sessiond/view/index.html
 # 映射到 **script** 而非 text/html 视图（同 vmap/vmap.frag 的 `script:` 行）：表单需要服务端
 # 枚举的 profile 清单与现役 spec 现值，由 rpc/api.py:_render_form_view 读模板
 # view/form.html.tpl 后一次性渲染（注入 $META_JSON + $ARGS_JSON）⇒ curl/禁用 JS 也能拿到
-# 服务端枚举证据，首屏不多一次往返。模板后缀 .tpl 无 mime 映射 ⇒ 直开 404，不会把带占位符
-# 的半成品当页面渲染。只读元数据的 RPC 形态（op=bot_form_meta）仍保留：同载荷，供前端
-# 改名时重拉该名的登记现值。
+# 服务端枚举证据，首屏不多一次往返。模板后缀 .tpl 无 mime 映射 ⇒ 直开该路径按 text/plain
+# 原样下发（实测 200 + Content-Type: text/plain，占位符未替换），**不会被当 HTML 渲染**；
+# 渲染只发生在 ?v=form 经 api.py 的这一条路径上。只读元数据的 RPC 形态（op=bot_form_meta）
+# 仍保留：同载荷，供前端改名时重拉该名的登记现值。
 # 注：w/core/wsgi.py 对重复 query key 取最后一个值 ⇒ ?v=chat&…&v=form 命中 form。
 form: /sessiond/rpc/api.py?v=form
 
