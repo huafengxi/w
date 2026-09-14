@@ -19,6 +19,10 @@
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
+#   op=create_bot  bot 族 URL 创建入口（任务 6k39t0）：
+#              session = /agents/bot/<名>/spec.json；profile + workdir 必填；
+#              未登记 → agentctl bot register + enable（写 spec.json + enable.json，spawn 归 runner）；
+#              已登记 → created:false + effective 值回显（create-only，不覆盖）。
 #   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/sessionDir 拆分）：
 #              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 cwd/sessionDir）→ 校验 →
 #              cwd = 显式 `cwd` 字段（缺省 = .agent 文件所在目录），会话目录 = sessionDir（缺省 = .agent 所在目录，不存在自动创建）→
@@ -343,6 +347,22 @@ def _resolve_agent(store, session):
 
 
 def interp(store, op='', session='', cmd='', **kw):
+    if op == 'create_bot':
+        # bot 族 URL 创建入口（任务 6k39t0）：不走 _bridge_or_err（此时可能还没有可桥接的会话）
+        profile = kw.get('profile', '') or ''
+        workdir = kw.get('workdir', '') or ''
+        if not profile or not workdir:
+            return _j({"ok": False,
+                       "error": "创建需同时给 profile 与 workdir；"
+                                "用法：/agents/bot/<名>/spec.json?v=chat"
+                                "&profile=<profile>&workdir=<workdir>"},
+                      '400 Bad Request')
+        doc, err = _proc.ensure_bot_registration(session, profile, workdir)
+        if err:
+            status = '409 Conflict' if err.startswith('409:') else '400 Bad Request'
+            msg = err[4:] if err.startswith('409:') else err
+            return _j({"ok": False, "error": msg}, status)
+        return _j(dict(ok=True, **doc))
     if op == 'agent':
         # .agent 规格解析（任务 kcywpy）：不走会话桥接——会话路径由规格文件推导，
         # 前端拿推导结果再走正常 attach。

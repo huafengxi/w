@@ -1039,6 +1039,7 @@ def agentd_route(session_path):
             spec = json.load(f)
     except (OSError, ValueError):
         spec = None
+    spec_absent = spec is None or not isinstance(spec, dict)
     spec = spec if isinstance(spec, dict) else {}
     # 跨机守卫（同 host_guard 口径：指引用户去宿主机的 8080）
     host = spec.get("host")
@@ -1065,6 +1066,11 @@ def agentd_route(session_path):
                 "会话已终态（agentd 已收口 %s），不可打开；如需续用请经 agentd "
                 "control restart 换代" % participant_id)
     if doc is None:
+        if spec_absent:
+            return ("reject",
+                    "未登记（无 spec.json）：bot 族可用创建入口 "
+                    "/agents/bot/%s/spec.json?v=chat&profile=<profile>&workdir=<workdir> "
+                    "登记并拉起；task 族走 dispatch" % name)
         return ("reject",
                 "会话进程缺席（%s 尚无运行档案）：拉起权单点 = agentd，"
                 "请等待 agentd 放行拉起后重试" % participant_id)
@@ -1120,6 +1126,168 @@ def agentd_spec_workdir(participant_id):
     if not isinstance(wd, str) or not wd.strip():
         return None
     return os.path.expanduser(wd.strip())
+
+
+# ---- bot 族 URL 创建入口（任务 6k39t0） ----
+#
+# ensure_bot_registration：按 URL 参数登记并放行一个常驻 bot 会话。
+# 写盘动作 = agentctl bot register（spec.json）+ agentctl enable（enable.json）；
+# spawn 仍单点归 agentd runner（web 零 spawn 权不变）。
+# 只支持 bot 族；create-only（spec 已在场不覆盖）；profile/workdir 两者必填。
+
+_PROFILE_NAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
+
+
+def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None):
+    """bot 族 URL 创建入口（任务 6k39t0）。
+
+    参数：
+      session_path — 站内路径 /agents/bot/<名>/spec.json
+      profile      — bots/profiles/<profile>.json 的裸名
+      workdir      — 会话工作目录（~/ 或 / 开头）
+      root         — agents 树根（缺省 = 模块常量 WS）
+      ctl          — agentctl.py 路径（缺省 = <WS>/agentd/agentctl.py）
+
+    返回 (doc, None) 或 (None, 错误消息)。
+    错误消息以 "409:" 开头 → 调用方回 409；其它 → 400。
+    """
+    if root is None:
+        root = WS
+    if ctl is None:
+        ctl = os.path.join(WS, "agentd", "agentctl.py")
+
+    # ---- 路径匹配 ----
+    p = _site_path(session_path)
+    m = _AGENTD_SPEC_RE.match(p)
+    if not m:
+        return None, "路径必须是 /agents/bot/<名>/spec.json，got %r" % (session_path,)
+    family, name = m.group(1), m.group(2)
+    if family != "bot":
+        return None, ("创建语义只支持 bot 族；task 走 dispatch 工具登记"
+                      "（requirement/acceptance 必填）")
+
+    # ---- 名前置校验（文法判定交给 agentctl，这里只拒明显非法） ----
+    if not name or "\x00" in name or "/" in name or len(name.encode("utf-8")) > 64:
+        return None, "bot 名非法（空/含 NUL/含 / /超 64 字节）：%r" % (name,)
+
+    # ---- profile 校验 ----
+    if not isinstance(profile, str) or not profile:
+        return None, "profile 不能为空"
+    if not _PROFILE_NAME_RE.match(profile) or profile.startswith(".") or ".." in profile:
+        return None, ("profile 名非法（须匹配 [A-Za-z0-9._-]+、不以 . 开头、不含 ..）：%r"
+                      % (profile,))
+    profiles_dir = os.path.join(root, "bots", "profiles")
+    profile_path = os.path.join(profiles_dir, profile + ".json")
+    if not os.path.isfile(profile_path):
+        try:
+            available = sorted(
+                f[:-len(".json")] for f in os.listdir(profiles_dir)
+                if f.endswith(".json")
+            )
+        except OSError:
+            available = []
+        return None, ("profile %r 不存在（%s 不在场）；可用 profile：%s"
+                      % (profile, profile_path,
+                         ", ".join(available) if available else "（目录不可读）"))
+
+    # ---- workdir 校验 ----
+    if not isinstance(workdir, str) or not workdir:
+        return None, "workdir 不能为空"
+    if not (workdir.startswith("~/") or workdir.startswith("/")):
+        return None, "workdir 必须是绝对路径（~/ 或 / 开头），got %r" % (workdir,)
+    wd_expanded = os.path.expanduser(workdir)
+    if not os.path.isdir(wd_expanded):
+        return None, "workdir 不存在或不是目录：%s（展开后 %s）" % (workdir, wd_expanded)
+    wd_real = os.path.realpath(wd_expanded)
+    agents_real = os.path.realpath(os.path.join(root, "agents"))
+    if wd_real == agents_real or wd_real.startswith(agents_real + os.sep):
+        return None, ("workdir 不得位于 agents/ 运行态树内：%s（realpath %s）"
+                      % (workdir, wd_real))
+
+    # ---- 已在场分支（create-only） ----
+    adir = os.path.join(root, "agents", "bot", name)
+    spec_path = os.path.join(adir, "spec.json")
+    if os.path.exists(spec_path):
+        try:
+            with open(spec_path) as f:
+                spec = json.load(f)
+        except (OSError, ValueError):
+            spec = {}
+        if not isinstance(spec, dict):
+            spec = {}
+        cmd = spec.get("command", "")
+        eff_profile = None
+        pm = re.search(r'DISPATCH_PROFILE=(\S+)', cmd) if isinstance(cmd, str) else None
+        if pm:
+            eff_profile = pm.group(1)
+        eff_workdir = spec.get("workdir")
+        mismatch = []
+        if eff_profile != profile:
+            mismatch.append("profile")
+        if eff_workdir != workdir:
+            mismatch.append("workdir")
+        return {"created": False,
+                "effective": {"profile": eff_profile, "workdir": eff_workdir},
+                "mismatch": mismatch}, None
+
+    # ---- 创建分支 ----
+    me = _self_host()
+    if me is None:
+        return None, ("env/host-id 缺失或无本机映射，无法判定登记机，拒绝创建"
+                      "（修复 env/host-id 后重试）")
+    creator = "web/" + me
+    command = ("DISPATCH_PROFILE=%s AGENTD_RESIDENT=1 AGENTD_SESSION_NAME=bot/%s "
+               "exec python3 \"$AGENT_ROOT/agentd/pi-rpc-wrap.py\"" % (profile, name))
+
+    # ① bot register
+    argv_reg = [
+        sys.executable, ctl, "--root", root,
+        "bot", "register",
+        "--name", name,
+        "--command", command,
+        "--workdir", workdir,
+        "--creator", creator,
+        "--restart-policy", "auto",
+    ]
+    r1 = subprocess.run(argv_reg, capture_output=True, text=True, timeout=30)
+    if r1.returncode != 0:
+        stderr = (r1.stderr or r1.stdout or "").strip()[:2000]
+        return None, "409:agentctl bot register 失败（rc=%d）：%s" % (r1.returncode, stderr)
+
+    # ② enable
+    argv_en = [
+        sys.executable, ctl, "--root", root,
+        "enable", "bot/" + name,
+        "--by", creator,
+        "--note", "created via 8080 chat URL",
+    ]
+    r2 = subprocess.run(argv_en, capture_output=True, text=True, timeout=30)
+    enable_path = os.path.join(adir, "enable.json")
+    if r2.returncode != 0:
+        stderr2 = (r2.stderr or r2.stdout or "").strip()
+        if "enable.json 已存在" in stderr2 and os.path.exists(enable_path):
+            # 窄竞态（scheduler 先行放行）：按幂等成功处置
+            pass  # fall through to success with enablePreexisting
+        else:
+            return None, ("spec.json 已写入但 enable.json 缺失 ⇒ 该 bot 处于排队态；"
+                          "手工放行 = python3 %s --root %s enable bot/%s --by %s\n"
+                          "agentctl enable 错误（rc=%d）：%s"
+                          % (ctl, root, name, creator, r2.returncode, stderr2[:2000]))
+
+    enable_preexisting = (r2.returncode != 0)
+    doc = {
+        "created": True,
+        "participant": "bot/" + name,
+        "specPath": spec_path,
+        "enablePath": enable_path,
+        "profile": profile,
+        "workdir": workdir,
+        "host": me,
+        "command": command,
+    }
+    if enable_preexisting:
+        doc["enablePreexisting"] = True
+    return doc, None
 
 
 def agentd_entry(session_path):

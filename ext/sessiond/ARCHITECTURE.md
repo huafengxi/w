@@ -122,7 +122,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 崩溃不重拉 | 监督循环崩溃分支：有在场 → 退避重拉/熔断（逻辑逐字不变）；无在场 → 广播 `sessiond.session_dormant`、置 `state=dormant`、监督循环退出（不重拉、不计崩溃） |
 | 复活 | 懒态桥接的下次访问（attach/cmd）经 `ensure_started` 重起监督循环（熔断态仍需 reload 解锁，不变），语义回到懒拉起 |
 | 空闲回收 | `bridge.py` 模块级单守护线程（`_idle_scan`，周期 `SESSIOND_IDLE_SCAN` 缺省 60s）：`state=running ∧ 无订阅 ∧ 距最近活动 > IDLE_TIMEOUT ∧ jsonl mtime 老化 > IDLE_TIMEOUT（文件不存在 = 从未写盘，算空闲）` → `Supervisor._idle_reap()` 优雅杀转懒态（不计崩溃）。`IDLE_TIMEOUT` = env `SESSIOND_IDLE_TIMEOUT`，缺省 900s，0=关。排除 SocketSupervisor（生命周期属 agentd） |
-| 拉起权单点 | 用户硬约束（2026-09-03）：① 拉起/复活归 agentd 监督（对登记者）；② 有 `spec.json` 的 agentd 登记者（/agents/(task\|bot)/…）web 只透传、**永不 spawn**，缺席时浏览器入口显示不可用/等待（§10 三态）；③ 裸 jsonl 拉起废除——`get_bridge` 对非路由路径仅当 `_CWD_OVERRIDES` 有登记（= 经 `op=agent` 解析的 .agent 声明者）才拉起，未登记直开 → 400 提示；**.agent 声明者是 web 唯一拉起入口** |
+| 拉起权单点 | 用户硬约束（2026-09-03）：① 拉起/复活归 agentd 监督（对登记者）；② 有 `spec.json` 的 agentd 登记者（/agents/(task\|bot)/…）web 只透传、**永不 spawn**，缺席时浏览器入口显示不可用/等待（§10 三态）；③ 裸 jsonl 拉起废除——`get_bridge` 对非路由路径仅当 `_CWD_OVERRIDES` 有登记（= 经 `op=agent` 解析的 .agent 声明者）才拉起，未登记直开 → 400 提示；**.agent 声明者是 web 唯一拉起入口**；④ **零 spawn 权不变**；新增**登记入口**（`op=create_bot`）= 代用户写 `spec.json` + `enable.json`，spawn 仍单点归 runner（见 §10 创建入口小节） |
 | 浏览器不弄坏 | 有 tab 打开 = 有订阅 = 有在场 → 崩溃退避重拉、熔断、多 tab 语义逐字不变；变化仅在「无人看」之后（不重拉/空闲回收），前端只见休眠提示帧 |
 
 ---
@@ -168,6 +168,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | `inspect` | — | `{ok, session, inspect:{ok, generatedAt, sessionFile, cwd, toolCount, tools[], systemPrompt}}` | 探针转储（任务 s0f1la）：经 `-e` 注入的探针扩展命令取当前系统提示词全文 + 工具清单（侧车文件握手，见 §3/§2 探针小节）；payload 几十 KB 走本 HTTP 响应，不进事件环/jsonl | 502 超时/不就位/被拒/侧车文件缺失 |
 | `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时）。**socket 会话**：代理 `control/restart`（保历史换代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 重拉超时等失败；socket 代理 504 等回执超时 / 409 `rejected`（已 final）/ 403 跨机 |
 | `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因）。**socket 会话**：代理 `control/clear`（弃历史换代：杀→备份 `run/backup/`→截断→空白新代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 失败（含删文件失败）；socket 代理 504 等回执超时 / 409 `rejected`（已 final/备份失败）/ 403 跨机 |
+| `create_bot` | `session`（`/agents/bot/<名>/spec.json`）、`profile`、`workdir` | `{ok, created, participant, specPath, enablePath, profile, workdir, host, command}` 或 `{ok, created:false, effective:{profile,workdir}, mismatch:[]}` | bot 族 URL 创建入口（任务 6k39t0）：未登记 → agentctl bot register + enable（写 spec.json + enable.json，spawn 归 runner）；已登记 → created:false + effective 值回显（create-only，不覆盖）；**不走 `_bridge_or_err`**（此时可能还没有可桥接的会话） | 400 缺 profile/workdir、路径非法、profile 不存在、workdir 非法；409 agentctl 拒绝（spec 已在场/撞名等） |
 | 未知 | — | — | — | 400 `unknown op` |
 
 attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries 响应行的事件环 ID，前端用它作为续流游标。
@@ -351,7 +352,11 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 
 ## 10. agentd 登记会话（任务与常驻，rpc 封装形态；任务 ybzvbn / 票 hegipc，去保活二期 ja0vr7 泛化）
 
-task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径（任务 60grqq，用户拍板：裸 jsonl 入口废除）：`/agents/(task|bot)/<名>/spec.json?v=chat` 打开即聊天窗，请求入口层（`rpc/api.py` + `rpc/stream.py`）经 `proc.agentd_entry` 归一为会话产物路径（`<族目录>/session/session.jsonl`）后进既有 `agentd_route` 透传链路（零新路由分支、零新 spawn 面；产物路径直开被拒 400 + 指引，它是数据不是入口）。前端契约全对齐 §3–§5。生命周期所有权在 agentd runner（web = 纯 attach 客户端，无杀权、**零启动权**：只透传、永不 spawn）。
+task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径（任务 60grqq，用户拍板：裸 jsonl 入口废除）：`/agents/(task|bot)/<名>/spec.json?v=chat` 打开即聊天窗，请求入口层（`rpc/api.py` + `rpc/stream.py`）经 `proc.agentd_entry` 归一为会话产物路径（`<族目录>/session/session.jsonl`）后进既有 `agentd_route` 透传链路（零新路由分支、零新 spawn 面；产物路径直开被拒 400 + 指引，它是数据不是入口）。前端契约全对齐 §3–§5。生命周期所有权在 agentd runner（**零 spawn 权不变**；新增**登记入口**（`op=create_bot`）= 代用户写 `spec.json` + `enable.json`，spawn 仍单点归 runner）。
+
+#### 创建入口边界（`op=create_bot`，任务 6k39t0）
+
+① 只 bot 族（task 族无启动接口，走 dispatch 工具）；② create-only（spec 已在场一律不改，要改走 `control restart` 前的人工编辑）；③ URL 创建的 bot **只活在 `agents/` 运行态**，不入被追踪声明源 `svc/bots/` ⇒ fresh clone 不自愈；要长期常驻仍应落 `svc/bots/<名>/spec.json` + `make bots.seed`；④ workdir 决定项目级扩展发现面（`workdir=~/m/assistant` ⇒ `assistant/.pi/extensions/agentd/` 在场，含 `send_message`/`dispatch`/`task_status` 等工具 + 收件 receiver；其它 workdir ⇒ 只有该目录自家的 `.pi` 扩展）+ 生命周期收口路径（`agentctl control stop bot/<名> --from <id> --reason …` → 等 `pid.json.final==true` → `python3 dsync/gc.py add bot/<名>/ --wait`，绝不直接 rm）。
 
 ### 路由判定（`proc.py:agentd_route`，get_bridge 内单一决策点，匹配 `^/agents/(task|bot)/<名>/session/session.jsonl$`）
 
