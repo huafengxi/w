@@ -1271,8 +1271,8 @@ def _validate_bot_form_fields(description, restart_policy, subscribes, reaper):
         if not _valid_participant_id(rep):
             return None, ("非法 reaper %r：须为两段路径式 id <family>/<name>，"
                           "family ∈ task|bot|topic，name ∈ [A-Za-z0-9._-]+ 且不以 '.' "
-                          "开头、不含 '..'（留空 = 回落职位信箱 topic/dispatcher）"
-                          % (reaper,))
+                          "开头、不含 '..'（留空 = 服务端缺省填 %s，不是回落）"
+                          % (reaper, _DEFAULT_BOT_REAPER))
 
     return {"description": desc, "restart_policy": rp,
             "subscribes": subs, "reaper": rep}, None
