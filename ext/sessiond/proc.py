@@ -1068,8 +1068,9 @@ def agentd_route(session_path):
     if doc is None:
         if spec_absent:
             return ("reject",
-                    "未登记（无 spec.json）：bot 族可用创建入口 "
-                    "/agents/bot/%s/spec.json?v=chat&profile=<profile>&workdir=<workdir> "
+                    "未登记（无 spec.json）：bot 族可用登记入口 "
+                    "/agents/bot/%s/spec.json?v=form（表单，填字段后 submit）∨ "
+                    "?v=chat&profile=<profile>&workdir=<workdir>（URL 直创）"
                     "登记并拉起；task 族走 dispatch" % name)
         return ("reject",
                 "会话进程缺席（%s 尚无运行档案）：拉起权单点 = agentd，"
@@ -1128,18 +1129,254 @@ def agentd_spec_workdir(participant_id):
     return os.path.expanduser(wd.strip())
 
 
-# ---- bot 族 URL 创建入口（任务 6k39t0） ----
+# ---- bot 族登记入口（任务 6k39t0 URL 直创；任务 9xn4wa 表单 ?v=form） ----
 #
-# ensure_bot_registration：按 URL 参数登记并放行一个常驻 bot 会话。
+# ensure_bot_registration：按参数登记并放行一个常驻 bot 会话（两个入口形态共用本函数）。
 # 写盘动作 = agentctl bot register（spec.json）+ agentctl enable（enable.json）；
 # spawn 仍单点归 agentd runner（web 零 spawn 权不变）。
 # 只支持 bot 族；create-only（spec 已在场不覆盖）；profile/workdir 两者必填。
+# bot_form_meta：表单视图的只读元数据（profile 枚举 + 现役 spec 现值 + command 预览），
+# 不建桥、不写盘、不 spawn。
 
-_PROFILE_NAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
+# 名字段白名单（bot 裸名与 profile 名同款，对称校验）：镜像 agentd/proto.py:NAME_RE +
+# agentctl.check_name_segment 的登记侧收紧（不以 '.' 开头、不含 '..'）。web 侧先给可读 400，
+# agentctl 仍是文法判定的最终单点（纵深防御，不替代）。
+_NAME_SEGMENT_RE = re.compile(r'^[A-Za-z0-9._-]+$')
 
 
-def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None):
-    """bot 族 URL 创建入口（任务 6k39t0）。
+def _valid_name_segment(s):
+    """名字段合法性（bot 裸名 / profile 名共用）。"""
+    return (isinstance(s, str) and bool(_NAME_SEGMENT_RE.match(s))
+            and not s.startswith(".") and ".." not in s)
+
+# 常驻会话 command 形态的**单一事实源**（服务端生成，绝不接受客户端提供 ——
+# 否则登记表单等于任意命令执行入口）。`{profile}`/`{name}` 为占位；`$AGENT_ROOT` 由
+# runner 展开（字面 `$` 在此不经 string.Template，故无需转义）。
+_BOT_COMMAND_TEMPLATE = (
+    'DISPATCH_PROFILE={profile} AGENTD_RESIDENT=1 '
+    'AGENTD_SESSION_NAME=bot/{name} exec python3 '
+    '"$AGENT_ROOT/agentd/pi-rpc-wrap.py"')
+
+# 表单可选字段的校验常量（任务 9xn4wa）
+_RESTART_POLICIES = ("manual", "auto", "one-shot")   # 同 agentctl --restart-policy choices
+_DESCRIPTION_MAX = 200                                # 字符数上界（web 表单口径）
+# 登记入口的 reaper 缺省值 = 职位信箱（镜像 agentd/proto.py:POSITION_PID；同 _self_host
+# 自带副本的做法，不把 agentd 拉进 web 进程的 sys.path）。**缺省值由 web 侧填、不在
+# agentctl 里加**（agentctl 是通用登记工具，缺省语义属 8080 登记入口的口径）：写成显式
+# `topic/dispatcher` 后，runner.resolve_reaper 命中「显式收件面 == 职位信箱」分支（note=None，
+# 语义正确：无消费者的兜底面就是它的收件方），而不是「spec 缺 reaper 字段」的异常回落档
+# ⇒ 经 8080 创建的每个 bot 不再在 agentd.log 里制造一条看起来像登记缺陷的异常通知。
+_DEFAULT_BOT_REAPER = "topic/dispatcher"
+# 两段路径式 id 文法（镜像 agentd/proto.py:parse_participant_id 的族白名单 + 段白名单，
+# 叠加 agentctl.check_name_segment 的登记侧收紧：不以 '.' 开头、不含 '..'）。
+# 刻意自带副本而不 import agentd/proto.py —— 与 _self_host 镜像 local_canonical_host 同款
+# 做法：web 常驻进程不把 agentd 拉进 sys.path（独立失败域，观测面故障不伤调度面）。
+_PARTICIPANT_ID_RE = re.compile(r'^(task|bot|topic)/([A-Za-z0-9._-]+)$')
+
+
+def bot_resident_command(profile, name):
+    """常驻 bot 会话的 command 串（服务端单点生成）。"""
+    return _BOT_COMMAND_TEMPLATE.format(profile=profile, name=name)
+
+
+def _valid_participant_id(s):
+    """两段路径式 id 文法判定（`<family>/<name>`，family ∈ task|bot|topic，
+    name ∈ [A-Za-z0-9._-]+ 且不以 '.' 开头、不含 '..'）。"""
+    if not isinstance(s, str):
+        return False
+    m = _PARTICIPANT_ID_RE.match(s)
+    if not m:
+        return False
+    nm = m.group(2)
+    return not nm.startswith(".") and ".." not in nm
+
+
+def _validate_bot_form_fields(description, restart_policy, subscribes, reaper):
+    """表单新增可选字段的校验单点（任务 9xn4wa）：**全部先于任何写盘**。
+
+    返回 (opts, None) 或 (None, 错误消息)。opts = 规范化后的
+    {"description": str|None, "restart_policy": str, "subscribes": list|None,
+     "reaper": str|None}；restart_policy 缺省 = "auto"（= 6k39t0 的现行为，零回归）。
+    空串/纯空白一律当「未给」（不写该 spec 键）。
+    """
+    # description → spec `name`（人类可读描述，协议 §4.1）
+    if description is None:
+        desc = None
+    elif not isinstance(description, str):
+        return None, "description 必须是字符串，got %r" % (type(description).__name__,)
+    elif not description.strip():
+        desc = None
+    else:
+        if "\x00" in description:
+            return None, "description 不得含 NUL 字节"
+        if len(description) > _DESCRIPTION_MAX:
+            return None, ("description 过长（%d 字符 > %d）：它是 spec 的 `name` 字段"
+                          "（一句人类可读描述），不是正文" % (len(description),
+                                                             _DESCRIPTION_MAX))
+        desc = description.strip()
+
+    # restartPolicy
+    if restart_policy is None or (isinstance(restart_policy, str)
+                                  and not restart_policy.strip()):
+        rp = "auto"
+    elif not isinstance(restart_policy, str):
+        return None, "restartPolicy 必须是字符串，got %r" % (type(restart_policy).__name__,)
+    else:
+        rp = restart_policy.strip()
+        if rp not in _RESTART_POLICIES:
+            return None, ("restartPolicy 取值须为 %s，got %r"
+                          % ("|".join(_RESTART_POLICIES), restart_policy))
+
+    # subscribes（只接受 topic/ 族两段 id；agentctl parse_subscribes 也会拒，
+    # 这里先给出 web 侧可读 400）
+    raw_items = None
+    if subscribes is None:
+        pass
+    elif isinstance(subscribes, str):
+        raw_items = subscribes.split(",")
+    elif isinstance(subscribes, (list, tuple)):
+        raw_items = list(subscribes)
+    else:
+        return None, ("subscribes 必须是逗号分隔字符串或数组，got %r"
+                      % (type(subscribes).__name__,))
+    if raw_items is not None:
+        out = []
+        for it in raw_items:
+            if not isinstance(it, str):
+                return None, "subscribes 项必须是字符串，got %r" % (it,)
+            s = it.strip()
+            if not s:
+                continue
+            if not _valid_participant_id(s):
+                return None, ("非法订阅项 %r：须为两段路径式 id <family>/<name>"
+                              "（name ∈ [A-Za-z0-9._-]+、不以 '.' 开头、不含 '..'）" % (s,))
+            if s.split("/")[0] != "topic":
+                return None, ("拒绝订阅 %r：只有 topic/ 族信箱可被绑定（通道 B 白名单，"
+                              "防抢收——task/bot 信箱收件归属 = 会话名的纯函数，协议 §4.1）"
+                              % (s,))
+            if s not in out:
+                out.append(s)
+        subs = out or None
+    else:
+        subs = None
+
+
+    # reaper（终态通知唯一收件面；缺失 → runner.resolve_reaper 回落职位信箱带 note）
+    if reaper is None or (isinstance(reaper, str) and not reaper.strip()):
+        rep = None
+    elif not isinstance(reaper, str):
+        return None, "reaper 必须是字符串，got %r" % (type(reaper).__name__,)
+    else:
+        rep = reaper.strip()
+        if not _valid_participant_id(rep):
+            return None, ("非法 reaper %r：须为两段路径式 id <family>/<name>，"
+                          "family ∈ task|bot|topic，name ∈ [A-Za-z0-9._-]+ 且不以 '.' "
+                          "开头、不含 '..'（留空 = 回落职位信箱 topic/dispatcher）"
+                          % (reaper,))
+
+    return {"description": desc, "restart_policy": rp,
+            "subscribes": subs, "reaper": rep}, None
+
+
+def list_profiles(root=None):
+    """服务端枚举 `bots/profiles/*.json`（表单的 profile 下拉选项**不得硬编码**）。
+    返回按 name 升序的 [{name, summary, model, capsCount}]；单个档案不可读/坏 JSON →
+    仍出条目（name 取自文件名，其余字段 None/0）——下拉少一项比整页 500 更糟。
+    目录不可读 → 空数组（调用方自行判空）。"""
+    if root is None:
+        root = WS
+    pdir = os.path.join(root, "bots", "profiles")
+    try:
+        names = sorted(f[:-len(".json")] for f in os.listdir(pdir)
+                       if f.endswith(".json"))
+    except OSError:
+        return []
+    out = []
+    for nm in names:
+        doc = {}
+        try:
+            with open(os.path.join(pdir, nm + ".json")) as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                doc = loaded
+        except (OSError, ValueError):
+            doc = {}
+        caps = doc.get("caps")
+        summary = doc.get("summary")
+        model = doc.get("model")
+        out.append({
+            "name": doc.get("name") if isinstance(doc.get("name"), str) else nm,
+            "summary": summary if isinstance(summary, str) else None,
+            "model": model if isinstance(model, str) else None,
+            "capsCount": len(caps) if isinstance(caps, list) else 0,
+        })
+    return out
+
+
+def bot_form_meta(session_path, root=None, profile=None):
+    """表单视图（?v=form）的只读元数据（任务 9xn4wa）。
+
+    **不建桥、不写盘、不 spawn**；对不存在的 bot 也返回成功档（existing=null）。
+    参数：
+      session_path — 站内路径 /agents/bot/<名>/spec.json
+      root         — agents 树根（缺省 = 模块常量 WS）
+      profile      — 可选预览提示（URL 的 profile 参数）；缺省时依次回落
+                     现役 spec 的 DISPATCH_PROFILE → 枚举到的首个 profile → ""
+    返回 (doc, None) 或 (None, 错误消息)（调用方映射 400）。
+    """
+    if root is None:
+        root = WS
+    p = _site_path(session_path)
+    m = _AGENTD_SPEC_RE.match(p)
+    if not m:
+        return None, ("路径必须是 /agents/bot/<名>/spec.json，got %r"
+                      "（表单入口只服务 bot 族登记）" % (session_path,))
+    family, name = m.group(1), m.group(2)
+    if family != "bot":
+        return None, ("表单登记只支持 bot 族；task 走 dispatch 工具登记"
+                      "（requirement/acceptance 必填）")
+
+    spec_path = os.path.join(root, "agents", "bot", name, "spec.json")
+    existing = None
+    if os.path.exists(spec_path):
+        try:
+            with open(spec_path) as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                existing = loaded
+        except (OSError, ValueError):
+            existing = None      # 坏档 → 当未登记呈现；create_bot 自会按 create-only 拒改
+
+    profiles = list_profiles(root)
+    # 预览用的 profile：已登记 → 现役 spec 的 DISPATCH_PROFILE（只读形态得展示真实生效值，
+    # 不被 URL 参数覆盖）；未登记 → URL 的 profile 提示 → 枚举到的首个。
+    hint = None
+    if existing:
+        cmd = existing.get("command")
+        pm = re.search(r'DISPATCH_PROFILE=(\S+)', cmd) if isinstance(cmd, str) else None
+        if pm:
+            hint = pm.group(1)
+    if hint is None:
+        hint = profile.strip() if isinstance(profile, str) and profile.strip() else None
+    if hint is None and profiles:
+        hint = profiles[0]["name"]
+    return {"host": _self_host(),
+            "profiles": profiles,
+            "existing": existing,
+            "botName": name,
+            "defaultReaper": _DEFAULT_BOT_REAPER,
+            "restartPolicies": list(_RESTART_POLICIES),
+            "descriptionMax": _DESCRIPTION_MAX,
+            "commandPreview": bot_resident_command(hint or "", name),
+            # 前端随 name/profile 变化实时重算预览用（命令串的单一事实源仍在服务端，
+            # 视图不硬编码）
+            "commandTemplate": _BOT_COMMAND_TEMPLATE}, None
+
+
+def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None,
+                            description=None, restart_policy=None,
+                            subscribes=None, reaper=None):
+    """bot 族登记入口（任务 6k39t0 URL 直创；任务 9xn4wa 扩表单可选字段）。
 
     参数：
       session_path — 站内路径 /agents/bot/<名>/spec.json
@@ -1147,6 +1384,16 @@ def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None)
       workdir      — 会话工作目录（~/ 或 / 开头）
       root         — agents 树根（缺省 = 模块常量 WS）
       ctl          — agentctl.py 路径（缺省 = <WS>/agentd/agentctl.py）
+
+    可选字段（任务 9xn4wa，表单视图用；全部缺省 = 6k39t0 的现行为，零回归）：
+      description   — → spec `name`（人类可读描述，协议 §4.1）；≤200 字符、无 NUL
+      restart_policy— manual|auto|one-shot（缺省 auto）
+      subscribes    — 逗号分隔字符串或数组，每项须 `topic/` 族两段 id
+      reaper        — 两段路径式 id（终态通知唯一收件面）；非法 → 400（不静默回落）；
+                      **缺省时由本函数填 `topic/dispatcher`（= _DEFAULT_BOT_REAPER）并恒写
+                      该 spec 键**，使 runner.resolve_reaper 不报「spec 缺 reaper 字段」异常
+    **command 不在参数面**：它由服务端按 profile + 裸名生成（bot_resident_command），
+    客户端提供一律在 rpc/api.py 层 400 拒收。
 
     返回 (doc, None) 或 (None, 错误消息)。
     错误消息以 "409:" 开头 → 调用方回 409；其它 → 400。
@@ -1166,14 +1413,17 @@ def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None)
         return None, ("创建语义只支持 bot 族；task 走 dispatch 工具登记"
                       "（requirement/acceptance 必填）")
 
-    # ---- 名前置校验（文法判定交给 agentctl，这里只拒明显非法） ----
+    # ---- 名前置校验（与 profile 对称：同一套名字段白名单；agentctl 仍是最终单点） ----
     if not name or "\x00" in name or "/" in name or len(name.encode("utf-8")) > 64:
         return None, "bot 名非法（空/含 NUL/含 / /超 64 字节）：%r" % (name,)
+    if not _valid_name_segment(name):
+        return None, ("bot 名非法（须匹配 [A-Za-z0-9._-]+、不以 . 开头、不含 ..；"
+                      "与 profile 名同款白名单）：%r" % (name,))
 
     # ---- profile 校验 ----
     if not isinstance(profile, str) or not profile:
         return None, "profile 不能为空"
-    if not _PROFILE_NAME_RE.match(profile) or profile.startswith(".") or ".." in profile:
+    if not _valid_name_segment(profile):
         return None, ("profile 名非法（须匹配 [A-Za-z0-9._-]+、不以 . 开头、不含 ..）：%r"
                       % (profile,))
     profiles_dir = os.path.join(root, "bots", "profiles")
@@ -1203,6 +1453,12 @@ def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None)
     if wd_real == agents_real or wd_real.startswith(agents_real + os.sep):
         return None, ("workdir 不得位于 agents/ 运行态树内：%s（realpath %s）"
                       % (workdir, wd_real))
+
+    # ---- 表单可选字段校验（任务 9xn4wa；全部先于任何写盘） ----
+    opts, opt_err = _validate_bot_form_fields(description, restart_policy,
+                                              subscribes, reaper)
+    if opt_err:
+        return None, opt_err
 
     # ---- 已在场分支（create-only） ----
     adir = os.path.join(root, "agents", "bot", name)
@@ -1236,8 +1492,11 @@ def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None)
         return None, ("env/host-id 缺失或无本机映射，无法判定登记机，拒绝创建"
                       "（修复 env/host-id 后重试）")
     creator = "web/" + me
-    command = ("DISPATCH_PROFILE=%s AGENTD_RESIDENT=1 AGENTD_SESSION_NAME=bot/%s "
-               "exec python3 \"$AGENT_ROOT/agentd/pi-rpc-wrap.py\"" % (profile, name))
+    command = bot_resident_command(profile, name)   # 服务端单点生成，不接受客户端提供
+    # reaper：客户端显式给 > 缺省职位信箱（登记方裁定 2026-09-14，见 _DEFAULT_BOT_REAPER 注）。
+    # 恒写该键（URL 直创与表单两条路径共用本函数 ⇒ 两边同时生效）；非法值已在校验层
+    # 400 拒收，**不因非法而静默回落缺省值**。
+    reaper_eff = opts["reaper"] or _DEFAULT_BOT_REAPER
 
     # ① bot register
     argv_reg = [
@@ -1247,9 +1506,20 @@ def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None)
         "--command", command,
         "--workdir", workdir,
         "--creator", creator,
-        "--restart-policy", "auto",
+        "--restart-policy", opts["restart_policy"],
+        "--reaper", reaper_eff,
     ]
-    r1 = subprocess.run(argv_reg, capture_output=True, text=True, timeout=30)
+    # 可选字段：给了才传 flag（缺省时 agentctl 不写该 spec 键）
+    if opts["description"]:
+        argv_reg += ["--description", opts["description"]]
+    if opts["subscribes"]:
+        argv_reg += ["--subscribes", ",".join(opts["subscribes"])]
+    # S6（评审 gk305i）：agentctl 调用一律包 TimeoutExpired/OSError——否则穿透 interp 变成
+    # 500 + traceback，与本函数「一律返回 (None, 错误消息)」的契约不符。
+    try:
+        r1 = subprocess.run(argv_reg, capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return None, "409:agentctl bot register 调用失败：%r" % (e,)
     if r1.returncode != 0:
         stderr = (r1.stderr or r1.stdout or "").strip()[:2000]
         return None, "409:agentctl bot register 失败（rc=%d）：%s" % (r1.returncode, stderr)
@@ -1261,7 +1531,12 @@ def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None)
         "--by", creator,
         "--note", "created via 8080 chat URL",
     ]
-    r2 = subprocess.run(argv_en, capture_output=True, text=True, timeout=30)
+    try:
+        r2 = subprocess.run(argv_en, capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return None, ("spec.json 已写入但 enable 调用失败（%r）⇒ 该 bot 处于排队态；"
+                      "手工放行 = python3 %s --root %s enable bot/%s --by %s"
+                      % (e, ctl, root, name, creator))
     enable_path = os.path.join(adir, "enable.json")
     if r2.returncode != 0:
         stderr2 = (r2.stderr or r2.stdout or "").strip()
@@ -1284,7 +1559,15 @@ def ensure_bot_registration(session_path, profile, workdir, root=None, ctl=None)
         "workdir": workdir,
         "host": me,
         "command": command,
+        "restartPolicy": opts["restart_policy"],
+        "reaper": reaper_eff,
+        "reaperDefaulted": not opts["reaper"],   # true = 本值由服务端缺省填入
     }
+    # 可选字段只在给了的时候回显（表单页用来确认落盘值）
+    if opts["description"]:
+        doc["description"] = opts["description"]
+    if opts["subscribes"]:
+        doc["subscribes"] = opts["subscribes"]
     if enable_preexisting:
         doc["enablePreexisting"] = True
     return doc, None

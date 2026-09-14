@@ -5,6 +5,20 @@
 # session 参数路由；路径校验锁定 ~/m 内（proc.resolve_session_path）。
 chat: /sessiond/view/index.html
 
+# ?v=form → bot 登记表单视图（任务 9xn4wa）：登记入口的第二形态，与 URL 直创
+# （?v=chat&profile=…&workdir=…）共用同一后端 op（create_bot）与同一写盘函数
+# （proc.ensure_bot_registration），不另开写盘路径。入口仍限
+# /agents/bot/<名>/spec.json；严格 create-only（已登记的 bot 只读展示现值、submit 禁用），
+# 且 command 串由服务端生成、不接受客户端提供。
+# 映射到 **script** 而非 text/html 视图（同 vmap/vmap.frag 的 `script:` 行）：表单需要服务端
+# 枚举的 profile 清单与现役 spec 现值，由 rpc/api.py:_render_form_view 读模板
+# view/form.html.tpl 后一次性渲染（注入 $META_JSON + $ARGS_JSON）⇒ curl/禁用 JS 也能拿到
+# 服务端枚举证据，首屏不多一次往返。模板后缀 .tpl 无 mime 映射 ⇒ 直开 404，不会把带占位符
+# 的半成品当页面渲染。只读元数据的 RPC 形态（op=bot_form_meta）仍保留：同载荷，供前端
+# 改名时重拉该名的登记现值。
+# 注：w/core/wsgi.py 对重复 query key 取最后一个值 ⇒ ?v=chat&…&v=form 命中 form。
+form: /sessiond/rpc/api.py?v=form
+
 # .jsonl 默认 chat（任务 0829-2103-dpe4）：mime.frag 把 .jsonl 映射到该
 # 专用 mime，无 ?v= 直接打开任意 .jsonl 即聊天窗；?v= 显式覆盖不受影响。
 application/x-sessiond-jsonl: /sessiond/view/index.html

@@ -18,7 +18,7 @@
 
 | 文件 | 规则 |
 |---|---|
-| `vmap.frag` | `?v=chat` → `/sessiond/view/index.html`；另注册 `application/x-sessiond-jsonl` 专用 mime 同样指向该页 |
+| `vmap.frag` | `?v=chat` → `/sessiond/view/index.html`；另注册 `application/x-sessiond-jsonl` 专用 mime 同样指向该页；`?v=form` → `/sessiond/rpc/api.py?v=form`（**script** 视图，任务 9xn4wa，见 §10）：bot 登记表单页由服务端渲染（模板 `view/form.html.tpl`）。重复 query key 取最后一个值（`core/wsgi.py`）⇒ `?v=chat&…&v=form` 命中表单视图，单给 `?v=chat` 仍是聊天窗（零回归） |
 | `mime.frag` | `.jsonl` → `application/x-sessiond-jsonl`，即**直接打开任意 `.jsonl`（无 `?v=`）即聊天窗**；`?v=` 显式参数仍可覆盖（如 `?v=code` 看原文） |
 
 vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jsonl` 路径。
@@ -168,7 +168,8 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | `inspect` | — | `{ok, session, inspect:{ok, generatedAt, sessionFile, cwd, toolCount, tools[], systemPrompt}}` | 探针转储（任务 s0f1la）：经 `-e` 注入的探针扩展命令取当前系统提示词全文 + 工具清单（侧车文件握手，见 §3/§2 探针小节）；payload 几十 KB 走本 HTTP 响应，不进事件环/jsonl | 502 超时/不就位/被拒/侧车文件缺失 |
 | `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时）。**socket 会话**：代理 `control/restart`（保历史换代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 重拉超时等失败；socket 代理 504 等回执超时 / 409 `rejected`（已 final）/ 403 跨机 |
 | `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因）。**socket 会话**：代理 `control/clear`（弃历史换代：杀→备份 `run/backup/`→截断→空白新代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 失败（含删文件失败）；socket 代理 504 等回执超时 / 409 `rejected`（已 final/备份失败）/ 403 跨机 |
-| `create_bot` | `session`（`/agents/bot/<名>/spec.json`）、`profile`、`workdir` | `{ok, created, participant, specPath, enablePath, profile, workdir, host, command}` 或 `{ok, created:false, effective:{profile,workdir}, mismatch:[]}` | bot 族 URL 创建入口（任务 6k39t0）：未登记 → agentctl bot register + enable（写 spec.json + enable.json，spawn 归 runner）；已登记 → created:false + effective 值回显（create-only，不覆盖）；**不走 `_bridge_or_err`**（此时可能还没有可桥接的会话） | 400 缺 profile/workdir、路径非法、profile 不存在、workdir 非法；409 agentctl 拒绝（spec 已在场/撞名等） |
+| `create_bot` | `session`（`/agents/bot/<名>/spec.json`）、`profile`、`workdir`；可选（任务 9xn4wa，全缺省 = 原行为）：`description`（→ spec `name`，≤200 字符、无 NUL）、`restartPolicy`（manual\|auto\|one-shot，缺省 auto）、`subscribes`（逗号分隔 ∨ 数组，每项限 `topic/` 族两段 id，去重保序）、`reaper`（两段路径式 id；**缺省由 web 侧填 `topic/dispatcher` 并恒写该键**） | `{ok, created, participant, specPath, enablePath, profile, workdir, host, command, restartPolicy, reaper, reaperDefaulted}`（+ `description`/`subscribes` 仅在给了时回显）或 `{ok, created:false, effective:{profile,workdir}, mismatch:[]}` | bot 族登记入口（任务 6k39t0 URL 直创；任务 9xn4wa 表单 `?v=form` **共用本 op 与同一写盘函数** `proc.ensure_bot_registration`，不另开写盘路径）：未登记 → agentctl bot register + enable（写 spec.json + enable.json，spawn 归 runner）；已登记 → created:false + effective 值回显（create-only，不覆盖）；**不走 `_bridge_or_err`**（此时可能还没有可桥接的会话） | 400 **传 `command`**（硬约束：command 串服务端按 profile + 裸名生成，不接受客户端提供，否则表单 = 任意命令执行入口）、缺 profile/workdir、路径非法、profile 不存在、workdir 非法、`restartPolicy` 取值非法、`reaper`/`subscribes` 文法非法（**不静默回落缺省值**）、`description` 超长/含 NUL；409 agentctl 拒绝（spec 已在场/撞名等） |
+| `bot_form_meta` | `session`（`/agents/bot/<名>/spec.json`）；可选 `profile`（预览提示） | `{ok, host, profiles:[{name,summary,model,capsCount}], existing:\{…}\|null, botName, defaultReaper, restartPolicies, descriptionMax, commandPreview, commandTemplate}` | 表单视图（`?v=form`）的**只读**元数据（任务 9xn4wa）：profile 下拉选项由服务端枚举 `bots/profiles/*.json`（视图不硬编码）+ 现役 spec 现值 + command 预览。**不建桥、不写盘、不 spawn**；对不存在的 bot 也回 200（`existing:null`，且不建目录）。`commandTemplate` 携 `{profile}`/`{name}` 占位 ⇒ 前端随两字段变化实时重算预览，而命令串的单一事实源仍在服务端 | 400 路径非 `/agents/bot/<名>/spec.json` ∨ 族非 bot |
 | 未知 | — | — | — | 400 `unknown op` |
 
 attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries 响应行的事件环 ID，前端用它作为续流游标。
@@ -356,7 +357,21 @@ task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径�
 
 #### 创建入口边界（`op=create_bot`，任务 6k39t0）
 
+> 本节四条边界对**两个入口形态同等生效**（URL 直创与下述表单视图共用同一 op 与同一写盘函数）。
+> reaper 缺省口径（任务 9xn4wa）：创建分支**恒写 `spec.reaper`**，客户端未给则由 web 侧填职位信箱 `topic/dispatcher`（= `proc._DEFAULT_BOT_REAPER`，镜像 `agentd/proto.py:POSITION_PID`）——使 `runner.resolve_reaper` 命中「显式收件面 == 职位信箱」档（`note=None`，语义正确：无消费者的兜底面就是它的收件方）而不是「spec 缺 reaper 字段」的异常回落档 ⇒ 经 8080 创建的每个 bot 不再在 `run/logs/agentd.log` 里制造一条看起来像登记缺陷的异常通知。缺省值属 **8080 登记入口的口径**（不在 `agentctl` 里加：它是通用登记工具）；客户端给了非法值 → 400，**不因非法而静默回落缺省值**。
+
 ① 只 bot 族（task 族无启动接口，走 dispatch 工具）；② create-only（spec 已在场一律不改，要改走 `control restart` 前的人工编辑）；③ URL 创建的 bot **只活在 `agents/` 运行态**，不入被追踪声明源 `svc/bots/` ⇒ fresh clone 不自愈；要长期常驻仍应落 `svc/bots/<名>/spec.json` + `make bots.seed`；④ workdir 决定项目级扩展发现面（`workdir=~/m/assistant` ⇒ `assistant/.pi/extensions/agentd/` 在场，含 `send_message`/`dispatch`/`task_status` 等工具 + 收件 receiver；其它 workdir ⇒ 只有该目录自家的 `.pi` 扩展）+ 生命周期收口路径（`agentctl control stop bot/<名> --from <id> --reason …` → 等 `pid.json.final==true` → `python3 dsync/gc.py add bot/<名>/ --wait`，绝不直接 rm）。
+
+#### 登记入口的第二形态：表单视图（`?v=form`，任务 9xn4wa）
+
+`/agents/bot/<名>/spec.json?v=form` 打开即登记表单（`view/form.html`，无框架纯 DOM、零外部依赖），字段预填自 URL 参数（`profile`/`workdir`）与路径段（`name`）；submit = 登记并拉起该 bot，成功后转聊天窗。**上节四条边界逐条适用，不在此重述**；表单形态特有的四条：
+
+① **同一后端、不另开写盘路径**：submit 走同一个 `op=create_bot` → 同一个 `proc.ensure_bot_registration`；表单只多传四个可选字段（`description`/`restartPolicy`/`subscribes`/`reaper`），全缺省时行为与 URL 直创逐字一致（例外：reaper 缺省值，见上）。视图路由 = `vmap.frag` 新增一行 `form: /sessiond/rpc/api.py?v=form`——映射到 **script** 而非 text/html 视图：`rpc/api.py:_render_form_view` 读模板 `view/form.html.tpl`（`.tpl` 无 mime 映射 ⇒ 直开 404，不会把带占位符的半成品当页面渲染）并注入 `$META_JSON`（= 与 `op=bot_form_meta` **同一个** `proc.bot_form_meta` 的载荷）与 `$ARGS_JSON`（含 `src`，供前端求代理前缀）⇒ profile 枚举与 command 预览是**服务端渲染进 HTML** 的（curl/禁用 JS 也可见），首屏不多一次往返；`op=bot_form_meta` 的 RPC 形态保留同载荷，供前端改名时重拉。
+② **严格 create-only**：已登记的 bot 表单转只读形态（现役 spec 全字段铺陈，含未识别键）+ submit 禁用 + 一行提示「要改字段 = 人工编辑后 `agentctl control restart bot/<名>`」；submit 竞态（页面加载后才被别人登记）回 `created:false` ⇒ 就地重取现值转只读，**不跳转**。表单页改名会重拉该名的登记现值（防「表单说未登记、其实已登记」）。
+③ **`command` 只读预览、不接受客户端提供**：命令串由服务端 `proc.bot_resident_command(profile, name)` 单点生成；meta 另下发 `commandTemplate`（携 `{profile}`/`{name}` 占位）供前端随两字段实时重算预览 ⇒ 视图不硬编码命令串，单一事实源留在服务端。`op=create_bot` 传 `command` 参数 → 400（消息明写不由客户端提供）——否则表单等于任意命令执行入口。
+④ **成功后的跳转复用聊天窗的重试链路**：表单页不自写 attach，submit 成功 → `location.href = <PREFIX>/agents/bot/<名>/spec.json?v=chat&justCreated=1`；index.html 据 `justCreated=1` 走 `attachWithRetry()`（= 6k39t0 那条有界重试：2s 间隔 / 60s 上限，已抽为单点供两个入口共用），不发多余的 `create_bot`。不带该参数的 URL 行为逐字不变。
+
+前缀推导与聊天窗同源（head 内联脚本从服务端注入的 `ARGS_JSON.src` 与 `location.pathname` 求差得 `window.__PREFIX__`，RPC 地址 = `PREFIX + "/sessiond/rpc/api.py"`）⇒ 经 `/dev/`、`/mac/` 代理前缀访问时 POST 不会打到错的机器。客户端校验（名文法/绝对路径/`topic/` 族/两段 id/长度）只做体验层，**服务端校验是唯一权威**。
 
 ### 路由判定（`proc.py:agentd_route`，get_bridge 内单一决策点，匹配 `^/agents/(task|bot)/<名>/session/session.jsonl$`）
 

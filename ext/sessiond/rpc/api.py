@@ -19,10 +19,24 @@
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
-#   op=create_bot  bot 族 URL 创建入口（任务 6k39t0）：
+#   op=create_bot  bot 族登记入口（任务 6k39t0 URL 直创；任务 9xn4wa 表单 ?v=form 共用本 op）：
 #              session = /agents/bot/<名>/spec.json；profile + workdir 必填；
+#              可选 description（→ spec `name`）/restartPolicy/subscribes/reaper
+#              （全缺省 = 6k39t0 现行为；例外：reaper 缺省时由 web 侧填 `topic/dispatcher`，
+#              使 runner.resolve_reaper 命中“显式收件面”档而不报“spec 缺 reaper 字段”异常）；
 #              未登记 → agentctl bot register + enable（写 spec.json + enable.json，spawn 归 runner）；
 #              已登记 → created:false + effective 值回显（create-only，不覆盖）。
+#              **传 command → 400**：command 串由服务端按 profile + 裸名生成，不接受客户端
+#              提供（否则表单等于任意命令执行入口）。
+#   op=bot_form_meta  表单视图只读元数据（任务 9xn4wa）：session 同上 →
+#              {ok, host, profiles:[{name,summary,model,capsCount}], existing|null, botName,
+#               commandPreview, commandTemplate}；不建桥/不写盘/不 spawn，不存在的 bot 也
+#              200（existing:null）；路径非法 ∨ 族非 bot → 400。
+#   ?v=form    bot 登记表单视图（任务 9xn4wa）：本脚本被 vmap.frag 当 **script** 视图调用
+#              （form: /sessiond/rpc/api.py?v=form），读 view/form.html.tpl 模板并注入
+#              $META_JSON（= op=bot_form_meta 同源载荷：服务端枚举的 profile 清单 +
+#              现役 spec 现值 + command 预览）与 $ARGS_JSON（含 src，供前端求代理前缀）
+#              ⇒ 只读、不建桥、不写盘、不 spawn；路径非法/族非 bot → 200 HTML + 页内红字。
 #   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/sessionDir 拆分）：
 #              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 cwd/sessionDir）→ 校验 →
 #              cwd = 显式 `cwd` 字段（缺省 = .agent 文件所在目录），会话目录 = sessionDir（缺省 = .agent 所在目录，不存在自动创建）→
@@ -33,6 +47,7 @@ import json as _json
 import logging as _logging
 import os as _os
 import posixpath as _posixpath
+import string as _string
 from ext.sessiond import bridge as _b
 from ext.sessiond import proc as _proc
 
@@ -346,18 +361,95 @@ def _resolve_agent(store, session):
                               "host is stored for future cross-host routing"})
 
 
-def interp(store, op='', session='', cmd='', **kw):
+# ---- 表单视图（?v=form）的服务端渲染（任务 9xn4wa） ----
+#
+# vmap.frag 把 `form:` 映射到**本脚本**（mime `script`）而非 text/html 视图：表单需要
+# 服务端枚举的 profile 清单与现役 spec 现值，一次性渲染进 HTML ⇒ curl/禁用 JS 也能拿到
+# 证据（验收口径），且首屏不多一次 RPC 往返。模板 = view/form.html.tpl（后缀 .tpl 无 mime
+# 映射 ⇒ 直开 404，不会把带占位符的半成品当页面渲染），占位符 $META_JSON / $ARGS_JSON 由
+# 本函数 string.Template.safe_substitute 填充（占位符名沿用 handler.do_view 的 text/html 约定）。
+_FORM_VIEW_TEMPLATE = "/sessiond/view/form.html.tpl"
+
+
+def _render_form_view(store, args):
+    """渲染 bot 登记表单视图。args = 本次请求的全量 query 参数（含 src）。
+    元数据取自与 `op=bot_form_meta` **同一个** `proc.bot_form_meta`（不另开写盘/读盘路径）；
+    路径非法 ∨ 族非 bot → 200 HTML + 页内红字错误原文（视图层不静默，也不 500）。
+    **只读**：不建桥、不写盘、不 spawn。"""
+    session = args.get('src') or args.get('session') or ''
+    doc, err = _proc.bot_form_meta(session, profile=args.get('profile'))
+    if err:
+        payload = {"ok": False, "error": err}
+    else:
+        payload = dict(ok=True, **doc)
+    # '</' 转义防 JSON 内容内嵌 </script> 逃逸（口径同 handler.do_view 的 ARGS_JSON）
+    meta_json = _json.dumps(payload, ensure_ascii=False,
+                            default=str).replace('</', '<\\/')
+    args_json = _json.dumps(args, ensure_ascii=False,
+                            default=str).replace('</', '<\\/')
+    try:
+        tpl = store.read(_FORM_VIEW_TEMPLATE)
+    except Exception as e:                       # 模板缺失/不可读 → 明确报错，不空白页
+        return (dict(type='text/plain', http_status='500 Internal Server Error'),
+                'form view template %s unreadable: %r' % (_FORM_VIEW_TEMPLATE, e))
+    body = _string.Template(tpl.decode('utf-8')).safe_substitute(
+        META_JSON=meta_json, ARGS_JSON=args_json)
+    return (dict(type='text/html',
+                 # no-cache：与聊天窗同口径（浏览器旧 tab 不得驻留旧表单/旧枚举清单）
+                 extra_headers=[('Cache-Control', 'no-cache')]),
+            body.encode('utf-8'))
+
+
+def _client_command_rejected(kw):
+    """硬约束（任务 9xn4wa）：`op=create_bot` 不接受客户端提供的 `command`。
+    常驻会话的 command 串由服务端按 profile + 裸名生成（`proc.bot_resident_command`）；
+    若放开，登记表单 = 任意命令执行入口（以 web 进程身份写进 spec.json，再被 agentd
+    runner 拉起）。注：`interp` 的具名形参是 `cmd`（op=cmd 的 JSON 载荷）而非 `command`
+    ⇒ 客户端的 `command=` 落在 `**kw`；空串/纯空白当未给（与其余可选参数同口径）。"""
+    v = kw.get('command')
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return bool(v.strip())
+    return bool(v)
+
+
+def interp(store, op='', session='', cmd='', v='', **kw):
+    if v == 'form':
+        # 视图路由（vmap.frag `form:` → 本脚本）：服务端渲染 bot 登记表单页。
+        # 注：GET 视图请求经 handler.prepare_args 会把 query 全量并入 args，故
+        # src（原始站内路径）与 profile 等预填参数都在 kw 里。
+        return _render_form_view(store, dict(kw, session=session))
+    if op == 'bot_form_meta':
+        # 表单视图只读元数据（任务 9xn4wa）：不走 _bridge_or_err——**不建桥、不写盘、
+        # 不 spawn**；对不存在的 bot 也回 200（existing:null）。路径非法 ∨ 族非 bot → 400。
+        doc, err = _proc.bot_form_meta(session, profile=kw.get('profile'))
+        if err:
+            return _j({"ok": False, "error": err}, '400 Bad Request')
+        return _j(dict(ok=True, **doc))
     if op == 'create_bot':
-        # bot 族 URL 创建入口（任务 6k39t0）：不走 _bridge_or_err（此时可能还没有可桥接的会话）
+        # bot 族登记入口（任务 6k39t0 URL 直创；任务 9xn4wa 表单 ?v=form 共用本 op）：
+        # 不走 _bridge_or_err（此时可能还没有可桥接的会话）
+        if _client_command_rejected(kw):
+            return _j({"ok": False,
+                       "error": "command 不由客户端提供（服务端按 profile + 裸名生成）；"
+                                "只接受 profile/workdir/description/restartPolicy/"
+                                "subscribes/reaper"},
+                      '400 Bad Request')
         profile = kw.get('profile', '') or ''
         workdir = kw.get('workdir', '') or ''
         if not profile or not workdir:
             return _j({"ok": False,
                        "error": "创建需同时给 profile 与 workdir；"
-                                "用法：/agents/bot/<名>/spec.json?v=chat"
-                                "&profile=<profile>&workdir=<workdir>"},
+                                "用法：/agents/bot/<名>/spec.json?v=form（表单）∨ "
+                                "?v=chat&profile=<profile>&workdir=<workdir>（直创）"},
                       '400 Bad Request')
-        doc, err = _proc.ensure_bot_registration(session, profile, workdir)
+        doc, err = _proc.ensure_bot_registration(
+            session, profile, workdir,
+            description=kw.get('description'),
+            restart_policy=kw.get('restartPolicy'),
+            subscribes=kw.get('subscribes'),
+            reaper=kw.get('reaper'))
         if err:
             status = '409 Conflict' if err.startswith('409:') else '400 Bad Request'
             msg = err[4:] if err.startswith('409:') else err

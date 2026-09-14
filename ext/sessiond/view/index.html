@@ -350,6 +350,9 @@ const AGENT = SESSION ? null : parseAgentFromUrl();   // 两者互斥（后缀�
 const _urlSp = new URLSearchParams(location.search);
 const URL_PROFILE = _urlSp.get("profile") || null;
 const URL_WORKDIR = _urlSp.get("workdir") || null;
+// justCreated=1（任务 9xn4wa）：表单视图（?v=form）submit 成功后跳转过来的标记 ⇒ 登记已落盘、
+// 只等 agentd 拉起，直接走有界重试 attach（不再发 create_bot）。缺省不带此参数 → 行为逐字不变。
+const URL_JUST_CREATED = _urlSp.get("justCreated") === "1";
 const AGENT_NAME = AGENT ? AGENT.replace(/^\//, "").replace(/\.agent$/, "") : null;
 if (SESSION) {
   document.title = SESSION.replace(/\/spec\.json$/, "").replace(/\.jsonl$/, "") + " · chat";
@@ -357,6 +360,7 @@ if (SESSION) {
   document.title = AGENT_NAME + " · chat";   // 会话名 = agent 名（文件名）
 }
 let attached = null;          // 当前挂接会话名（= URL 解析出的 SESSION）
+let lastAttachErr = null;     // attach() 最近一次失败的服务端错误原文（S5，评审 gk305i）
 let uidSeq = 0;
 const uid = () => "web-" + (++uidSeq) + "-" + Date.now().toString(36);
 let pendingImages = [];       // 待发送附件（任务 0829-2103-8etk）：{mime, b64, dataUrl}
@@ -531,7 +535,15 @@ async function attach(name, suppressErr) {
   sysLine("Attaching " + name + ": fetching history baseline (get_entries)…");
   let doc;
   try { doc = await api("attach", {session: name}); }
-  catch (e) { if (!suppressErr) sysLine("Attach failed: " + e.message, "err"); return false; }
+  catch (e) {
+    // S5（评审 gk305i）：suppressErr 模式（有界重试轮询）下不 flash，但**必须把服务端
+    // 错误原文留给调用方**——否则重试耗尽时用户只看到常量「attach 未就绪」，看不到真实
+    // 拒绝原因（「未登记（无 spec.json）…」「会话进程缺席…」「跨机…」等）。
+    lastAttachErr = (e && e.message) ? e.message : String(e);
+    if (!suppressErr) sysLine("Attach failed: " + e.message, "err");
+    return false;
+  }
+  lastAttachErr = null;
   attached = name;
   applyBaseline(doc, true);
   return true;
@@ -2274,6 +2286,35 @@ function backToBottom() {
 })();
 
 // ---------------- bot 族 URL 创建流程（任务 6k39t0） ----------------
+// 有界重试 attach（间隔 2s，总上限 60s）：登记已落盘、只等 agentd runner 拉起的窗口用。
+// 抽出为单点（任务 9xn4wa）：URL 直创（created:true）与表单视图跳转（justCreated=1）
+// 两条入口共用同一条重试链路，不在表单页重写一份。
+async function attachWithRetry(botName, totalMs) {
+  const budget = totalMs || 60000;
+  const t0 = Date.now();
+  const deadline = t0 + budget;
+  let lastShown = -1;         // S7（评审 gk305i）：等待行只在秒数变化 ≥5s 或首轮落，
+                              // 60s 窗口不再刷出 ~30 行同样的噪音
+  let rounds = 0;
+  while (Date.now() < deadline) {
+    const waited = Math.round((Date.now() - t0) / 1000);
+    rounds++;
+    if (lastShown < 0 || waited - lastShown >= 5) {
+      sysLine("等待 agentd 拉起 bot/" + botName + "…（已等 " + waited + "s"
+        + (lastAttachErr ? "；最近一次拒绝：" + lastAttachErr : "") + "）");
+      lastShown = waited;
+    }
+    const ok = await attach(SESSION, true);
+    if (ok) return true;
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  // S5：超时 flash = **最后一次服务端错误原文**（lastAttachErr 由 attach() 的 catch 写入），
+  // 不再用常量「attach 未就绪」盖掉真实拒绝原因。
+  flash("等待超时（" + Math.round(budget / 1000) + "s，尝试 " + rounds + " 次）："
+    + (lastAttachErr || "agentd 未拉起（无错误详情）"), "err");
+  return false;
+}
+
 async function createBotAndAttach() {
   const botName = SESSION.replace(/^\/agents\/bot\//, "").replace(/\/spec\.json$/, "");
   let res;
@@ -2286,18 +2327,7 @@ async function createBotAndAttach() {
   if (res.created) {
     flash("已登记 bot/" + botName + "（profile=" + res.profile + ", workdir=" + res.workdir
       + ", host=" + res.host + "），等待 agentd 拉起…", "");
-    // 有界重试 attach（间隔 2s，总上限 60s）
-    const deadline = Date.now() + 60000;
-    let lastErr = null;
-    while (Date.now() < deadline) {
-      const waited = Math.round((60000 - (deadline - Date.now())) / 1000);
-      sysLine("等待 agentd 拉起 bot/" + botName + "…（已等 " + waited + "s）");
-      const ok = await attach(SESSION, true);
-      if (ok) return;
-      lastErr = "attach 未就绪";
-      await new Promise(r => setTimeout(r, 2000));
-    }
-    flash("等待超时（60s）：" + (lastErr || "agentd 未拉起"), "err");
+    await attachWithRetry(botName);
   } else {
     // created:false — 已有登记
     const eff = res.effective || {};
@@ -2346,7 +2376,13 @@ if (AGENT) {
   }
   // bot 族 URL 创建流程（任务 6k39t0）：仅当 SESSION 匹配 /agents/bot/<名>/spec.json 且两参数都在场
   const _isBotSpec = /^\/agents\/bot\/[^\/]+\/spec\.json$/.test(SESSION);
-  if (_isBotSpec && URL_PROFILE && URL_WORKDIR) {
+  if (_isBotSpec && URL_JUST_CREATED) {
+    // 表单视图（?v=form）submit 成功后跳转而来（任务 9xn4wa）：登记已落盘，
+    // 不再发 create_bot，直接走同一条有界重试 attach。
+    const _bn = SESSION.replace(/^\/agents\/bot\//, "").replace(/\/spec\.json$/, "");
+    flash("表单已登记 bot/" + _bn + "，等待 agentd 拉起…", "");
+    attachWithRetry(_bn);
+  } else if (_isBotSpec && URL_PROFILE && URL_WORKDIR) {
     createBotAndAttach();
   } else {
     attach(SESSION);
