@@ -365,9 +365,12 @@ def _resolve_agent(store, session):
 #
 # vmap.frag 把 `form:` 映射到**本脚本**（mime `script`）而非 text/html 视图：表单需要
 # 服务端枚举的 profile 清单与现役 spec 现值，一次性渲染进 HTML ⇒ curl/禁用 JS 也能拿到
-# 证据（验收口径），且首屏不多一次 RPC 往返。模板 = view/form.html.tpl（后缀 .tpl 无 mime
-# 映射 ⇒ 直开 404，不会把带占位符的半成品当页面渲染），占位符 $META_JSON / $ARGS_JSON 由
-# 本函数 string.Template.safe_substitute 填充（占位符名沿用 handler.do_view 的 text/html 约定）。
+# 证据（验收口径），且首屏不多一次 RPC 往返。模板 = view/form.html.tpl：后缀 .tpl 无 mime
+# 映射 ⇒ 直开该路径按 text/plain 原样下发（实测 200 + Content-Type: text/plain，占位符
+# 未替换），**不会被当 HTML 渲染**——core/wsgi.py 对每个响应全局追加
+# X-Content-Type-Options: nosniff ⇒ 浏览器不做类型嗅探；渲染只发生在 ?v=form 经本函数的
+# 这一条路径上。占位符 $META_JSON / $ARGS_JSON 由本函数 string.Template.safe_substitute
+# 填充（占位符名沿用 handler.do_view 的 text/html 约定）。
 _FORM_VIEW_TEMPLATE = "/sessiond/view/form.html.tpl"
 
 

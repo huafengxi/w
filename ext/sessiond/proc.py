@@ -1261,7 +1261,10 @@ def _validate_bot_form_fields(description, restart_policy, subscribes, reaper):
         subs = None
 
 
-    # reaper（终态通知唯一收件面；缺失 → runner.resolve_reaper 回落职位信箱带 note）
+    # reaper（终态通知唯一收件面）：登记侧**恒写该键**——留空 = 服务端缺省填职位信箱
+    # topic/dispatcher（= _DEFAULT_BOT_REAPER，使 runner.resolve_reaper 命中「显式收件面 ==
+    # 职位信箱」档而非「spec 缺 reaper 字段」的异常回落档）；非法值 → 400，**不静默回落**
+    # （口径同 view/form.html.tpl 的 reaper 字段提示与 ARCHITECTURE.md §10 reaper 缺省口径）。
     if reaper is None or (isinstance(reaper, str) and not reaper.strip()):
         rep = None
     elif not isinstance(reaper, str):

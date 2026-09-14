@@ -591,6 +591,21 @@ def case18_api_rejects_client_command():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def case19_bot_name_bad_syntax():
+    """bot 名走与 profile 同款的白名单（评审 gk305i S4，任务 7s42g6 补例）：
+    坏名在 **web 侧**就 400，不是靠 agentctl 的 409 兜底；且零落盘（目录未创建）。
+    写法与 case4（坏 profile）对称——case4 打 profile 位，本例打 bot 名位。"""
+    root, wd = _make_root()
+    try:
+        for bad in [".hidden", "a..b"]:
+            doc, err = _call("/agents/bot/%s/spec.json" % bad, "executor", wd, root)
+            assert doc is None and err and not err.startswith("409:"), (bad, doc, err)
+            assert not os.path.exists(os.path.join(root, "agents", "bot", bad)), bad
+        print("case19 OK: bot 名含前导 . / 含 .. → 均 web 侧 400 + 目录未创建")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     case1_happy_path()
     case2_spec_already_exists()
@@ -610,4 +625,5 @@ if __name__ == "__main__":
     case16_bad_description_and_reaper()
     case17_bot_form_meta()
     case18_api_rejects_client_command()
+    case19_bot_name_bad_syntax()
     print("ALL PASS")

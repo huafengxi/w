@@ -7,7 +7,7 @@
 <script>
 // ---- 服务端注入（任务 9xn4wa）----
 // 本视图由 rpc/api.py 以 **script** 形态渲染（vmap.frag 的 `form:` 行）：模板
-// view/form.tpl.html 经 string.Template.safe_substitute 注入两个占位符后即成 HTML。
+// view/form.html.tpl 经 string.Template.safe_substitute 注入两个占位符后即成 HTML。
 //   $META_JSON   = op=bot_form_meta 的同源载荷（host / profiles 服务端枚举 /
 //                  existing 现役 spec 现值 / botName / commandPreview / commandTemplate
 //                  / defaultReaper / restartPolicies / descriptionMax）
@@ -348,7 +348,7 @@ function setReadonly(on, spec) {
     byId("btnSubmit").disabled = true;
     byId("btnChat").classList.remove("hidden");
     notice("已登记，本表单不改既有 spec（spec.json 是协议不可变档）；要改字段 = 人工编辑后 "
-      + "agentctl control restart bot/<名>。", "warn");
+      + "python3 agentd/agentctl.py --root <工作区根> control bot/<名> restart。", "warn");
     if (spec) renderExisting(spec);
   } else {
     badge.textContent = "";
