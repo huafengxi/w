@@ -17,6 +17,8 @@ log=debug w/core/server.py 8080
 
 > **解释器例外（需 Python ≤3.12，任务 4ob5de）**：本服务与工作区口径「Python 一律 `~/miniconda3`」**不一致**，且是有意例外。原因：`core/handler.py:parse_post` 依赖标准库 `cgi`（`cgi.parse_header` / `cgi.parse_multipart` 解 multipart 上传），而 **`cgi` 在 Python 3.13 已被移除** → 用 miniconda（3.13）起服务或跑验证脚本会 `ModuleNotFoundError: No module named 'cgi'`。因此只能用**系统 `python3`**（dev = `/usr/bin/python3.8`；`env/services.yml` 的 web `cmd: [python3, w/core/server.py, 0.0.0.0:8080, run/logs/web.log]` 走 PATH 取解释器），三方依赖 `wsgiserver` / `wsgi_basic_auth` 也只装在该解释器上。**重启前确认 PATH 上的 `python3` 可用**：`python3 -c 'import cgi, wsgiserver, wsgi_basic_auth'`（无输出 = OK）。将来项：去 cgi 化（`parse_post` 改 `email.parser` 或手写 multipart 解析）后即可统一到 miniconda。
 
+> **传输层现值 = HTTP（不上 HTTPS）**：四机的 `~/.auth/` 只有 `passwd`、无证书文件 ⇒ 8080 一律以 HTTP 运行，BasicAuth 凭证与页面内容在公司内网明文传输（知情接受；排查结论 = 工作区内无任何 HTTPS 消费方：dash 入口 / `ext/proxy/routes.json` 的 upstream / rsh 转发面全为 http 或 unix socket）。`core/wsgi.py` 的 cert/keyfile 分支已在场、只缺文件 ⇒ 真要上 TLS 不必改代码，但那是四机证书分发 + 续期运维面的立项决定（裁定与重议触发 = `lore/library/agentfw/facts/not-doing.md`）。
+
 > **日志与 secret**：`log=debug` 起服务时，请求面的 `REQ:`/`echo req:` 行走与 `RESOLVE:` 同一套脱敏（`core/handler.py` 的 secret 键名族 + 内容型键名长度摘要）：nonce/token/password/cookie/Authorization 与写类 RPC 正文（`store_content`/`text`/`file`/`input`）只留长度摘要，明文不落 `run/logs/web.log`。
 
 The server is split into a feature-free `core/` plus per-feature `ext/<feature>/`

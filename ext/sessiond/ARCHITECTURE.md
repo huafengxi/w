@@ -362,6 +362,8 @@ task/bot 两族在本系统内同构。入口唯一 = spec.json 声明者路径�
 
 ① 只 bot 族（task 族无启动接口，走 dispatch 工具）；② create-only（spec 已在场一律不改，要改走 `control restart` 前的人工编辑）；③ URL 创建的 bot **只活在 `agents/` 运行态**，不入被追踪声明源 `svc/bots/` ⇒ fresh clone 不自愈；要长期常驻仍应落 `svc/bots/<名>/spec.json` + `make bots.seed`；④ workdir 决定项目级扩展发现面（`workdir=~/m/assistant` ⇒ `assistant/.pi/extensions/agentd/` 在场，含 `send_message`/`dispatch`/`task_status` 等工具 + 收件 receiver；其它 workdir ⇒ 只有该目录自家的 `.pi` 扩展）+ 生命周期收口路径（`agentctl control stop bot/<名> --from <id> --reason …` → 等 `pid.json.final==true` → `python3 dsync/gc.py add bot/<名>/ --wait`，绝不直接 rm）。
 
+> **收口只在命令行，web 侧不提供 stop 入口**（stop 是终态、不可撤销；`/stop` 斜杠命令与「把缺省 `restartPolicy` 改成 `manual`」两种形态均已裁定不做，提案前先核 `lore/library/agentfw/facts/not-doing.md`）⇒ 缺省 `restartPolicy=auto` 创建的 bot 会常驻并占一个模型槽，直到有人走上面 ④ 的三步收口；要一次性试验体就在创建时显式传 `restartPolicy=manual`（表单视图有此字段，URL 直创同参数）。
+
 #### 登记入口的第二形态：表单视图（`?v=form`，任务 9xn4wa）
 
 `/agents/bot/<名>/spec.json?v=form` 打开即登记表单（模板 `view/form.html.tpl` 经 `rpc/api.py:_render_form_view` 服务端渲染，无框架纯 DOM、零外部依赖），字段预填自 URL 参数（`profile`/`workdir`）与路径段（`name`）；submit = 登记并拉起该 bot，成功后转聊天窗。**上节四条边界逐条适用，不在此重述**；表单形态特有的四条：
