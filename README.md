@@ -12,10 +12,10 @@ once deployed, you can creat file with special extensions for different purpose.
 ```
 cd $webroot # change to your webroot
 git clone git@github.com:huafengxi/w.git w
-log=debug w/core/server.py 8080
+log=debug ~/miniconda3/bin/python3 w/core/server.py 8080
 ```
 
-> **解释器例外（需 Python ≤3.12，任务 4ob5de）**：本服务与工作区口径「Python 一律 `~/miniconda3`」**不一致**，且是有意例外。原因：`core/handler.py:parse_post` 依赖标准库 `cgi`（`cgi.parse_header` / `cgi.parse_multipart` 解 multipart 上传），而 **`cgi` 在 Python 3.13 已被移除** → 用 miniconda（3.13）起服务或跑验证脚本会 `ModuleNotFoundError: No module named 'cgi'`。因此只能用**系统 `python3`**（dev = `/usr/bin/python3.8`；`env/services.yml` 的 web `cmd: [python3, w/core/server.py, 0.0.0.0:8080, run/logs/web.log]` 走 PATH 取解释器），三方依赖 `wsgiserver` / `wsgi_basic_auth` 也只装在该解释器上。**重启前确认 PATH 上的 `python3` 可用**：`python3 -c 'import cgi, wsgiserver, wsgi_basic_auth'`（无输出 = OK）。将来项：去 cgi 化（`parse_post` 改 `email.parser` 或手写 multipart 解析）后即可统一到 miniconda。
+> **解释器 = `~/miniconda3`（Python 3.13）**：与工作区通则一致（`AGENTS.md`「运行环境」：Python 一律 `~/miniconda3`）。`core/handler.py:parse_post` 用 `cgi`（`cgi.parse_header` / `cgi.parse_multipart` 解 multipart 上传），而 `cgi` 不在 3.13 的标准库里 ⇒ 该模块由 backport 包 `legacy-cgi` 提供。**依赖清单（装在 conda，不用 `--user`）**：`legacy-cgi`（提供 `cgi`）、`WSGIserver`（提供 `wsgiserver`）、`wsgi-basic-auth`（提供 `wsgi_basic_auth`，Requires `webob`）、`webob`——`webob/compat.py` 有模块级 `from cgi import parse_header` ⇒ 必须与 `legacy-cgi` 同装（只装前两者会在 `import webob` 时炸）。**重启前自检**：`~/miniconda3/bin/python3 -c 'import cgi, wsgiserver, wsgi_basic_auth, webob'`（无输出 = OK）。**服务定义形态**：`env/services.yml` 的 web `cmd: ["~/miniconda3/bin/python3", w/core/server.py, 0.0.0.0:8080, run/logs/web.log]` 走绝对解释器路径（`svc/svc.py:_expand` 对 cmd 逐项 `os.path.expanduser` ⇒ `~` 可用、各机 home 路径不同也可用）；`match: ['^\S*python3? w/core/server\.py 0\.0\.0\.0:8080']` 仍锚定行首、但放行解释器路径前缀：web 的 online 判定走 `status: {http: …}`（不经 match），而 `svc.py stop web` 的杀进程目标集 = `match` + `stop_match` 对真实 cmdline 的 `re.search` 命中 ⇒ 换解释器后不同批改 match 会 **stop 不掉旧进程**（而 status 仍报 online，零信号）。
 
 > **传输层现值 = HTTP（不上 HTTPS）**：四机的 `~/.auth/` 只有 `passwd`、无证书文件 ⇒ 8080 一律以 HTTP 运行，BasicAuth 凭证与页面内容在公司内网明文传输（知情接受；排查结论 = 工作区内无任何 HTTPS 消费方：dash 入口 / `ext/proxy/routes.json` 的 upstream / rsh 转发面全为 http 或 unix socket）。`core/wsgi.py` 的 cert/keyfile 分支已在场、只缺文件 ⇒ 真要上 TLS 不必改代码，但那是四机证书分发 + 续期运维面的立项决定（裁定与重议触发 = `lore/library/agentfw/facts/not-doing.md`）。
 
