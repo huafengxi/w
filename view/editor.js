@@ -21,7 +21,7 @@ function makeEditor(panel, on_save) {
         }
     }
     // 任务 8a1xdz：初始内容改异步读取（同步 XHR 会冻结同源 tab 共享的主线程；
-    // 慢源如 svc 聚合要 2-3s，期间容器点什么都卡）。面板默认隐藏，行为等价。
+    // 慢源如服务状态聚合要 2-3s，期间容器点什么都卡）。面板默认隐藏，行为等价。
     readAsync(getUrl(), function (content) {
         editor.value = content;
         on_save_no_exception(content);

@@ -126,7 +126,7 @@ ORPHAN_GRACE = 15.0         # 等待旧宿主自然退出的宽限（秒）
 
 # 剥除调度/任务身份与上游会话身份（PI_* 经 make 链泄漏会投毒子进程的会话归属，
 # 实测案例：任务环境 PI_SESSION_FILE 漏进会话进程）。名单单一事实源 =
-# agentd/envscrub.py（任务 fsmkvy 收敛：原本处独立拷贝漂移，改与 svc/runner
+# agentd/envscrub.py（任务 fsmkvy 收敛：原本处独立拷贝漂移，改与服务执行层/runner
 # 同源共享；keep 空集、不剥第三方 API key 族——会话进程用钥走自身配置路径）。
 sys.path.insert(0, os.path.join(WS, "agentd"))
 import envscrub  # noqa: E402
