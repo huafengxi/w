@@ -793,7 +793,7 @@ class Supervisor:
 # ----------------------------------------------------------------
 # 任务会话 socket 监督（任务 ybzvbn，票 hegipc，plan v3 B 路线）
 #
-# rpc 封装形态的任务（命令含 agentd/pi-rpc-wrap.py）由封装脚本拉起并持有，
+# rpc 封装形态的任务（命令含 pi-wrap/pi-rpc-wrap.py）由封装脚本拉起并持有，
 # 经 ~/m/run/agentd/<taskId>.sock 透传 pi rpc 原生字节流。SocketSupervisor =
 # 「连接而非 spawn」的监督者：生命周期所有权在 agentd runner，本类**无杀权**
 # （kill/reload/clear 一律拒绝），不与 Supervisor 共享生命周期机制（崩溃重拉/
@@ -1155,7 +1155,7 @@ def _valid_name_segment(s):
 _BOT_COMMAND_TEMPLATE = (
     'DISPATCH_PROFILE={profile} AGENTD_RESIDENT=1 '
     'AGENTD_SESSION_NAME=bot/{name} exec python3 '
-    '"$AGENT_ROOT/agentd/pi-rpc-wrap.py"')
+    '"$AGENT_ROOT/pi-wrap/pi-rpc-wrap.py"')
 
 # 表单可选字段的校验常量（任务 9xn4wa）
 _RESTART_POLICIES = ("manual", "auto", "one-shot")   # 同 agentctl --restart-policy choices

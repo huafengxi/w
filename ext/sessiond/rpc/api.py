@@ -15,7 +15,7 @@
 #   op=inspect  探针转储（任务 s0f1la）：经 -e 注入的探针扩展命令 sessiond-inspect
 #              取当前系统提示词全文 + 工具清单（侧车文件握手，见 bridge.py:inspect）；
 #              不进事件环、不进 jsonl，payload 走本 HTTP 响应；
-#              socket 会话同款支持：探针由封装脚本 agentd/pi-rpc-wrap.py -e 注入
+#              socket 会话同款支持：探针由封装脚本 pi-wrap/pi-rpc-wrap.py -e 注入
 #   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
@@ -506,7 +506,7 @@ def interp(store, op='', session='', cmd='', v='', **kw):
         return _j({"ok": True, "session": b.session,
                    "commands": r["commands"]})
     if op == 'inspect':
-        # socket 会话（agentd 任务/常驻）：探针扩展由封装脚本 agentd/pi-rpc-wrap.py
+        # socket 会话（agentd 任务/常驻）：探针扩展由封装脚本 pi-wrap/pi-rpc-wrap.py
         # -e 注入（与 proc.py:_spawn 同款），握手链路复用 b.inspect()——只读转储，
         # 无生命周期动作，不再拒绝（原 403 口径废除）；探针未加载（存量旧进程）
         # 则回 502「probe dump file missing」。
