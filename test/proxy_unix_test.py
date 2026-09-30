@@ -52,7 +52,7 @@ BODY = b"plain-body-unix-test"
 # 任务 4ob5de：/nv2/ 由 TCP 改 unix（dev->nv2:8080 被公司网络策略拦截），两条都用
 # `${RSH_FWD_DIR}` token 写法（配置文件不再硬编码 dev 的绝对 home 路径）。
 UNIX_ROUTES = {"/mac/": ("/run/rsh-fwd/mac.sock", 65.0, ["mac"]),
-               "/nv2/": ("/run/rsh-fwd/nv2.sock", 10.0, ["nv2"])}
+               "/nv2/": ("/run/rsh-fwd/nv2.sock", 65.0, ["nv2"])}
 HTTP_ROUTES = {"/dev/": ["dev"], "/nv1/": ["nv1"]}
 FWD_DIR_TOKEN = "${RSH_FWD_DIR}"
 
