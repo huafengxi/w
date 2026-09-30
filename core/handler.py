@@ -10,6 +10,12 @@ import mime
 def parse_post(ctype, post, post_size):
     if ctype.startswith('multipart/form-data'):
         ctype, pdict = cgi.parse_header(ctype)
+        # parse_multipart 对 boundary 调 `.decode('ascii')` ⇒ 必须 bytes，而 parse_header
+        # 给的是 str（Python>=3.13 的 cgi 由 legacy-cgi 提供，同款约定）；不归一则任何
+        # multipart POST 都在 prepare_args 里 AttributeError → 500 空响应体。
+        boundary = pdict.get('boundary')
+        if isinstance(boundary, str):
+            pdict['boundary'] = boundary.encode('ascii')
         return cgi.parse_multipart(post, pdict)
     else:
         return urllib.parse.parse_qs(post.read(post_size).decode('utf-8'))
