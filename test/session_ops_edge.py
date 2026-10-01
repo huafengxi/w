@@ -537,6 +537,85 @@ def case11_spawn_env(ws, outside):
             os.unlink(jsonl)
 
 
+def case12_drop_session(ws, outside):
+    """删除的**进程面**：`bridge.drop_session` 绝不建桥；命中桥接 ⇒ `Supervisor.shutdown`
+    杀进程（SIGTERM 档）+ 摘除登记。monkeypatch subprocess.Popen ⇒ ⛔ 不真拉 pi。"""
+    import io as _io
+    import threading as _th
+    from ext.sessiond import bridge as _b
+
+    site = "/run/sessiond/dropcase.jsonl"
+    key = _proc.resolve_session_path(site)
+
+    # ① 未命中（从未打开）⇒ found=False 且 **⛔ 不建桥**
+    r = _b.drop_session(site)
+    assert r == {"found": False, "killed": False}, r
+    with _b._BRIDGES_LOCK:
+        assert key not in _b._BRIDGES, "drop_session ⛔ 不得为被删的会话建桥/拉起"
+    print("case12 OK: 未命中桥接 ⇒ found=False 且零建桥（删从未打开的会话不会反而拉起它）")
+
+    class _FakeProc:
+        def __init__(self):
+            self.pid = 424243
+            self.stdin = _io.BytesIO()
+            self.stdout = _io.BytesIO(b"")
+            self._ev = _th.Event()
+            self.terminated = False
+            self.killed = False
+
+        def poll(self):
+            return 0 if self._ev.is_set() else None
+
+        def wait(self, timeout=None):
+            if self._ev.wait(timeout if timeout is not None else 20):
+                return 0
+            raise _proc.subprocess.TimeoutExpired("fake", timeout)
+
+        def terminate(self):
+            self.terminated = True
+            self._ev.set()
+
+        def kill(self):
+            self.killed = True
+            self._ev.set()
+
+    holder = {}
+
+    def fake_popen(cmdo, **kw):
+        holder["proc"] = _FakeProc()
+        holder["env"] = kw.get("env")
+        return holder["proc"]
+
+    saved = _proc.subprocess.Popen
+    _proc.subprocess.Popen = fake_popen
+    try:
+        b = _b.Bridge(site, cwd=ws, profile="command-center")
+        with _b._BRIDGES_LOCK:
+            _b._BRIDGES[key] = b
+        _b.set_session_cwd(site, ws, "command-center")
+        b.sup.ensure_started()
+        assert b.sup.wait_ready(timeout=15), "假进程未就位"
+        assert holder["env"].get("DISPATCH_PROFILE") == "command-center", holder["env"]
+        r = _b.drop_session(site)
+        assert r["found"] is True and r["killed"] is True, r
+        assert holder["proc"].terminated is True, "SIGTERM 档未走"
+        assert holder["proc"].killed is False, "已优雅退出 ⇒ ⛔ 不应再 SIGKILL"
+        with _b._BRIDGES_LOCK:
+            assert key not in _b._BRIDGES, "桥接未摘除"
+        with _b._SPAWN_OVERRIDES_LOCK:
+            assert key not in _b._SPAWN_OVERRIDES, "拉起参数登记未摘除"
+        print("case12 OK: 命中桥接 ⇒ shutdown 杀进程（terminated=True、未走 SIGKILL）"
+              "+ 桥接与拉起登记都摘除（返回 %s）" % r)
+        # 再删一次 ⇒ 幂等（已摘除）
+        r2 = _b.drop_session(site)
+        assert r2 == {"found": False, "killed": False}, r2
+        print("case12 OK: 重复 drop 幂等（found=False）")
+    finally:
+        _proc.subprocess.Popen = saved
+        with _b._BRIDGES_LOCK:
+            _b._BRIDGES.pop(key, None)
+
+
 def main():
     base = tempfile.mkdtemp(prefix="sessiond-ops-edge.")
     saved = (_proc.WS, _proc.WS_REAL, _proc._self_host)
@@ -556,6 +635,7 @@ def main():
         case9_api(ws, outside)
         case10_agent_profile(ws, outside)
         case11_spawn_env(ws, outside)
+        case12_drop_session(ws, outside)
         print("ALL PASS")
         return 0
     finally:
