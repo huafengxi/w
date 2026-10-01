@@ -65,8 +65,9 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 - `/w/demo/dyn.itab` — `@dynamic` 指令行：一行 `@dynamic <站内路径>` 换成该端点吐出的若干行
   （`名字 URL [k=v …]`，一行一枚），**就地 splice**（指令行的位置即展开位置）。通用增强：
   任何 `.itab`/`.iframe` 页可用；端点最小形态见 [/w/demo/dyn-rows.py?v=read](/w/demo/dyn-rows.py?v=read)。
-  语义 = **加载快照**（frame 加载时 fetch 一次，⛔ 无轮询/无自动刷新）；端点失败 ⇒ 即刻展开
-  零行，超时上界 10s ⇒ 期间整表（含静态行）延迟渲染；返回行里的 `@dynamic` 不递归展开。fetch 目标带代理前缀
+  语义 = **加载快照**（frame 加载时 fetch 一次，⛔ 无轮询/无自动刷新）；端点失败 ⇒
+  即刻展开零行，超时上界 10s ⇒ 期间整表（含静态行）延迟渲染；返回行里的 `@dynamic`
+  不递归展开。fetch 目标带代理前缀
   （`/dev/`、`/nv1/` 一类，由浏览器 pathname 与服务端注入的 `src` 求差得出）⇒ 经代理打开时
   打到对的机器。生产用例 = `dash/dash.itab` 末行的活跃会话 tab（数据源 `ext/sessiond/rpc/api.py`
   的 `op=session_tabs`，机制 = `ext/sessiond/ARCHITECTURE.md` §12.3）。
