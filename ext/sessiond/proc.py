@@ -367,6 +367,36 @@ def host_map(session_files):
     return out
 
 
+def kill_hosts(session_file, grace=3.0):
+    """杀残留宿主（任务 z293ql，删除面兼顶）：按 environ 标记 + is_pi_host 交叉校验扫出
+    同一 jsonl 的宿主（口径同 `find_hosts`）→ SIGTERM → 有界等≤grace → 仍活者 SIGKILL。
+    与 `_clear_stale_proc` 的区别 = 不等 ORPHAN_GRACE 自然退出（用户已明要删除），
+    且两档等待都有上界（⛔ 无条件 wait）。调用方 = rpc/api.py op=delete_session，
+    仅在桥接注册表未命中时走这里（web 刚重启 ∨ 已转懒态但进程残留）。
+    返回被杀的 pid 列表（无宿主 = 空）。"""
+    hosts = [p for p in find_hosts(session_file) if pid_alive(p)]
+    if not hosts:
+        return []
+    log.info("kill_hosts: terminating %s for %s", hosts, session_file)
+    for p in hosts:
+        try:
+            os.kill(p, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        hosts = [p for p in hosts if pid_alive(p)]
+        if not hosts:
+            return []
+        time.sleep(0.2)
+    for p in [p for p in hosts if pid_alive(p)]:
+        try:
+            os.kill(p, signal.SIGKILL)
+        except OSError:
+            pass
+    return hosts
+
+
 def pi_binary():
     return shutil.which("pi") or "pi"
 

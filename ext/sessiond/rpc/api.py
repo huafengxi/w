@@ -20,10 +20,23 @@
 #   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
 #              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
 #   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/sessionDir 拆分）：
-#              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 cwd/sessionDir）→ 校验 →
+#              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 cwd/sessionDir/profile）→ 校验 →
 #              cwd = 显式 `cwd` 字段（缺省 = .agent 文件所在目录），会话目录 = sessionDir（缺省 = .agent 所在目录，不存在自动创建）→
 #              返回会话 jsonl 站内路径（= <sessionDir>/<name>.jsonl）与 cwd/sessionDir。
 #              启动参数解析单点，host v1 仅保存/可见、不跨机拉起（见 design.md .agent 小节）。
+# 指挥中心临时会话（任务 z293ql，设计稿 §4.2；消费方 = dash/sessions.md 工作区页与
+# dash/sessions.py 端点）——声明者与 jsonl 都落宿主本地运行时区 `run/sessiond/`，
+# 生命周期全在本层（⛔ 不经 agentd，web 自有 Supervisor spawn）：
+#   op=create_session  新建：只收 `cwd`（相对 WS 的项目路径）→ 服务端枚举白名单成员校验
+#              + 既有逃逸校验 → 现场写 .agent（host/cwd/sessionDir/profile/name/createdAt
+#              全部服务端恒定或自动生成）→ 返回 {name, agent, session, chatUrl}
+#   op=list_sessions   只读：本机 run/sessiond/*.agent 全量（自动标题/最近活动/运行态/
+#              项目分组）+ 项目清单（新建表单的 <select> 选项）
+#   op=rename_session  改标题 override（落 .agent 的 title 字段；空标题 = 清除回落自动标题）
+#   op=delete_session  删除（需 confirm=1，轻确认一次、⛔ 不做 nonce，设计稿已裁）：
+#              杀 Supervisor 进程 + rm .agent + rm jsonl（realpath 前缀断言 + 删前身份证据 + 删后复核）
+#   op=session_tabs    只读：活跃会话的 tab 行数据（设计稿 §4.3 的 @dynamic rpc 数据源；
+#              机器前缀按 _self_host() 派生，空态吐零行，⛔ 不标运行态）
 # 鉴权由 w 全局 BasicAuth 承担；路径校验非法 → 400。
 import json as _json
 import logging as _logging
@@ -273,6 +286,20 @@ def _resolve_agent(store, session):
                    "error": "agent file %s: cwd rejected: %s"
                             % (p, e)},
                   '400 Bad Request')
+    # profile（任务 z293ql，设计稿 §7.3）：可选字段 = 会话人格输入（spawn 时回注
+    # DISPATCH_PROFILE，由全局 profile-loader 扩展兼现人格/model/form 档）。严格白名单：
+    # 名字形态 + `bots/profiles/<名>.json` 在场 + **只放行 form: interactive**
+    #（proc.validate_profile；给交互会话配错形态 = 静默失能）。缺省 = 不注 ⇒ 裸 pi 会话
+    #（存量 .agent 逐字不变）。
+    prof_val = spec.get("profile")
+    profile = None
+    if prof_val is not None:
+        try:
+            profile = _proc.validate_profile(prof_val)
+        except ValueError as e:
+            return _j({"ok": False,
+                       "error": "agent file %s: %s" % (p, e)},
+                      '400 Bad Request')
     # sessionDir = 会话目录：可选字段；缺省 = .agent 文件所在目录（2026-08-31 用户拍板，
     # 票 7t0ufv：会话 jsonl = 宿主本地运行时状态，落 agent 自家目录，不共享 cwd 工作区/
     # 参与方同步目录）。
@@ -332,14 +359,176 @@ def _resolve_agent(store, session):
                    "error": "agent file %s: derived session path rejected: %s"
                             % (p, e)},
                   '400 Bad Request')
-    # 登记显式 cwd（任务 fw2ll1）：该会话路径懒建桥接时按此 cwd 拉起，
-    # 不再恒等于 dirname(session_file)。
-    _b.set_session_cwd(site_jsonl, cwd)
+    # 登记显式拉起参数（任务 fw2ll1 cwd；任务 z293ql profile）：该会话路径懒建桥接时
+    # 按此 cwd/profile 拉起，不再恒等于 dirname(session_file) / 裸会话。
+    _b.set_session_cwd(site_jsonl, cwd, profile)
     return _j({"ok": True, "name": name, "host": host, "cwd": cwd,
+               "profile": profile,
                "sessionDir": sess_dir, "session": site_jsonl,
                "session_file": session_file,
                "hostRouting": "v1: session spawns locally on this 8080 host; "
                               "host is stored for future cross-host routing"})
+
+
+# ---------------- 指挥中心临时会话（任务 z293ql，设计稿 §4.2/§4.3） ----------------
+# 实现面（枚举/校验/写盘/删除纪律）单点在 proc.py；进程面（杀 Supervisor）在
+# bridge.drop_session；本层只做参数面、编排与响应形状。消费方 = dash/sessions.py
+# （工作区页的表单与列表）与 dash/session-tabs.py（@dynamic 的 itab 行 rpc）。
+
+# 服务端恒定/自动生成的字段：客户端传任一 ⇒ 400 显式拒绝（⛔ 不只是忽略）。
+# `command` 在列 = create_bot 时代的硬约束同族：spawn argv 的单点是
+# proc.Supervisor._spawn，声明者不可控（故 .agent 字段集里根本没有这个键）。
+_SERVER_FIXED_FIELDS = ("command", "profile", "sessionDir", "name", "host")
+
+
+def _fixed_field_rejection(kw):
+    """客户端传了服务端恒定字段 → 400 响应元组；都没传 → None。"""
+    hit = sorted(k for k in _SERVER_FIXED_FIELDS
+                 if kw.get(k) not in (None, ""))
+    if not hit:
+        return None
+    return _j({"ok": False,
+               "error": "field(s) %s are server-side fixed or auto-generated for "
+                        "command-center sessions; the client controls only 'cwd'"
+                        % ", ".join(hit)},
+              '400 Bad Request')
+
+
+def _cc_name(session):
+    """op 参数 session（站内 .jsonl ∨ .agent 路径）→ 临时会话名。
+    只认 `run/sessiond/` 下的文件（与 proc.session_files 的名字白名单、realpath 断言
+    组成两道）；非法抛 ValueError（调用方回 400）。"""
+    if not isinstance(session, str) or "\x00" in session \
+            or not session.startswith("/"):
+        raise ValueError("session must be an absolute site path: %r" % (session,))
+    p = _posixpath.normpath(session)
+    base = _posixpath.dirname(p)
+    fn = _posixpath.basename(p)
+    name = None
+    for suf in (".jsonl", ".agent"):
+        if fn.endswith(suf):
+            name = fn[:-len(suf)]
+            break
+    if not name:
+        raise ValueError("session must end with .jsonl or .agent: %r" % (session,))
+    want = _proc.site_path_of(_os.path.realpath(_proc.sessions_dir()))
+    if base != want:
+        raise ValueError("not a command-center session path (expect %s/<name>."
+                         "jsonl|.agent, got %r)" % (want, session))
+    return name
+
+
+def _prefix():
+    """机器前缀 = 本机规范名（env/host-id 查表，口径同 agentd/report.py:chat_url 的 host）。
+    ⛔ 不从请求路径派生：代理 `strip_prefix: true`（ext/proxy/proxy.py:forward）⇒ 被请求机
+    看到的 path 不含 `/dev/` 一类前缀。不可得 → None（调用方吐零行，⛔ 不猜、⛔ 不发无前缀链接）。"""
+    return _proc._self_host()
+
+
+def _chat_url(agent_site, host):
+    return "/%s%s?v=chat" % (host, agent_site) if host and agent_site else ""
+
+
+def _create_session(kw):
+    rej = _fixed_field_rejection(kw)
+    if rej:
+        return rej
+    try:
+        doc = _proc.create_cc_session(kw.get("cwd"))
+    except ValueError as e:
+        return _j({"ok": False, "error": str(e)}, '400 Bad Request')
+    host = doc["host"]
+    return _j({"ok": True, "created": True, "name": doc["name"],
+               "profile": doc["profile"], "cwd": doc["cwd"], "host": host,
+               "sessionDir": _os.path.realpath(_proc.sessions_dir()),
+               "agent": doc["agent_site"], "session": doc["session_site"],
+               "chatUrl": _chat_url(doc["agent_site"], host),
+               "ephemeral": "run/ 是宿主本地运行时区：被清即丢会话（设计稿已接受）"})
+
+
+def _list_sessions():
+    host = _prefix()
+    sessions = []
+    for r in _proc.list_cc_sessions():
+        sessions.append({
+            "name": r["name"], "title": r["title"],
+            "titleSource": r["titleSource"], "project": r["project"],
+            "cwd": r["cwd"], "profile": r["profile"], "host": r["host"],
+            "state": r["state"], "pids": r["pids"], "mtime": r["mtime"],
+            "agent": r["agent_site"], "session": r["session_site"],
+            "chatUrl": _chat_url(r["agent_site"], host),
+        })
+    projects = [{"rel": rel, "path": real,
+                 "label": ("~/m（工作区根）" if rel == "." else "~/m/" + rel)}
+                for rel, real in _proc.list_projects()]
+    return _j({"ok": True, "host": host, "prefix": host or "",
+               "sessionsDir": _proc.site_path_of(
+                   _os.path.realpath(_proc.sessions_dir())),
+               "sessions": sessions, "projects": projects})
+
+
+def _session_tabs():
+    """设计稿 §4.3：@dynamic 的数据源。空态 = 零行；⛔ 不标运行态（tab 只管快速进，
+    live/dormant 看工作区）；⛔ 不轮询（frame 加载时 fetch 一次 = 快照）。"""
+    host = _prefix()
+    if not host:
+        _log.warning("session_tabs: local host undeterminable (env/host-id); "
+                     "emitting zero rows")
+        return _j({"ok": True, "prefix": None, "rows": []})
+    rows = []
+    for r in _proc.list_cc_sessions():
+        url = _chat_url(r["agent_site"], host)
+        if not url:
+            continue
+        rows.append({"name": r["name"], "title": r["title"], "url": url})
+    return _j({"ok": True, "prefix": host, "rows": rows})
+
+
+def _rename_session(session, kw):
+    rej = _fixed_field_rejection(kw)
+    if rej:
+        return rej
+    try:
+        doc = _proc.rename_cc_session(_cc_name(session), kw.get("title"))
+    except ValueError as e:
+        return _j({"ok": False, "error": str(e)}, '400 Bad Request')
+    return _j(dict(ok=True, **doc))
+
+
+def _delete_session(session, kw):
+    rej = _fixed_field_rejection(kw)
+    if rej:
+        return rej
+    if str(kw.get("confirm") or "").strip() != "1":
+        return _j({"ok": False,
+                   "error": "missing confirm=1 (轻确认一次；删除会杀会话进程并 rm "
+                            ".agent 与 jsonl，不可撤销)"},
+                  '400 Bad Request')
+    try:
+        name = _cc_name(session)
+        _agent_path, jsonl_path, _base = _proc.session_files(name)
+    except ValueError as e:
+        return _j({"ok": False, "error": str(e)}, '400 Bad Request')
+    site = _proc.site_path_of(jsonl_path)
+    if site is None:
+        return _j({"ok": False,
+                   "error": "session path escapes the site root: %s" % jsonl_path},
+                  '400 Bad Request')
+    # ① 进程面：先杀 Supervisor（bridge.drop_session 绝不建桥 ⇒ 删一枚从未打开过的
+    #    会话不会反而把它拉起来）；未命中桥接时再按 environ 标记扫残留宿主兼顶。
+    res = _b.drop_session(site)
+    if not res.get("found"):
+        stale = _proc.kill_hosts(jsonl_path)
+        if stale:
+            res = dict(res, killed=True, staleHosts=stale)
+    # ② 文件系统面：realpath 断言 + 删前身份证据 + 删后复核全在 proc 层。
+    try:
+        doc = _proc.delete_cc_session(name)
+    except (ValueError, OSError) as e:
+        return _j({"ok": False, "error": "delete failed: %s" % e,
+                   "process": res}, '500 Internal Server Error')
+    _log.info("deleted command-center session %s (process=%s)", name, res)
+    return _j(dict(ok=True, process=res, **doc))
 
 
 def interp(store, op='', session='', cmd='', **kw):
@@ -347,6 +536,21 @@ def interp(store, op='', session='', cmd='', **kw):
         # .agent 规格解析（任务 kcywpy）：不走会话桥接——会话路径由规格文件推导，
         # 前端拿推导结果再走正常 attach。
         return _resolve_agent(store, session)
+    if op in ('create_session', 'list_sessions', 'rename_session',
+              'delete_session', 'session_tabs'):
+        # 指挥中心临时会话（任务 z293ql）：五个 op 都**不走** _bridge_or_err —— 建桥会
+        # 为「还没打开过 ∨ 即将被删」的会话拉起进程（create/list/session_tabs 无需会话，
+        # rename/delete 按 session 参数定位 run/sessiond/ 下那一枚；杀进程走
+        # bridge.drop_session 的「绝不建桥」查表）。
+        if op == 'create_session':
+            return _create_session(kw)
+        if op == 'list_sessions':
+            return _list_sessions()
+        if op == 'session_tabs':
+            return _session_tabs()
+        if op == 'rename_session':
+            return _rename_session(session, kw)
+        return _delete_session(session, kw)
     b, err = _bridge_or_err(session)
     if err:
         return err
