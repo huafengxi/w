@@ -496,6 +496,7 @@ timeout 清扫机制（0830-1104-eji4）：pi rpc-mode 的 dialog 超时是内�
 **通用增强**（任何 itab/iflow 页可用；非 dash 用例 = `/w/demo/dyn.itab` + `/w/demo/dyn-rows.py`），
 `dash/dash.itab` 只是它的第一个生产消费者（末行 `@dynamic /dash/session-tabs.py`）。
 语义边界 = **加载快照**（frame 加载时 fetch 一次；新建/删除后刷新页面才反映，⛔ 无轮询、⛔ 无自动刷新）；
-端点失败/超时（有界 10s）⇒ 展开零行，⛔ 不阻塞静态行渲染。tab bar **纯展示**（⛔ 不放新建按钮：
+端点失败 ⇒ 即刻展开零行；超时上界 10s ⇒ 期间**整表（含静态行）延迟渲染**（静态行与动态行
+同批渲染）。tab bar **纯展示**（⛔ 不放新建按钮：
 管理面〔新建/rename/delete〕全在工作区页 ⇒ frame 改动最小）。范围 = 只指挥中心临时会话、只本机；
 position handler ⛔ 不进 tab（无头瞬态后台件、归 tasks 看板）。
