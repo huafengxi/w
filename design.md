@@ -74,11 +74,14 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
 多余字段宽容；缺字段/坏 JSON 有明确错误提示。文件放 ~/m 服务树内（如
 `~/m/assistant/dispatcher.agent`）；agent 名 = 文件名。
 
-**字段（2026-08-31 用户拍板最终形态）**：必填 `host` + 可选 `cwd`/`sessionDir`/`participant`/`resident`/`name`——
+**字段（2026-08-31 用户拍板；`profile`/`title` = 任务 z293ql 增）**：必填 `host` + 可选 `cwd`/`sessionDir`/`participant`/`resident`/`name`/`profile`/`title`——
 
 - **cwd（缺省 = .agent 文件所在目录）**：会话进程的 pi 工作目录，决定加载哪个
-  工作区的 AGENTS/扩展（如 `~/m/assistant/*.agent` → cwd=`~/m/assistant` → 命中
-  该 cwd 的 `.pi` 全套扩展与 `AGENTS.md`）。天然在 ~/m 服务树内，无逃逸问题。
+  工作区的**项目级**资源（该 cwd 的 `AGENTS.md` 与 `<cwd>/.pi/extensions` 项目级扩展；
+  现行例子 = `run/sessiond/<name>.agent` 的 cwd 指向某个项目目录，见下 `profile` 条与
+  `ext/sessiond/ARCHITECTURE.md` §12）。⚠ **agentd 的工具面不靠它**：agentd 扩展已迁进
+  全局装载面 `pi-core/agent/extensions/agentd/`（自动发现、cwd 无关），可用性由 profile 的
+  工具白名单 gate。天然在 ~/m 服务树内，无逃逸问题（显式 `cwd` 走 realpath 根集校验）。
 - **`sessionDir`（可选）= 会话目录**：会话 jsonl 的落盘处，也是跨机可观测的
   bot 目录。缺省 = cwd 目录（会话文件落在 .agent 旁边，最朴素形态）。
 - **`cwd`（可选，票 7t0ufv）= 显式工作目录**：覆盖缺省的「.agent 所在目录」（~/ 展开，
@@ -86,13 +89,34 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
   + 会话文件另落」的拆分。
 - **`participant`（可选，epic.f0j2a1）= 职位信箱（路径式参与方 id，如 `bot/dispatcher`）**：
   receiver 声明者回落的收件目录来源（DISPATCH.md §8）。
-- **`resident`（可选，票 su068s）= 常驻声明**：`true` 且 host==本机 → web 启动即拉起，
-  崩溃自 respawn（resident.py）。
+- **`resident`（已退役，票 su068s；dated 保留）**：曾用于「`true` 且 host==本机 → web
+  启动即拉起、崩溃自 respawn（resident.py）」；resident 机制已删除（去保活二期 ja0vr7，
+  常驻/自愈语义统一归 agentd，见 `ext/sessiond/ARCHITECTURE.md` §2「去保活语义」）⇒
+  读到该字段**无任何效果**。
 - **`name`（可选，bot 布局第 4 期，任务 ocfidc）= 会话展示名（= pi --name）**：
   缺省 = 会话文件 basename（proc.py display_name）；声明者带此字段则用之——bot 族常驻会话由此带族前缀（如 `bot/dev-dispatcher`），对外会话标识与目录族对齐（plan §4.10 显示名退路；显示名不受 session id 字符约束）。
+- **`profile`（可选，任务 z293ql）= 会话人格输入**：白名单校验（名字形态 +
+  `bots/profiles/<名>.json` 在场 + **只放行 `form: interactive`** —— 给交互会话配 `task`/
+  `resident`/缺 `form` 的清单会得到「无基线能力 ∨ `ask_user` 被排除」的静默失能形态）→
+  经 `bridge.set_session_cwd(..., profile)` 登记 → `proc.Supervisor._spawn` 在 `clean_env()`
+  **之后**回注 env `DISPATCH_PROFILE`（该 env 属 `agentd/envscrub.py` 的剥除名单 ⇒ ⛔ 不得
+  从父进程继承），由全局 `profile-loader.ts` 兑现人格正文/model/形态档。缺省 = 不注 ⇒
+  裸 pi 会话（存量 .agent 行为逐字不变）。指挥中心临时会话由服务端恒定为 `command-center`。
+- **`title`（可选，任务 z293ql）= 会话标题 override**：工作区页 rename 的落点（⛔ 不用旁挂
+  sidecar：单一文件 = 单一事实源，删除面维持「rm 两个文件」）。缺省/清除 ⇒ 回落**自动标题**
+  （配对 jsonl 的首条 user 消息首个非空行，截断 48 字符；无 jsonl ∨ 无 user 消息 ⇒ 回落
+  agent 名）。≤80 字符、⛔ 无控制字符。
 - **`host` v1 边界**：仅持久化保存（存于 .agent 文件）+ 随 `op=agent` 响应返回 +
   聊天页可见；不做跨机拉起。
 - **旧 `workdir` 字段（kcywpy v1）不再识别**：读到忽略并记日志提示，不报错。
+
+**`.agent` 的第二种来源 = web 现场自建（任务 z293ql，设计稿 §4.2）**：`op=create_session`
+按用户在会话工作区页选的项目目录，现场写一枚 `run/sessiond/<时间戳-uuid>.agent`
+（`cwd`=所选项目、`sessionDir`=`run/sessiond/`、`host`=本机规范名、`profile`=`command-center`、
+`name`=文件名；⛔ 无 `command` 键）→ 前端转 `?v=chat` 即聊天窗。与手写 `.agent` 的差别只有
+「谁写的」与「落宿主本地运行时区（ephemeral：`run/` 被清即丢、⛔ 不进 agents-sync）」；
+链路完全同族（`.agent` 仍是 web 唯一拉起入口）。枚举/校验/删除面纪律 =
+`ext/sessiond/ARCHITECTURE.md` §12（单点，不复述）。
 
 其余机制：
 
@@ -100,7 +124,8 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
   （同 `?v=chat`，另有 `?v=agent` 别名）——复用现有聊天界面与监督机制，仅会话启动参数来源不同。
 - **启动参数解析单点**：`ext/sessiond/rpc/api.py` `op=agent`（`_resolve_agent`）：
   读规格 → 校验 → **sessionDir 不存在自动 `mkdir -p`（含 bot/ 中间层）+ 记日志** →
-  登记显式 cwd（`bridge.set_session_cwd`）→ 返回会话路径与 cwd/sessionDir。
+  登记显式拉起参数（`bridge.set_session_cwd(session, cwd, profile)`，登记面
+  `_SPAWN_OVERRIDES`）→ 返回会话路径与 cwd/sessionDir/profile。
   会话 = **`<sessionDir>/<agent名>.jsonl`**（每 agent 一会话、可重连续聊，类比
   `/assistant/dispatcher.jsonl` 的组织），之后完全走既有 .jsonl 会话链路（桥接/监督/重连）。
 - **cwd 显式传递**（fw2ll1）：`proc.Supervisor(session_path, on_event, cwd=None)` ——

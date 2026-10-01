@@ -26,6 +26,23 @@ extensions. vmap, mime, bash rc, and `PATH` bin dirs are picked up by convention
 from `ext/<name>/{vmap,mime,sh.rc}.frag` and `ext/<name>/bin/` (composed by
 `w/vmap`, `w/mime`, `ext/shell/sh.rc`, and `core/server.py:set_path`).
 
+## Tests
+
+`test/` 下每枚都是**自包含**的（自带临时夹具、⛔ 不写生产树、⛔ 不改现网配置）。下表的跑法与
+期望尾行**逐字取自各文件的头注/docstring**（核法 = `grep -n 'RESULT\|Expect\|Run:' test/<文件>`；
+改判据同批改本表）。⚠ 一枚例外 = `proxy_test.sh`：**⛔ 不得在承载流量的机器上跑**。
+
+| 文件 | 跑法 | 期望尾行 | 覆盖面 |
+|---|---|---|---|
+| `smoke.py` | `cd ~/m && python3 w/test/smoke.py`（可用 `webroot=`/`fstab=` 环境覆写；头注逐字 `Usage: cd <webroot> && fstab=<path> python3 w/test/smoke.py`） | `--- smoke done ---`，且逐行以 `OK` 起（出现 `ERR` 行即红） | 请求管线的 in-process 冒烟（无 socket/fork）：md 视图 / `?v=read` / `?v=head` / 目录视图 |
+| `resolve_agent_edge.py` | `cd ~/m/w && python3 test/resolve_agent_edge.py` | `ALL PASS` | `_resolve_agent` 的软链逃逸边界三例（run 区 sessionDir 缺省 / 根集逃逸 400 / 软链逃出根集 400） |
+| `session_ops_edge.py` | `cd ~/m/w && python3 test/session_ops_edge.py` | `ALL PASS` | 指挥中心临时会话（`run/sessiond/*.agent`）的 11 组正反控：项目枚举、cwd 白名单双保险、profile 白名单（只放行 `form: interactive`）、`.agent` 字段集（⛔ 无 `command`）、标题两级回落、rename、删除面 realpath/root 断言、op 层的服务端恒定字段 400、`_spawn` 的 `DISPATCH_PROFILE` 回注 |
+| `test_regress_multipart_dir_read.py` | `python3 w/test/test_regress_multipart_dir_read.py` | `--- 17 checks, 0 failed ---` | 两枚回归：multipart POST 的 boundary bytes/str 归一（`core/handler.py:parse_post`）；Cmd store 的目录读（`stores/cmd_store.py`） |
+| `proxy_unix_test.py` | `python3 w/test/proxy_unix_test.py [--proxy PATH] [--keep]` | `RESULT: PASS (22/22 passed)`，exit code 0 | 代理的 `unix://` 上游 / SSE 流式透传 / `${RSH_FWD_DIR}` 展开；**第 7 项钉 `ext/proxy/routes.json` 的 prefix·upstream·timeout**（期望值 = 该文件的 `UNIX_ROUTES`/`HTTP_ROUTES` 两个常量 ⇒ 改 routes 同批改常量） |
+| `proxy_test.sh` | `bash w/test/proxy_test.sh`，前置 = 8080 已启动**且不是承载流量的实例**（隔离实例 + 专用 routes 副本）。⛔ **不在现网 8080 上跑**：它把 `ext/proxy/routes.json`（每请求按 mtime 热加载）临时换成 demo 规则、退出才从 `.bak` 恢复 ⇒ 测试期间现网机器前缀路由短暂消失；而路由文件路径由 `ext/proxy/proxy.py` 的 `_routes_file` 按自身 realpath 定死、**无可重定向变量** ⇒ 无法在不碰现网文件的前提下验证热加载 | ⛔ 本表不写死期望尾行（按上一条纪律它不在承载流量的机器上跑 ⇒ 无从实跑取证）；路由面的可复跑覆盖 = 上一行 `proxy_unix_test.py` 的第 7 项 | 端到端代理（前缀路由/剥离/上游透传） |
+| `dash-shot.sh` | 在装了 playwright(chromium) 的机器上 `bash w/test/dash-shot.sh`（头注：nv1；产物落 `/tmp/dash-shots/`，只读 ⛔ 不写 `~/m`） | 无断言尾行：产物 = 逐页截图（`PLAYWRIGHT_IMPORT_FAIL`/`LAUNCH_FAIL` 即环境不具备） | 浏览器侧渲染取证（CSS/布局/iframe/widget 表格）——纯服务端断言照不到的那一面 |
+| `proxy_upstream.py` | ⛔ 不是测试，是 `proxy_test.sh` 用的临时上游：`python3 test/proxy_upstream.py [port\|/abs/unix.sock]`（缺省 18099） | — | echo 请求方法/路径/头/体为 JSON；`/custom` 返 201 + 自定义头 |
+
 ## config ssl/basic auth
 
 ```
@@ -43,6 +60,14 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 
 ## iframe show many doc
 - [/w/demo/list.iframe?v=iframe](/w/demo/list.iframe?v=iframe)
+- `/w/demo/dyn.itab` — `@dynamic` 指令行：一行 `@dynamic <站内路径>` 换成该端点吐出的若干行
+  （`名字 URL [k=v …]`，一行一枚），**就地 splice**（指令行的位置即展开位置）。通用增强：
+  任何 `.itab`/`.iframe` 页可用；端点最小形态见 [/w/demo/dyn-rows.py?v=read](/w/demo/dyn-rows.py?v=read)。
+  语义 = **加载快照**（frame 加载时 fetch 一次，⛔ 无轮询/无自动刷新）；端点失败或有界超时
+  （10s）⇒ 展开零行、⛔ 不阻塞静态行；返回行里的 `@dynamic` 不递归展开。fetch 目标带代理前缀
+  （`/dev/`、`/nv1/` 一类，由浏览器 pathname 与服务端注入的 `src` 求差得出）⇒ 经代理打开时
+  打到对的机器。生产用例 = `dash/dash.itab` 末行的活跃会话 tab（数据源 `ext/sessiond/rpc/api.py`
+  的 `op=session_tabs`，机制 = `ext/sessiond/ARCHITECTURE.md` §12.3）。
 
 ## .org file
 

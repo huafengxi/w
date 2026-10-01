@@ -9,7 +9,7 @@
 - **sessiond 是 web 服务（8080，全局 Basic Auth，凭据 `~/.auth/passwd`）内嵌的**路径驱动聊天系统**，任务会话与 bot 会话同构（任务 ybzvbn 起：任务会话 = 普通会话，见 §10）：
 
 - **会话 = 站内任意 `.jsonl` 路径**。`<path>/<name>.jsonl?v=chat` 打开聊天窗；路由键 = 完整路径（不同目录的同名文件 = 不同会话，可并存）。会话工作目录（cwd）= 该 jsonl 所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展，预期行为，不特判）。
-- **`.agent`/bot 会话的扩展接线约定**：pi 项目级扩展只从 `cwd/.pi/extensions` 自动发现（无祖先上溯），故需要加载 agentd 项目扩展（receiver 等）的 bot 会话，把 `agents/bot/<名字>/.pi/extensions` 软链 → `~/m/assistant/.pi/extensions`；项目信任无需新条目——`~/.pi/agent/trust.json` 的 `/home/yuanqi.xhf` 祖先条目上溯命中。爆炸半径声明：如此接线的会话获得全部 agentd 工具（dispatch/task_*/send_message），评估为可接受增益；如需收窄另立改进事项。
+- **`.agent`/bot 会话的人格与工具面**（接线约定已作废，任务 z293ql 订正）：agentd 扩展已迁进**全局装载面** `pi-core/agent/extensions/agentd/`（自动发现、**cwd 无关**）⇒ ⛔ 不再需要把 `agents/bot/<名字>/.pi/extensions` 软链到某个项目的 `.pi/extensions`（旧约定的对象 `~/m/assistant/.pi/extensions` 随 assistant 退役已不存在）；某会话能不能用 dispatch/task_* 由 **profile 的工具白名单** gate（全局 `profile-loader.ts` 在 `before_provider_request` 强制，同样 cwd 无关），人格/model/形态由 `.agent` 的 `profile` 字段 → spawn env `DISPATCH_PROFILE` 兑现（见 §2「环境清洗」行与 §12）。pi 的**项目级**扩展发现仍只查 `<cwd>/.pi/extensions`（无祖先上溯）——那是项目自家扩展的路径，⛔ 不是 agentd 工具的加载前提；项目信任 = `~/.pi/agent/trust.json` 的 home 祖先条目上溯命中。爆炸半径声明：带 agentd 扩展的会话获得全部 agentd 工具（dispatch/task_*/send_message），评估为可接受增益；收窄面 = profile 白名单。
 - **每会话 = 一个受监督的 `pi --mode rpc` 子进程**。由 `proc.py:Supervisor` 在 web 进程内直接监督（stdin/stdout 管道，进程内直连，无 unix socket），崩溃自动退避重启并从该 jsonl resume。
 - **bridge 事件环**：`bridge.py:Bridge` 每会话路径一个，持有有界事件环（默认 2000 条），对多个 SSE 订阅者多播，并代理 `get_entries` 基线。
 - **前端单文件页**：`view/index.html`（无构建、仅外部依赖 `marked.min.js`），从 `location.pathname` 解析会话路径。
@@ -81,7 +81,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 稳定期重置 | 上轮存活超 `STABLE_RESET=120s` → 崩溃计数与 `restarts` 清零 |
 | 单行上限 | `LINE_LIMIT=16MiB`，超限丢弃该行 |
 | 进程参数 | `pi --mode rpc --session <jsonl 绝对路径> --name <显示名> -e <探针扩展>`（显示名 = 命中 `.agent` 声明者非空 `name` 字段则用之（`proc.py:declared_display_name`，对外会话标识带族前缀，如 `bot/dev-dispatcher`；要求声明者推导会话文件 == 目标），否则回落 `proc.py:display_name` 的 basename 去 `.jsonl`；探针见下小节，文件不存在则跳过 `-e` 不拖垮会话），`start_new_session=True`（web 被整组杀时不连带杀会话），stderr 继承 web（并入 `run/logs/web.log`） |
-| 环境清洗 | `proc.py:clean_env` 剥除调度/任务身份变量（`AGENTD_TASK`/`DISPATCH_TASK_*`/`PI_SESSION*` 等），防会话归属投毒 |
+| 环境清洗 | `proc.py:clean_env` 剥除调度/任务身份变量（`AGENTD_TASK`/`DISPATCH_TASK_*`/`PI_SESSION*` 等），防会话归属投毒；**`DISPATCH_PROFILE` 也在剥除名单内**（人格输入只允许来自声明者）⇒ `_spawn` 在清洗**之后**按 `.agent` 的 `profile` 字段显式回注（缺省不注 = 裸 pi 会话），见 §12 |
 | 旧宿主识别 | 零文件：spawn 注入 environ 标记 `SESSIOND_SESSION_FILE=<jsonl>`（`proc.py:HOST_MARKER`）；`proc.py:find_hosts` 扫 `/proc/*/environ` 精确匹配后经 `proc.py:is_pi_host` 交叉校验——命中进程须同时满足 `comm == 'pi'`（pi 会 setproctitle 把 argv 重写为裸 `pi`，cmdline 匹配不可行，comm 反映改写后 title）且 `/proc/<pid>/exe` 指向 node 二进制；仅凭 environ 标记会误杀带标记的旁观进程，任一读取失败 → 拒绝认宿主（宁可漏杀不可误杀）；无 starttime 校验 |
 | 双宿主清场 | `proc.py:_clear_stale_proc`（首次拉起时，主要面向 web 重启/跨进程场景）：等旧宿主自然退出（stdin EOF，宽限 `ORPHAN_GRACE=15s`）→ SIGTERM → 3s → SIGKILL |
 | 就位等待 | `proc.py:wait_ready` 默认 25s（覆盖清场 15s + SIGTERM 3s + spawn 余量） |
@@ -122,7 +122,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | 崩溃不重拉 | 监督循环崩溃分支：有在场 → 退避重拉/熔断（逻辑逐字不变）；无在场 → 广播 `sessiond.session_dormant`、置 `state=dormant`、监督循环退出（不重拉、不计崩溃） |
 | 复活 | 懒态桥接的下次访问（attach/cmd）经 `ensure_started` 重起监督循环（熔断态仍需 reload 解锁，不变），语义回到懒拉起 |
 | 空闲回收 | `bridge.py` 模块级单守护线程（`_idle_scan`，周期 `SESSIOND_IDLE_SCAN` 缺省 60s）：`state=running ∧ 无订阅 ∧ 距最近活动 > IDLE_TIMEOUT ∧ jsonl mtime 老化 > IDLE_TIMEOUT（文件不存在 = 从未写盘，算空闲）` → `Supervisor._idle_reap()` 优雅杀转懒态（不计崩溃）。`IDLE_TIMEOUT` = env `SESSIOND_IDLE_TIMEOUT`，缺省 900s，0=关。排除 SocketSupervisor（生命周期属 agentd） |
-| 拉起权单点 | 用户硬约束（2026-09-03）：① 拉起/复活归 agentd 监督（对登记者）；② 有 `spec.json` 的 agentd 登记者（/agents/(task\|bot)/…）web 只透传、**永不 spawn**，缺席时浏览器入口显示不可用/等待（§10 三态）；③ 裸 jsonl 拉起废除——`get_bridge` 对非路由路径仅当 `_CWD_OVERRIDES` 有登记（= 经 `op=agent` 解析的 .agent 声明者）才拉起，未登记直开 → 400 提示；**.agent 声明者是 web 唯一拉起入口**；④ **零 spawn 权、零登记权**：bot 登记走 CLI（`agentd/agentctl.py bot register` + `enable`），web 只透传/直播已登记会话（见 §10「登记边界」） |
+| 拉起权单点 | 用户硬约束（2026-09-03）：① 拉起/复活归 agentd 监督（对登记者）；② 有 `spec.json` 的 agentd 登记者（/agents/(task\|bot)/…）web 只透传、**永不 spawn**，缺席时浏览器入口显示不可用/等待（§10 三态）；③ 裸 jsonl 拉起废除——`get_bridge` 对非路由路径仅当 `_SPAWN_OVERRIDES` 有登记（= 经 `op=agent` 解析的 .agent 声明者）才拉起，未登记直开 → 400 提示；**.agent 声明者是 web 唯一拉起入口**；④ **零 spawn 权、零登记权**：bot 登记走 CLI（`agentd/agentctl.py bot register` + `enable`），web 只透传/直播已登记会话（见 §10「登记边界」）；⑤ web 自建的指挥中心临时会话声明者（`run/sessiond/*.agent`，任务 z293ql）同族走 `.agent` 入口 ⇒ 仍是「`.agent` 是 web 唯一拉起入口」，⛔ 不是新的拉起权来源（见 §12） |
 | 浏览器不弄坏 | 有 tab 打开 = 有订阅 = 有在场 → 崩溃退避重拉、熔断、多 tab 语义逐字不变；变化仅在「无人看」之后（不重拉/空闲回收），前端只见休眠提示帧 |
 
 ---
@@ -168,6 +168,11 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | `inspect` | — | `{ok, session, inspect:{ok, generatedAt, sessionFile, cwd, toolCount, tools[], systemPrompt}}` | 探针转储（任务 s0f1la）：经 `-e` 注入的探针扩展命令取当前系统提示词全文 + 工具清单（侧车文件握手，见 §3/§2 探针小节）；payload 几十 KB 走本 HTTP 响应，不进事件环/jsonl | 502 超时/不就位/被拒/侧车文件缺失 |
 | `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时）。**socket 会话**：代理 `control/restart`（保历史换代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 重拉超时等失败；socket 代理 504 等回执超时 / 409 `rejected`（已 final）/ 403 跨机 |
 | `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因）。**socket 会话**：代理 `control/clear`（弃历史换代：杀→备份 `run/backup/`→截断→空白新代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 失败（含删文件失败）；socket 代理 504 等回执超时 / 409 `rejected`（已 final/备份失败）/ 403 跨机 |
+| `create_session` | `cwd`（**相对 WS 的项目路径**，如 `w` ∨ `.`） | `{ok, created, name, profile, cwd, host, sessionDir, agent, session, chatUrl, ephemeral}` | 新建指挥中心临时会话（任务 z293ql，§12）：服务端枚举的项目白名单成员校验 + 既有逃逸校验 → 现场写 `run/sessiond/<name>.agent`。**服务端恒定/自动生成**：`host`（env/host-id 查表）/`sessionDir`/`profile`（`CC_PROFILE`）/`name`（时间戳+uuid4）；客户端传 `command`/`profile`/`sessionDir`/`name`/`host` 任一 → 400 显式拒绝（`.agent` 字段集里根本没有 `command` 键） | 400 cwd 非法/不在白名单、profile 白名单不过、host 不可得、写盘失败 |
+| `list_sessions` | — | `{ok, host, prefix, sessionsDir, sessions[], projects[]}` | 只读：本机 `run/sessiond/*.agent` 全量（每项 = 自动标题/标题来源/项目分组键/最近活动 mtime/运行态 running∨dormant + pids/resume 链接）+ 项目清单（新建表单的 `<select>` 选项）。运行态 = 一次 `proc.host_map` 的 /proc 扫描（列表可能在 widget 子进程里渲染、看不到进程内桥接注册表） | — |
+| `rename_session` | `session`（`.jsonl` ∨ `.agent` 站内路径）、`title` | `{ok, name, title, auto, override}` | 改标题 override（落 `.agent` 的 `title` 字段，⛔ 无旁挂 sidecar）；空标题 = 清除 override 回落自动标题。标题 ≤80 字符、⛔ 无控制字符 | 400 名字非法/会话不存在/标题超长或含控制字符 |
+| `delete_session` | `session`、`confirm=1` | `{ok, process, name, removed[], evidence, afterExists}` | 删除（**轻确认一次、⛔ 不做 nonce** = 设计稿已裁）：`bridge.drop_session` 杀 Supervisor（**绝不建桥** ⇒ 删一枚从未打开过的会话不会反而把它拉起来；未命中桥接再按 environ 标记扫残留宿主 `proc.kill_hosts`）→ rm `.agent` + rm jsonl。删除面纪律 = 名字白名单正则 + root 身份断言 + realpath 严格前缀断言（拒符号链接逃逸）+ 删前 stat 三要素证据 + ⛔ 不用 `ignore_errors` + 删后复核 | 400 缺 confirm / 名字或路径非法；500 删除失败（含删后复核仍在场） |
+| `session_tabs` | — | `{ok, prefix, rows[{name,title,url}]}` | 只读：`@dynamic` 的数据源（§12.3）——本机活跃会话的 tab 行。`prefix` = 本机规范名（`proc._self_host`，⛔ 不从请求路径派生：代理 `strip_prefix: true` ⇒ 被请求机看不到前缀）；空态 = **零行**；⛔ 不标运行态（tab 只管快速进，live/dormant 看工作区） | — |
 | 未知 | — | — | — | 400 `unknown op` |
 
 attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries 响应行的事件环 ID，前端用它作为续流游标。
@@ -373,7 +378,7 @@ bot 登记 = 命令行两步：`agentd/agentctl.py --root <工作区根> bot reg
 | spec.host ≠ 本机 | 拒绝 400 | 「请通过 <host> 的服务访问」（同 host_guard 口径） |
 | 身份一致但 sock 不可连 | 拒绝 400 | 「观测通道未就绪，稍后重试」（启动窗口/封装异常降级提示） |
 
-常驻会话（如 `bot/dev-dispatcher`，spec.command 带 `AGENTD_RESIDENT=1` 前缀，见 `agentd/agent-file-protocol.md`）与任务会话同表同链路；浏览器入口即直播窗（进程缺席时显示等待提示，不代拉）。
+常驻会话（如 `bot/dev-dispatcher`，spec.command 带 `AGENTD_RESIDENT=1` 前缀，见 `agentd/agent-file-protocol.md`）与任务会话同表同链路——该前缀是「**agentd 监督的会话**」标记（全局 `profile-loader.ts` 的零行为规则用它判是否装配人格），⛔ **不是形态轴**：会话形态住 profile 清单的 `form` 字段（三档 `task|resident|interactive`）；浏览器入口即直播窗（进程缺席时显示等待提示，不代拉）。
 
 ### SocketSupervisor（`proc.py`，独立类，风险圈养）
 
@@ -451,3 +456,46 @@ timeout 清扫机制（0830-1104-eji4）：pi rpc-mode 的 dialog 超时是内�
 | 游标/幂等集 | `streamCursor`/`seenEntryIds`/`seenToolIds` 等各端独立维护，只服务于本端渲染去重 |
 
 一致性总结：**会话态（进程/队列/dialog/事件环）由「注册表归一 + 事件环多播 + 全量基线」保证跨端一致；上表为纯视图态，不影响会话本身的正确性。**
+
+---
+
+## 12. 指挥中心临时会话（`run/sessiond/*.agent`，任务 z293ql）
+
+设计稿 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §4.2/§4.3 的服务端半面：
+按需创建「即用即弃」的交互会话（pi-web 式工作区），人格 = `command-center` profile
+（`form: interactive`）。消费方 = `dash/sessions.md`（工作区页）+ `dash/sessions.py`（表单与列表端点）
++ `dash/session-tabs.py`（`@dynamic` 的 tab 行 rpc）。
+
+### 12.1 落盘面与生命周期
+
+| 项 | 语义 |
+|---|---|
+| 声明者 | `<WS>/run/sessiond/<name>.agent`，`name` = `YYYYmmdd-HHMMSS-<uuid4 前 6 位>`（服务端生成）；目录 0700 / 文件 0600，原子写（tmp + `os.replace`） |
+| 字段集 | `host`（本机规范名）/`cwd`（项目 realpath）/`sessionDir`（= 会话目录 realpath）/`profile`（`CC_PROFILE`）/`name`/`createdAt`；可选 `title`（rename 的 override）。**⛔ 无 `command` 键**：spawn argv 的单点是 `Supervisor._spawn`，声明者不可控 |
+| 会话文件 | `<sessionDir>/<name>.jsonl`（每会话一枚；打开走 `?v=chat` 的 `.agent` 入口，与普通 `.agent` 同链路） |
+| ephemeral | `run/` 是宿主本地运行时区（主仓 `.gitignore` 覆盖 ∧ ⛔ 不进 agents-sync）⇒ **被清即丢会话**（设计稿已接受），且**每台机器各有各的**（工作区页与 tab 都按机器前缀分机） |
+| 删除 | `op=delete_session`：杀 Supervisor（`bridge.drop_session` 绝不建桥；未命中再 `proc.kill_hosts` 兼顶）→ rm `.agent` + rm jsonl。⛔ 不走 `agents-sync/gc.py`（那条铁律的射程是 `agents/**` 的参与方目录，本面是宿主本地运行时文件） |
+| 进程回收 | 沿用既有去保活（§2）：空闲超阈杀进程转懒态、文件留、重开即 resume；`reload`/`clear` 对本族会话直接可用（web 自有 Supervisor，⛔ 不是 socket 会话） |
+| 人格 | `.agent` 的 `profile` → `_resolve_agent` 白名单校验（名字形态 + `bots/profiles/<名>.json` 在场 + **只放行 `form: interactive`**：给交互会话配 `task`/`resident`/缺 `form` 的清单会得到「无基线能力 ∨ `ask_user` 被排除」的静默失能形态）→ `bridge.set_session_cwd(..., profile)` → `_spawn` 在 `clean_env()` **之后**回注 `DISPATCH_PROFILE`（该 env 属剥除名单，⛔ 不得继承）→ 全局 `profile-loader.ts` 兑现人格正文/model/形态档 |
+
+### 12.2 攻击面收口（cwd 是客户端可选字段 ⇒ 比单一指挥中心大一档）
+
+| 面 | 收口 |
+|---|---|
+| ① 项目清单 | **服务端枚举**（`proc.list_projects`）= `~/m` 自身 + 顶层含 `.git` 的子目录（只扫一层、零递归成本；⛔ 无静态清单可漂；realpath 逃出根集者不入白名单）。客户端只提交**相对路径**（表单 `<select>` 的 value），⛔ 不提交绝对路径 |
+| ② cwd 校验 | 双保险 = 白名单**成员校验**（`resolve_project_cwd`）+ 既有 `resolve_cwd`（根集 = `WS_REAL` + `realpath(WS/run)`、realpath 前缀，防穿越与符号链接逃逸）。⇒ `~/m/env`（凭据面）、`~/m/run/agentd`（运行态）、`~/m/agents/task/<他人 id>`（他人任务目录）这些「在根集内但不是项目」的目录**结构上选不到** |
+| ③ 服务端恒定 | `profile`/`sessionDir`/`name`/`host` 恒定或自动生成；客户端传这五个键（含 `command`）任一 ⇒ **400 显式拒绝**（⛔ 不只是忽略，`_SERVER_FIXED_FIELDS`） |
+| ④ 删除面 | 名字白名单正则（⛔ 无路径分隔符/穿越段）+ **root 身份断言**（会话目录的 realpath 不得等于 WS 根、也不得是它的祖先）+ 两个目标文件各自的 realpath **严格前缀断言**（拒符号链接逃逸）+ 删前 `stat` 三要素（dev/ino/size）+ realpath 记日志与响应 + ⛔ 不用 `ignore_errors` + 删后复核 `exists` 为假 |
+| 残余面（已裁接受） | 框架不把 `REQUEST_METHOD` 传给端点（口径同 `lore/tools/todo-act.py` 头注）⇒「轻确认一次」挡不住带 `confirm=1` 的跨站 GET；设计稿明裁**不做 nonce** ⇒ 不加固。缓解 = 发布链接刻意不带变更参数（列表里的 delete 只到确认页）；后果上界 = 杀一枚 ephemeral 会话 + rm 两个宿主本地文件（与 `run/` 被清同量级） |
+| 跨机误开 | `.agent` 的 `host` 字段只作展示/记录：本族声明者落 `run/sessiond/`，⛔ 不在 `proc._scan_agent_declarations` 的扫描面（`assistant/**`）内 ⇒ `host_guard` 对它们不生效。⛔ 有意不扩扫描面：跨机访问天然被机器前缀挡住（`/nv1/…` 经代理落到 nv1 自己的 8080），且 `run/` 宿主本地 ⇒ 误开只是在本机另起一个会话、**不会双写同一 jsonl**（`host_guard` 要挡的正是双写）；扩扫描面 = 给每次建桥加一次 `os.walk`（为小概率事件加常驻成本） |
+
+### 12.3 tab 面（`@dynamic`，设计稿 §4.3 方案 B）
+
+`ext/frame/view/iframe.html` 认 `@dynamic <站内路径>` 指令行：额外 fetch 该路径（一个吐 itab
+格式行的端点）→ 把返回行**就地 splice** 进 tab 列表（指令行的位置即展开位置）。这是 frame ext 的
+**通用增强**（任何 itab/iflow 页可用；非 dash 用例 = `/w/demo/dyn.itab` + `/w/demo/dyn-rows.py`），
+`dash/dash.itab` 只是它的第一个生产消费者（末行 `@dynamic /dash/session-tabs.py`）。
+语义边界 = **加载快照**（frame 加载时 fetch 一次；新建/删除后刷新页面才反映，⛔ 无轮询、⛔ 无自动刷新）；
+端点失败/超时（有界 10s）⇒ 展开零行，⛔ 不阻塞静态行渲染。tab bar **纯展示**（⛔ 不放新建按钮：
+管理面〔新建/rename/delete〕全在工作区页 ⇒ frame 改动最小）。范围 = 只指挥中心临时会话、只本机；
+position handler ⛔ 不进 tab（无头瞬态后台件、归 tasks 看板）。
