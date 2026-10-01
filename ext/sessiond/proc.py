@@ -8,7 +8,7 @@
 # 时不连带杀会话）。
 #
 # URL 路径路由（用户拍板 inform p4th）：会话 = ~/m 下任意 `.jsonl` 路径，
-# `/assistant/<name>.jsonl?v=chat`、`/foo/bar/x.jsonl?v=chat` 均可；不同目录
+# `/foo/bar/x.jsonl?v=chat`、`/a/b/<name>.jsonl?v=chat` 均可；不同目录
 # 的同名文件 = 不同会话，可并存。路径校验锁定 ~/m 内（防穿越/逃逸）。
 # 会话工作目录（任务 fw2ll1 cwd/dir 拆分）：缺省 = 其 jsonl 所在目录（.jsonl 直开，
 # 用户拍板 inform cwd1）；.agent 会话由调用方（rpc/api.py op=agent）显式传入，
@@ -166,7 +166,9 @@ def _claim_origin(path):
 # .agent 声明 host 的会话只能被声明机实体化（建桥接/拉起进程）。唯一守卫点 =
 # Supervisor.__init__（桥接创建即监督员创建，是所有会话进程在本机被拉起的必经处，
 # 见 bridge.get_bridge 单一建桥入口）。判定口径与扩展侧/replica-tag 同源：
-# 声明者扫描面 = assistant/** 递归（唯一约定位置），推导会话文件 =
+# 声明者扫描面 = assistant/** 递归（该目录已随 assistant 退役消失 ⇒ **现网恒零产出**，
+# 即 host_guard/declared_display_name 对任何会话都不生效；⛔ 有意不扩扫描面到
+# run/sessiond/，三条理由见 ARCHITECTURE.md §12.2 末行）。推导会话文件 =
 # <sessionDir realpath>/<agent名>.jsonl（sessionDir 缺省 = .agent 所在目录），
 # 与 rpc/api.py _resolve_agent 的推导口径一致。本机身份 = env/host-id 查表；
 # 缺失/未命中 = 配置错误，对命中声明者会话拒绝放行（不猜测），无声明者会话零波及。
@@ -174,7 +176,11 @@ def _claim_origin(path):
 
 def _scan_agent_declarations():
     """递归扫 assistant/**/*.agent，yield (agent名, host, 推导会话文件 realpath, spec)。
-    坏文件/缺 host 宽容跳过（守卫只拦可判定的声明者）。"""
+    坏文件/缺 host 宽容跳过（守卫只拦可判定的声明者）。
+    ⚠ `assistant/` 已随退役消失 ⇒ 本函数现网恒零产出（`os.walk` 对不存在的根 = 空迭代）；
+    ⛔ 不把扫描面扩到 `run/sessiond/`（web 自建的指挥中心临时会话，任务 z293ql）：跨机访问
+    已被机器前缀挡住、`run/` 宿主本地 ⇒ 误开不会双写同一 jsonl，而扩扫描面 = 给每次建桥
+    加一次 `os.walk`（为小概率事件加常驻成本）。判定与理由的权威 = ARCHITECTURE.md §12.2。"""
     for dirpath, _dirnames, filenames in os.walk(os.path.join(WS, "assistant")):
         for fn in filenames:
             if not fn.endswith(".agent"):
@@ -816,13 +822,13 @@ def delete_cc_session(name):
 class Supervisor:
     """按路径会话监督员：一个 `pi --mode rpc` 子进程 + 崩溃恢复。
 
-    session_path = 站内 URL 路径（如 `/assistant/foo.jsonl`）或已解析绝对路径。
+    session_path = 站内 URL 路径（如 `/foo/bar/x.jsonl`）或已解析绝对路径。
     on_event(obj) 由监督线程回调（进程退出/重拉等生命周期帧 + pi 原始输出行），
     调用方（bridge）负责入环/多播。
     """
 
     def __init__(self, session_path, on_event, cwd=None, profile=None):
-        # 兼容站内路径（如 `/assistant/foo.jsonl`）与已解析绝对路径传入。
+        # 兼容站内路径（如 `/foo/bar/x.jsonl`）与已解析绝对路径传入。
         if os.path.isabs(session_path) and session_path.endswith(".jsonl"):
             rp = os.path.realpath(session_path)
             roots = [WS_REAL, os.path.realpath(os.path.join(WS, "run"))]

@@ -71,8 +71,9 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
 ## .agent 文件类型（任务 kcywpy；fw2ll1 cwd/sessionDir 拆分）
 
 `xxx.agent` 是 **agent 规格文件**：JSON，字段风格参考 `~/m/agents/` 任务 spec.json，
-多余字段宽容；缺字段/坏 JSON 有明确错误提示。文件放 ~/m 服务树内（如
-`~/m/assistant/dispatcher.agent`）；agent 名 = 文件名。
+多余字段宽容；缺字段/坏 JSON 有明确错误提示。文件放 ~/m 服务树内（现行例子 =
+`~/m/run/sessiond/<时间戳-uuid>.agent`，web 现场自建的指挥中心临时会话，任务 z293ql）；
+agent 名 = 文件名。
 
 **字段（2026-08-31 用户拍板；`profile`/`title` = 任务 z293ql 增）**：必填 `host` + 可选 `cwd`/`sessionDir`/`participant`/`resident`/`name`/`profile`/`title`——
 
@@ -85,8 +86,9 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
 - **`sessionDir`（可选）= 会话目录**：会话 jsonl 的落盘处，也是跨机可观测的
   bot 目录。缺省 = cwd 目录（会话文件落在 .agent 旁边，最朴素形态）。
 - **`cwd`（可选，票 7t0ufv）= 显式工作目录**：覆盖缺省的「.agent 所在目录」（~/ 展开，
-  与会话路径同一根集校验防逃逸）。调度员会话用它实现「cwd=assistant 加载全套扩展
-  + 会话文件另落」的拆分。
+  与会话路径同一根集校验防逃逸）。用它实现「cwd = 某个项目目录（加载该项目的 `AGENTS.md`
+  与项目级扩展）+ 会话文件另落 `run/sessiond/`」的拆分（现行消费者 = 指挥中心临时会话；
+  ⚠ agentd 的工具面**不靠 cwd**，见上 `cwd` 条与 `profile` 条）。
 - **`participant`（可选，epic.f0j2a1）= 职位信箱（路径式参与方 id，如 `bot/dispatcher`）**：
   receiver 声明者回落的收件目录来源（DISPATCH.md §8）。
 - **`resident`（已退役，票 su068s；dated 保留）**：曾用于「`true` 且 host==本机 → web
@@ -139,13 +141,15 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
   agents-sync 四机同步——一台机器可观测另一台机器上 bot 的会话/收件状态。
   **跨宿主守卫（任务 8nherl 最小版）**：.agent 声明 host 的会话只能被声明机实体化——
   守卫单点在 `proc.py host_guard`（Supervisor 创建 = 建桥接/spawn 唯一咽喉）：目标会话文件命中
-  声明者推导（`<sessionDir>/<agent名>.jsonl`，assistant/** 递归同口径）且声明 host ≠ 本机 →
+  声明者推导（`<sessionDir>/<agent名>.jsonl`，assistant/** 递归同口径 —— 该目录已随退役
+  消失 ⇒ 扫描面现网恒空、本守卫对所有会话零命中，⛔ 有意不扩到 `run/sessiond/`，理由 =
+  `ext/sessiond/ARCHITECTURE.md` §12.2 末行）且声明 host ≠ 本机 →
   拒绝并提示「请通过 <host> 的服务访问」；本机身份不可得（env/host-id 缺失/未命中）= 配置错误，
   对命中声明者拒绝放行；无声明者会话零波及。
 - **host 跨机路由（后续）**：按 host 把请求经反向通道/各机 8080 代理转发到目标机的
   同名端点（配套：多机 8080 + 代理 + rsh 端口转发），只需改 `_resolve_agent` 单点与
   其返回的路由指示。
-- **存量约定**：`assistant/dev-dispatcher/dev-dispatcher.agent`（cwd=`~/m/assistant`，会话文件在 .agent 旁）。
+- **存量约定（已退役）**：曾是 `assistant/dev-dispatcher/dev-dispatcher.agent`（cwd=`~/m/assistant`，会话文件在 .agent 旁）；assistant 退役后该文件已不存在 ⇒ 现网 `.agent` 声明者只有 web 自建的 `run/sessiond/*.agent`（任务 z293ql，见上）。
 - **UI 约定**：会话名/页标题 = agent 名（文件名）；`/agents/bot/` 下会话豁免
   双宿主盲区警示（该目录是 .agent 会话的约定归属地，sessiond 自家拉起）。
 - **同名会话单机不变量**（ogwtb4 评审建议，任务 kqhweh）：同一 session jsonl 同一时刻

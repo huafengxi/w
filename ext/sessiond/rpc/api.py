@@ -1,6 +1,6 @@
 # -*- type=script -*-
 # sessiond 控制面 + 上行命令端点（任务 0829-1958-od0t；R1：路径路由）。
-# 会话按路径管理（`session` 参数必填 = 站内 .jsonl 路径，如 /assistant/foo.jsonl；
+# 会话按路径管理（`session` 参数必填 = 站内 .jsonl 路径，如 /foo/bar/x.jsonl；
 # 校验锁定 ~/m 内，见 proc.resolve_session_path），由 web 进程内各会话监督员
 # （ext/sessiond/proc.py）直接监督，无管理面：
 #   op=status  该会话状态（state/pid/gen/restarts/cwd/session_file）；另附斜杠状态行第 4 行
@@ -185,10 +185,14 @@ def _agentd_control_proxy(b, action, reason):
 # ---------------- .agent 文件类型（任务 kcywpy；fw2ll1 cwd/sessionDir 拆分） ----------------
 # xxx.agent = agent 规格 JSON（字段参考 ~/m/agents/ 任务 spec.json 风格，多余字段宽容）。
 # 访问 /xxx.agent → 聊天视图，会话启动参数改从该 JSON 读取（用户拍板 2026-08-31）：
-#   - 字段只留 `host` + 可选 `cwd`/`sessionDir`；旧 `workdir` 不再识别（读到忽略并日志提示）。
+#   - 字段 = 必填 `host` + 可选 `cwd`/`sessionDir`/`name`/`profile`/`title`（后两枚 = 任务
+#     z293ql 增，语义见 design.md「.agent 文件类型」节）；旧 `workdir` 不再识别（读到忽略并日志提示）。
 #   - 会话进程 cwd = 显式 `cwd` 字段（~/ 展开，安全红线同 sessionDir；2026-08-31 用户拍板，
-#     票 7t0ufv）；缺省回退 = .agent 文件所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展，
-#     如 ~/m/assistant/*.agent → cwd=~/m/assistant → 命中 assistant/.pi 全套扩展）。
+#     票 7t0ufv）；缺省回退 = .agent 文件所在目录。cwd 决定 pi 加载哪个工作区的**项目级**
+#     资源（该 cwd 的 AGENTS.md 与 <cwd>/.pi/extensions）；⚠ agentd 的工具面**不靠 cwd**——
+#     该扩展已迁全局装载面 pi-core/agent/extensions/agentd/（自动发现、cwd 无关），可用性由
+#     profile 的工具白名单 gate（现行例子 = run/sessiond/<name>.agent 的 cwd 指向某个项目目录，
+#     见 op=create_session 与 ARCHITECTURE.md §12）。
 #   - sessionDir = 会话目录（会话 jsonl 落盘处，宿主本地运行时状态，*.jsonl 全局 gitignore；
 #     经 2026-08-31 票 7t0ufv 拍板不再共享参与方同步目录）；缺省 = .agent 文件所在目录。
 #   - 会话 jsonl = <sessionDir>/<agent名>.jsonl（每 agent 一会话、可重连续聊，如

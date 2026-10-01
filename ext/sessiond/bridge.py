@@ -58,7 +58,7 @@ class Bridge:
 
     def __init__(self, session_path, cwd=None, sock_path=None, participant_id=None,
                  profile=None):
-        # 站内路径（如 /assistant/foo.jsonl）；解析/校验在 Supervisor 内。
+        # 站内路径（如 /foo/bar/x.jsonl）；解析/校验在 Supervisor 内。
         self._site_path = session_path
         self.session = None      # 展示名，待监督员解析后回填
         self.lock = threading.Lock()
