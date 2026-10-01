@@ -44,6 +44,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 log = logging.getLogger("sessiond-proc")
 
@@ -327,8 +328,459 @@ def find_hosts(session_file):
     return hosts
 
 
+def host_map(session_files):
+    """一次 /proc 扫描出多枚会话文件的宿主 pid（列表页用，避免 N 次全扫）。
+    口径逐字同 `find_hosts`：environ 精确匹配 `SESSIOND_SESSION_FILE=<file>` ∧
+    `is_pi_host` 交叉校验（comm=='pi' ∧ exe 指向 node）；带标记的旁观进程不认宿主。
+    ⛔ 不把 `find_hosts` 改写成对本函数的调用：那会动到「防双宿主清场」
+    （`_clear_stale_proc`）这条既有链路的实现体，收益只是省十几行同口径代码。
+    返回 {session_file: [pid, …]}（无宿主的键不出现）。"""
+    files = [f for f in dict.fromkeys(session_files) if isinstance(f, str) and f]
+    if not files:
+        return {}
+    markers = {("%s=%s" % (HOST_MARKER, f)).encode("utf-8"): f for f in files}
+    out = {}
+    self_pid = os.getpid()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return out
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == self_pid:
+            continue
+        try:
+            with open("/proc/%s/environ" % entry, "rb") as f:
+                env = f.read()
+        except OSError:
+            continue
+        parts = env.split(b"\x00")
+        hit = [markers[m] for m in markers if m in parts]
+        if not hit:
+            continue
+        if not is_pi_host(pid):
+            continue
+        for f in hit:
+            out.setdefault(f, []).append(pid)
+    return out
+
+
 def pi_binary():
     return shutil.which("pi") or "pi"
+
+
+# ----------------------------------------------------------------
+# 指挥中心临时会话（任务 z293ql，设计稿 §4.2「按需创建会话」）
+#
+# 形态 = 宿主本地运行时区 `run/sessiond/` 下的一枚 `.agent` 声明者 + 它的会话 jsonl：
+#   - 走 `.agent`（本模块的既有约束：`.agent` 是 web 唯一拉起入口，web 自有 Supervisor
+#     spawn，⛔ 不经 agentd）；
+#   - `run/` 已被主仓 .gitignore 覆盖 ∧ 不进 agents-sync ⇒ **ephemeral**：`run/` 被清 =
+#     临时会话丢失（设计稿已接受），删除 = 直接 rm（⛔ 不走 `agents-sync/gc.py` 铁律，
+#     那条的射程是 `agents/**` 的参与方目录）；
+#   - 字段集全部**服务端恒定 ∨ 自动生成**，客户端只控 `cwd`（且必须命中服务端现算的
+#     项目白名单）；⛔ 无 `command` 键（spawn argv 单点在 `Supervisor._spawn`）。
+# 进程面（杀 Supervisor）归 `bridge.drop_session`；本层只管文件系统面与校验。
+
+SESSIONS_SUBDIR = ("run", "sessiond")   # 宿主本地运行时区（⛔ 不入 git / 不同步）
+CC_PROFILE = "command-center"           # 服务端恒定（客户端不控；设计稿 §7.3 的 interactive 档）
+SESSION_NAME_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+PROFILE_NAME_OK = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+TITLE_MAX = 80              # rename 的标题上限（字符）
+AUTO_TITLE_MAX = 48         # 自动标题截断长度（首条 user 消息的首个非空行）
+TITLE_SCAN_LINES = 200      # 派生自动标题时最多扫多少行 jsonl（有界读）
+TITLE_SCAN_BYTES = 1 << 20  # 同上：最多读多少字节
+
+
+def sessions_dir():
+    """临时会话目录（`<WS>/run/sessiond`）。⛔ 不缓存 realpath：测试会 monkeypatch WS。"""
+    return os.path.join(WS, *SESSIONS_SUBDIR)
+
+
+def _ws_roots():
+    """会话/cwd 的白名单根集（与 `resolve_session_path`/`resolve_cwd` 同口径）。"""
+    return [WS_REAL, os.path.realpath(os.path.join(WS, "run"))]
+
+
+def _within_roots(real):
+    return any(real == r or real.startswith(r + os.sep) for r in _ws_roots())
+
+
+def site_path_of(real_path):
+    """realpath → 站内路径（两锚定，与 `rpc/api.py:_resolve_agent` 同口径）：先 WS 锚定，
+    逃逸则 run 软链锚定（还原为 `/run/…`）；两者都逃逸 → None（调用方报 500，⛔ 不猜）。"""
+    rel = os.path.relpath(real_path, WS)
+    if not (rel == os.pardir or rel.startswith(os.pardir + os.sep)):
+        return "/" + posixpath.normpath(rel.replace(os.sep, "/"))
+    run_real = os.path.realpath(os.path.join(WS, "run"))
+    rel_run = os.path.relpath(real_path, run_real)
+    if rel_run == os.pardir or rel_run.startswith(os.pardir + os.sep):
+        return None
+    return "/" + posixpath.normpath(
+        posixpath.join("run", rel_run.replace(os.sep, "/")))
+
+
+def list_projects():
+    """**服务端枚举**可选项目目录（cwd 白名单；设计稿 §8⑧ 的「甲」档、用户拍板）：
+    `~/m` 自身 + 顶层含 `.git` 的子目录。返回 [(相对 WS 的路径, realpath)]，相对路径
+    `"."` = WS 自身（居首），其余按名字排序。只扫一层（`os.scandir` + 每项一次 `.git`
+    存在性判断）⇒ 零递归成本；⛔ 无静态清单可漂（新子仓 clone 到顶层即自动出现）。
+    realpath 逃出根集的项**不入白名单**（防顶层符号链接把清单变成逃逸口）。"""
+    items = [(".", WS_REAL)]
+    try:
+        entries = sorted(os.scandir(WS), key=lambda e: e.name)
+    except OSError:
+        return items
+    for e in entries:
+        try:
+            if not e.is_dir(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        if e.name.startswith("."):
+            continue
+        git = os.path.join(e.path, ".git")
+        if not (os.path.isdir(git) or os.path.isfile(git)):
+            continue
+        real = os.path.realpath(e.path)
+        if not _within_roots(real):
+            log.warning("project enumeration: %s resolves outside the workspace "
+                        "roots (%s); excluded", e.path, real)
+            continue
+        items.append((e.name, real))
+    return items
+
+
+def resolve_project_cwd(raw):
+    """客户端提交的 cwd → 项目白名单成员校验 + 既有逃逸校验（双保险）。
+    入参形态 = **相对 WS 的路径**（表单 `<select>` 的 value：`.` ∨ `w` ∨ `lore`…）。
+    非法抛 ValueError（调用方回 400）：绝对路径 / 含 `..` 段 / 不在枚举集内 /
+    逃出根集。返回 realpath。"""
+    if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
+        raise ValueError("invalid cwd %r" % (raw,))
+    rel = raw.strip()
+    if os.path.isabs(rel) or rel.startswith("~"):
+        raise ValueError("cwd must be a workspace-relative path (got an absolute "
+                         "or ~-form path): %r" % (raw,))
+    parts = [p for p in rel.replace(os.sep, "/").split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        raise ValueError("cwd must not contain '..' segments: %r" % (raw,))
+    real = os.path.realpath(os.path.join(WS_REAL, *parts) if parts else WS_REAL)
+    allowed = {r for _rel, r in list_projects()}
+    if real not in allowed:
+        raise ValueError("cwd not in the server-side project whitelist: %r "
+                         "(resolved %s; whitelist = ~/m + top-level git repos)"
+                         % (raw, real))
+    return resolve_cwd(real)      # 既有根集 + realpath 前缀校验（纵深防御第二道）
+
+
+def validate_profile(name):
+    """`.agent` 的 `profile` 字段白名单校验（任务 z293ql；登记方追加判据）：
+    ① 名字形态（小写字母数字与连字符）；② `bots/profiles/<名>.json` 在场且是合法 JSON；
+    ③ 该清单声明 **`form: interactive`** —— 只放行交互档：给交互会话配 `form: task`
+    的清单会得到「无基线能力 + `ask_user` 被排除」的**静默形态**（结构上可达、零 WARN），
+    配 `form: resident` 则拿不到 interactive 档的 ask_user 保留 ⇒ 两类都是配错形态即静默失能。
+    非法抛 ValueError（调用方回 400）。返回归一后的名字。"""
+    if not isinstance(name, str) or not PROFILE_NAME_OK.match(name.strip()):
+        raise ValueError("profile name invalid: %r (expect ^[a-z0-9][a-z0-9-]{0,63}$)"
+                         % (name,))
+    n = name.strip()
+    manifest = os.path.join(WS, "bots", "profiles", n + ".json")
+    try:
+        with open(manifest) as f:
+            doc = json.load(f)
+    except OSError:
+        raise ValueError("profile not found: %s (no %s)" % (n, manifest))
+    except ValueError:
+        raise ValueError("profile manifest is not valid JSON: %s" % manifest)
+    form = doc.get("form") if isinstance(doc, dict) else None
+    if form != "interactive":
+        raise ValueError("profile %s: form=%r ≠ interactive（交互会话只放行声明 "
+                         "form: interactive 的清单；task/resident/缺 form 一律拒）" % (n, form))
+    return n
+
+
+def new_session_name():
+    """会话名（服务端自动生成，⛔ 客户端不控）：时间戳 + uuid4 前 6 位。"""
+    return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+
+
+def create_cc_session(cwd_rel, profile=CC_PROFILE):
+    """新建一枚指挥中心临时会话 = 现场写 `run/sessiond/<name>.agent`。
+    字段集（全部服务端恒定 ∨ 自动生成）：
+      `host`       = 本机规范名（`env/host-id` 查表；不可得 ⇒ 拒绝，⛔ 不猜）
+      `cwd`        = `resolve_project_cwd` 校验后的 realpath（客户端唯一可控面）
+      `sessionDir` = `<WS>/run/sessiond`（服务端恒定）
+      `profile`    = `validate_profile` 放行的名字（缺省 = `CC_PROFILE`）
+      `name`       = `new_session_name()`（自动生成）
+      `createdAt`  = UTC ISO 时刻
+    ⛔ **无 `command` 键**：spawn argv 的单点是 `Supervisor._spawn`，声明者不可控。
+    落盘 = 临时文件 + `os.replace` 原子写，目录 0700 / 文件 0600（宿主本地运行时区）。
+    返回 dict(name, profile, cwd, host, agent_site, session_site, agent_path, session_path)。"""
+    cwd = resolve_project_cwd(cwd_rel)
+    prof = validate_profile(profile)
+    host = _self_host()
+    if not host:
+        raise ValueError("cannot determine local host (env/host-id missing or no "
+                         "entry for this hostname); refusing to create a session "
+                         "with an unknown host field")
+    sdir = os.path.realpath(sessions_dir())
+    if not _within_roots(sdir):
+        raise ValueError("sessions dir escapes the workspace roots: %s" % sdir)
+    name = new_session_name()
+    agent_path = os.path.join(sdir, name + ".agent")
+    jsonl_path = os.path.join(sdir, name + ".jsonl")
+    doc = {"host": host, "cwd": cwd, "sessionDir": sdir, "profile": prof,
+           "name": name,
+           "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        os.makedirs(sdir, mode=0o700, exist_ok=True)
+        tmp = os.path.join(sdir, ".tmp-%d-%s.agent" % (os.getpid(),
+                                                        uuid.uuid4().hex[:6]))
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, agent_path)
+    except OSError as e:
+        raise ValueError("cannot write agent declaration %s: %s" % (agent_path, e))
+    agent_site = site_path_of(agent_path)
+    session_site = site_path_of(jsonl_path)
+    if not agent_site or not session_site:
+        raise ValueError("derived site paths escape the site root: %s / %s"
+                         % (agent_path, jsonl_path))
+    log.info("created command-center session %s (cwd=%s profile=%s host=%s)",
+             name, cwd, prof, host)
+    return {"name": name, "profile": prof, "cwd": cwd, "host": host,
+            "agent_site": agent_site, "session_site": session_site,
+            "agent_path": agent_path, "session_path": jsonl_path}
+
+
+def session_title(jsonl_path, fallback):
+    """自动标题（设计稿 §1 决策 4）：读配对 jsonl 的**首条 user 消息**，取其首个非空行
+    截断到 `AUTO_TITLE_MAX`。两级回落（验收面）：① 无配对 jsonl ∨ 读不出 → `fallback`；
+    ② jsonl 在场但扫不到 user 消息（新会话/只跑过系统帧）→ `fallback`。
+    有界读：最多 `TITLE_SCAN_LINES` 行 ∧ `TITLE_SCAN_BYTES` 字节（大历史不拖垮列表页）。"""
+    try:
+        with open(jsonl_path, "rb") as f:
+            head = f.read(TITLE_SCAN_BYTES)
+    except OSError:
+        return fallback                      # 回落①：无配对 jsonl
+    seen = 0
+    for raw in head.split(b"\n"):
+        if not raw.strip():
+            continue
+        seen += 1
+        if seen > TITLE_SCAN_LINES:
+            break
+        try:
+            obj = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or obj.get("type") != "message":
+            continue
+        msg = obj.get("message")
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        text = _first_user_text(msg.get("content"))
+        if text:
+            return text[:AUTO_TITLE_MAX]
+    return fallback                          # 回落②：无 user 消息
+
+
+def _first_user_text(content):
+    """user 消息 content 的首个非空文本行（content 可为 str ∨ [{type:text,text:…}]）。"""
+    cands = []
+    if isinstance(content, str):
+        cands.append(content)
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                cands.append(part["text"])
+    for c in cands:
+        for line in c.splitlines():
+            line = line.strip()
+            if line:
+                return line
+    return ""
+
+
+def list_cc_sessions():
+    """枚举本机 `run/sessiond/*.agent`（未删即列）→ 列表页/tab rpc 共用的数据面。
+    每项 = {name, title, titleSource, project, cwd, state, pids, mtime, agent_site,
+    session_site, profile, host}；坏文件宽容跳过（记 WARN，⛔ 不整页失败）。
+    运行态 = 一次 `host_map` /proc 扫描（列表页可能在 web 进程外的 widget 子进程里跑，
+    看不到进程内桥接注册表 ⇒ 用跨进程成立的 environ 标记口径）。
+    排序 = 最近活动（jsonl ∨ .agent 的 mtime）降序。"""
+    sdir = sessions_dir()
+    try:
+        names = sorted(fn[:-len(".agent")] for fn in os.listdir(sdir)
+                       if fn.endswith(".agent"))
+    except OSError:
+        return []
+    rows = []
+    for name in names:
+        agent_path = os.path.join(sdir, name + ".agent")
+        try:
+            with open(agent_path, encoding="utf-8") as f:
+                spec = json.load(f)
+        except (OSError, ValueError) as e:
+            log.warning("list_cc_sessions: skip unreadable/invalid %s: %s",
+                        agent_path, e)
+            continue
+        if not isinstance(spec, dict):
+            log.warning("list_cc_sessions: skip non-object %s", agent_path)
+            continue
+        jsonl_path = os.path.join(sdir, name + ".jsonl")
+        cwd = spec.get("cwd")
+        rows.append({
+            "name": name,
+            "titleOverride": (spec.get("title").strip()
+                              if isinstance(spec.get("title"), str)
+                              and spec.get("title").strip() else None),
+            "cwd": cwd if isinstance(cwd, str) else None,
+            "project": _project_label(cwd),
+            "profile": spec.get("profile"),
+            "host": spec.get("host"),
+            "jsonl": jsonl_path,
+            "agent_site": site_path_of(os.path.realpath(agent_path)),
+            "session_site": site_path_of(jsonl_path),
+            "mtime": _mtime(jsonl_path) or _mtime(agent_path) or 0.0,
+        })
+    live = host_map([r["jsonl"] for r in rows])
+    out = []
+    for r in rows:
+        pids = sorted(live.get(r["jsonl"], []))
+        title = r.pop("titleOverride")
+        if title:
+            src = "override"
+        else:
+            title = session_title(r["jsonl"], r["name"])
+            src = "auto" if title != r["name"] else "name"
+        r.update({"title": title, "titleSource": src,
+                  "state": "running" if pids else "dormant", "pids": pids})
+        out.append(r)
+    out.sort(key=lambda r: (-r["mtime"], r["name"]))
+    return out
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def _project_label(cwd):
+    """分组键（列表页按项目分组）：cwd 相对 WS 的路径；WS 自身 → `~/m`；
+    WS 外（手写的 .agent）→ realpath 原样，⛔ 不猜。"""
+    if not isinstance(cwd, str) or not cwd:
+        return "(unknown)"
+    real = os.path.realpath(cwd)
+    if real == WS_REAL:
+        return "~/m"
+    if real.startswith(WS_REAL + os.sep):
+        return "~/m/" + os.path.relpath(real, WS_REAL).replace(os.sep, "/")
+    return real
+
+
+def session_files(name):
+    """会话名 → (.agent realpath, .jsonl realpath, 会话目录 realpath)，带三重断言：
+    ① 名字白名单正则（⛔ 无路径分隔符、无穿越段）；
+    ② **root 身份断言**：会话目录的 realpath 不得等于 WS 根、也不得是 WS 根的祖先
+       （防「某分支上变量变成生产根」形态 ⇒ 删除面越界）；
+    ③ 两个目标文件的 realpath 必须**严格在会话目录内**（拒符号链接逃逸）。
+    任一不满足抛 ValueError（调用方回 400，⛔ 不动盘）。"""
+    if not isinstance(name, str) or not SESSION_NAME_OK.match(name):
+        raise ValueError("session name invalid: %r (expect ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$)"
+                         % (name,))
+    base = os.path.realpath(sessions_dir())
+    if base == WS_REAL or WS_REAL.startswith(base + os.sep):
+        raise ValueError("refusing: sessions dir %s is the workspace root or its "
+                         "ancestor (delete surface would escape)" % base)
+    out = []
+    for suffix in (".agent", ".jsonl"):
+        p = os.path.realpath(os.path.join(base, name + suffix))
+        if not p.startswith(base + os.sep):
+            raise ValueError("%s path escapes the sessions dir %s: %r"
+                             % (suffix, base, name))
+        out.append(p)
+    return out[0], out[1], base
+
+
+def rename_cc_session(name, title):
+    """把标题 override 写进 `.agent` 的 `title` 字段（单一文件 = 单一事实源，⛔ 不加旁挂
+    sidecar：delete 面维持「rm 两个文件」，且不会出现声明者已删而 sidecar 残留的孤儿）。
+    空标题 = 清除 override（回落自动标题）。返回 {name, title, auto}。"""
+    agent_path, jsonl_path, _base = session_files(name)
+    if not os.path.exists(agent_path):
+        raise ValueError("no such session: %s" % name)
+    if not isinstance(title, str):
+        raise ValueError("title must be a string")
+    t = title.strip()
+    if len(t) > TITLE_MAX:
+        raise ValueError("title too long: %d chars (max %d)" % (len(t), TITLE_MAX))
+    if any(ord(ch) < 0x20 for ch in t):
+        raise ValueError("title must not contain control characters")
+    try:
+        with open(agent_path, encoding="utf-8") as f:
+            spec = json.load(f)
+    except ValueError:
+        raise ValueError("agent declaration is not valid JSON: %s" % agent_path)
+    if not isinstance(spec, dict):
+        raise ValueError("agent declaration is not a JSON object: %s" % agent_path)
+    if t:
+        spec["title"] = t
+    else:
+        spec.pop("title", None)
+    tmp = agent_path + ".tmp-%d" % os.getpid()
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(spec, ensure_ascii=False, indent=1) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, agent_path)
+    auto = session_title(jsonl_path, name)
+    log.info("renamed session %s: title=%r (auto=%r)", name, t or None, auto)
+    return {"name": name, "title": t or auto, "auto": auto,
+            "override": t or None}
+
+
+def delete_cc_session(name):
+    """删除一枚临时会话的**文件系统面**：rm `.agent` + rm jsonl（杀 Supervisor 进程归
+    `bridge.drop_session`，由 rpc/api.py 编排在前）。
+    删除纪律（全局红线「删除类操作」）：删前给身份证据（stat 三要素 + realpath）、
+    逐个文件走 `session_files` 的 realpath 前缀断言（⛔ 不接受符号链接逃逸）、
+    ⛔ 不用 `ignore_errors`、删后复核 `exists` 为假并把读数回给调用方。"""
+    agent_path, jsonl_path, base = session_files(name)
+    evidence = {}
+    for label, p in (("agent", agent_path), ("jsonl", jsonl_path)):
+        try:
+            st = os.stat(p)
+            evidence[label] = {"path": p, "realpath": os.path.realpath(p),
+                               "dev": st.st_dev, "ino": st.st_ino,
+                               "size": st.st_size}
+        except OSError:
+            evidence[label] = {"path": p, "realpath": os.path.realpath(p),
+                               "absent": True}
+    log.info("deleting session %s (dir=%s): %s", name, base,
+             {k: {kk: vv for kk, vv in v.items() if kk != "path"}
+              for k, v in evidence.items()})
+    removed = []
+    for label, p in (("agent", agent_path), ("jsonl", jsonl_path)):
+        if evidence[label].get("absent"):
+            continue
+        os.unlink(p)                     # 失败即抛（⛔ 不吞、不 ignore_errors）
+        removed.append(label)
+    after = {"agent": os.path.exists(agent_path), "jsonl": os.path.exists(jsonl_path)}
+    if any(after.values()):
+        raise ValueError("post-delete check failed, still exists: %s"
+                         % [k for k, v in after.items() if v])
+    return {"name": name, "removed": removed, "evidence": evidence,
+            "afterExists": after}
 
 
 class Supervisor:
@@ -339,7 +791,7 @@ class Supervisor:
     调用方（bridge）负责入环/多播。
     """
 
-    def __init__(self, session_path, on_event, cwd=None):
+    def __init__(self, session_path, on_event, cwd=None, profile=None):
         # 兼容站内路径（如 `/assistant/foo.jsonl`）与已解析绝对路径传入。
         if os.path.isabs(session_path) and session_path.endswith(".jsonl"):
             rp = os.path.realpath(session_path)
@@ -356,6 +808,11 @@ class Supervisor:
         # cwd 由调用方显式传入（任务 fw2ll1：.agent cwd/dir 拆分，经 bridge 转交）；
         # 缺省 = jsonl 所在目录（.jsonl 直开路径行为不变，cwd1）。
         self.cwd = resolve_cwd(cwd) if cwd else os.path.dirname(self.session_file)
+        # 人格输入（任务 z293ql，设计稿 §7.3）：.agent 声明者的 `profile` 字段经
+        # rpc/api.py 校验后传入（白名单 = `bots/profiles/` 里在场的名字），_spawn 在
+        # clean_env() 之后回注 DISPATCH_PROFILE（该 env 属剥除名单，⛔ 不得从父进程继承）。
+        # None ⇒ 不注 ⇒ 裸 pi 会话（既有 .agent/.jsonl 路径逐字不变）。
+        self.profile = profile
         self.on_event = on_event
         self.proc = None
         self.pid = None
@@ -441,6 +898,38 @@ class Supervisor:
                     p.kill()
                 except OSError:
                     pass
+
+    def shutdown(self, reason=""):
+        """永久停机（删除面临时会话用，任务 z293ql）：置 `_reaping`（退出不计崩溃、
+        监督循环转懒态后退出、⛔ 不重拉）+ 优雅杀（SIGTERM → 3s → SIGKILL，两档等待
+        都有上界）。与 `_idle_reap` 的区别 = 语义是「不再复活」，且调用方
+        （`bridge.drop_session`）已把桥接摘出注册表 ⇒ 后续访问经 .agent 重新解析。
+        未拉起（无进程）⇒ 直接转懒态，同样不复活。返回 {ok, pid, state}。"""
+        with self._cond:
+            self._reaping = True
+            p = self.proc
+            pid_ = self.pid
+        if p is not None and p.poll() is None:
+            try:
+                p.terminate()
+            except OSError:
+                pass
+            try:
+                p.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+                try:
+                    p.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    log.error("shutdown: process %s survived SIGKILL window (%s)",
+                              pid_, self.session_file)
+        log.info("session shutdown (%s): %s file=%s", reason or "requested",
+                 self.name, self.session_file)
+        with self._cond:
+            return {"ok": True, "pid": pid_, "state": self.state}
 
     # ---- 对外 ----
 
@@ -682,12 +1171,17 @@ class Supervisor:
 
     def _sync_header_cwd(self):
         """会话文件首帧 cwd 对齐（任务 53yjuc，receiver-load-debug）：pi resume 时
-        项目资源（含 .pi/extensions 扩展）发现用会话文件**首帧记录的 cwd**（创建时值，
-        SessionManager.open 无 cwdOverride：pi dist/core/session-manager.js open()；
-        扩展发现只查 <cwd>/.pi 无向上回溯：dist/core/package-manager.js projectBaseDir）——
-        首帧 cwd 与宿主拉起 cwd 不一致时（典型：文件由旧代码在子目录创建、.agent 后改
-        显式 cwd）扩展整个不加载（2026-09-01 dev-dispatcher 事故：agentd 不加载 →
-        receiver/dispatch 工具全无）。拉起前把首帧 cwd 改写为 self.cwd（其余行不动，
+        项目资源（项目级 `.pi/extensions` 扩展与项目 `AGENTS.md`）发现用会话文件**首帧
+        记录的 cwd**（创建时值，SessionManager.open 无 cwdOverride：pi
+        dist/core/session-manager.js open()；项目级扩展发现只查 <cwd>/.pi 无向上回溯：
+        dist/core/package-manager.js projectBaseDir）——首帧 cwd 与宿主拉起 cwd 不一致时
+        （典型：文件由旧代码在子目录创建、.agent 后改显式 cwd）项目资源整个不加载。
+        **dated 归因**：当初的一手事故（2026-09-01 dev-dispatcher：agentd 扩展不加载 →
+        receiver/dispatch 工具全无）已随 agentd 扩展迁进**全局装载面**
+        `pi-core/agent/extensions/agentd/`（自动发现、cwd 无关；工具可用性改由 profile
+        白名单 gate）而不再成立 ⇒ 本对齐**现在保的是项目 `AGENTS.md` 与项目级扩展的
+        加载一致性**，⛔ 不再是 agentd 工具的加载前提。
+        拉起前把首帧 cwd 改写为 self.cwd（其余行不动，
         临时文件+rename 原子落盘）。调用时机 = _run_loop 内、旧宿主已清场、本线程独占，
         无并发写者。.jsonl 直开（缺省 cwd=dirname）首帧本就等于 dirname，无行为变化。"""
         try:
@@ -741,6 +1235,11 @@ class Supervisor:
             self.state = "starting"
         env = clean_env()
         env[HOST_MARKER] = self.session_file        # 零文件旧宿主识别标记
+        if self.profile:
+            # 人格输入单点（任务 z293ql）：clean_env() 会剥掉继承来的 DISPATCH_PROFILE
+            # （agentd/envscrub.py：身份/人格类 env 只允许来自声明者），故在此之后显式回注。
+            # 值由 rpc/api.py 白名单校验（名字形态 + 清单在场 + form: interactive）。
+            env["DISPATCH_PROFILE"] = self.profile
         cmd = [pi_binary(), "--mode", "rpc", "--session", self.session_file,
                "--name", self.name]
         if os.path.exists(PROBE_EXT):               # 探针扩展（任务 s0f1la）

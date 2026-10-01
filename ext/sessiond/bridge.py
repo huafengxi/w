@@ -56,7 +56,8 @@ DIALOG_METHODS = {"select", "confirm", "input", "editor"}
 class Bridge:
     """单个会话路径的进程内事件环 + 命令通道（按路径注册，见 get_bridge）。"""
 
-    def __init__(self, session_path, cwd=None, sock_path=None, participant_id=None):
+    def __init__(self, session_path, cwd=None, sock_path=None, participant_id=None,
+                 profile=None):
         # 站内路径（如 /assistant/foo.jsonl）；解析/校验在 Supervisor 内。
         self._site_path = session_path
         self.session = None      # 展示名，待监督员解析后回填
@@ -87,7 +88,7 @@ class Bridge:
             self.sup.on_lost = self._socket_lost
         else:
             self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest,
-                                        cwd=cwd)
+                                        cwd=cwd, profile=profile)
             # 去保活（任务 ja0vr7）：在场判定数据由桥接供给（崩溃无订阅不重拉/空闲回收）。
             self.sup.presence_check = self.has_presence
         self.session = self.sup.name         # 展示名以监督员解析为准
@@ -483,26 +484,58 @@ class Bridge:
 _BRIDGES = {}                     # resolved path -> Bridge（按需多会话）
 _BRIDGES_LOCK = threading.Lock()
 
-# 会话显式 cwd 登记（任务 fw2ll1：.agent cwd/dir 拆分）：
-# op=agent 解析成功后先登记「会话文件 → 显式 cwd（= .agent 文件所在目录）」，
-# 之后该会话路径懒建桥接时按登记把 cwd 显式传给 Supervisor（不再恒等于
-# dirname(session_file)）。web 重启后登记随进程消失——前端打开 .agent 页必先经
+# 会话显式拉起参数登记（任务 fw2ll1：.agent cwd/dir 拆分；任务 z293ql：加 profile）：
+# op=agent 解析成功后先登记「会话文件 → {cwd, profile}」，之后该会话路径懒建桥接时
+# 按登记把两个值显式传给 Supervisor（cwd 不再恒等于 dirname(session_file)；profile →
+# spawn env 的 DISPATCH_PROFILE，见 proc.Supervisor._spawn）。
+# web 重启后登记随进程消失——前端打开 .agent 页必先经
 # op=agent 解析再 attach，登记自然重建；.jsonl 直开无登记 → cwd 缺省 dirname。
-_CWD_OVERRIDES = {}               # resolved session_file -> cwd
-_CWD_OVERRIDES_LOCK = threading.Lock()
+_SPAWN_OVERRIDES = {}             # resolved session_file -> {"cwd":…, "profile":…}
+_SPAWN_OVERRIDES_LOCK = threading.Lock()
 
 
-def set_session_cwd(session_path, cwd):
-    """登记会话的显式 cwd（任务 fw2ll1，调用方 = rpc/api.py op=agent）。
-    session_path 经会话路径校验，cwd 经 proc.resolve_cwd 校验；非法抛 ValueError
-    （调用方回 400）。重复登记以最后一次为准；已存在桥接不受影响（桥接生命周期内
-    cwd 不变）。"""
+def set_session_cwd(session_path, cwd, profile=None):
+    """登记会话的显式拉起参数（任务 fw2ll1，调用方 = rpc/api.py op=agent）。
+    session_path 经会话路径校验，cwd 经 proc.resolve_cwd 校验；profile 由调用方
+    经 `proc.validate_profile` 白名单校验后传入（本函数⛔ 不重复一份判据）。
+    非法抛 ValueError（调用方回 400）。重复登记以最后一次为准；已存在桥接不受影响
+    （桥接生命周期内 cwd/profile 不变）。"""
     key = _proc.resolve_session_path(session_path)
-    _CWD_OVERRIDES_LOCK.acquire()
+    _SPAWN_OVERRIDES_LOCK.acquire()
     try:
-        _CWD_OVERRIDES[key] = _proc.resolve_cwd(cwd)
+        _SPAWN_OVERRIDES[key] = {"cwd": _proc.resolve_cwd(cwd), "profile": profile}
     finally:
-        _CWD_OVERRIDES_LOCK.release()
+        _SPAWN_OVERRIDES_LOCK.release()
+
+
+def drop_session(session_path):
+    """删除面临时会话（任务 z293ql，调用方 = rpc/api.py op=delete_session）：
+    **绝不建桥**的注册表查表 → 命中则永久停机（`Supervisor.shutdown`：退出不计崩溃、
+    不重拉）+ 摘除登记。与 `get_bridge` 的区别正是这条：删一枚从未打开过的会话时
+    ⛔ 不得为它拉起一个进程。未命中（无桥接 = 未拉起 ∨ 已转懒态 ∨ web 刚重启）⇒
+    found=False，调用方照旧走文件系统删除面（可能仍有旧宿主进程 ⇒ 另行扫
+    `proc.find_hosts` 兼顶）。返回 {found, killed, pid, state, error?}。"""
+    try:
+        key = _proc.resolve_session_path(session_path)
+    except ValueError as e:
+        return {"found": False, "killed": False, "error": str(e)}
+    with _SPAWN_OVERRIDES_LOCK:
+        _SPAWN_OVERRIDES.pop(key, None)      # 声明者即将被删 ⇒ 拉起参数登记同批摘除
+    with _BRIDGES_LOCK:
+        b = _BRIDGES.pop(key, None)
+    if b is None:
+        return {"found": False, "killed": False}
+    sup = b.sup
+    if isinstance(sup, _proc.SocketSupervisor):
+        # 本层无杀权（生命周期属 agentd runner）；临时会话结构上不会是 socket 会话，
+        # 命中即归因异常 ⇒ 只摘登记、不杀，并把事实回给调用方。
+        return {"found": True, "killed": False, "pid": None,
+                "state": sup.status_doc().get("state"),
+                "error": "socket-mode session: lifecycle owned by agentd runner; "
+                         "not killed"}
+    r = sup.shutdown("delete_session")
+    return {"found": True, "killed": True, "pid": r.get("pid"),
+            "state": r.get("state")}
 
 
 def get_bridge(session_path):
@@ -513,7 +546,7 @@ def get_bridge(session_path):
     - agentd 登记会话（/agents/(task|bot)/<名>/session/session.jsonl）按 pid.json 判定
       （_proc.agentd_route）：活 socket → SocketSupervisor 透传直播（只连接不 spawn）；
       终态/缺席/暂停/跨机 → ValueError 拒绝 + 指引/等待提示，**永不 spawn**；
-    - 其余路径：仅当 _CWD_OVERRIDES 有登记（= 经 op=agent 解析的 .agent 声明者）才建桥拉起；
+    - 其余路径：仅当 _SPAWN_OVERRIDES 有登记（= 经 op=agent 解析的 .agent 声明者）才建桥拉起；
       未登记的裸 jsonl 直开 → ValueError（裸 jsonl 拉起废除：.agent 是 web 唯一拉起入口）。
     非法路径抛 ValueError（调用方回 400）。"""
     key = _proc.resolve_session_path(session_path)
@@ -530,14 +563,15 @@ def get_bridge(session_path):
                 b = Bridge(session_path, sock_path=sock_path,
                            participant_id=payload.get("participant_id"))
             else:
-                with _CWD_OVERRIDES_LOCK:
-                    cwd = _CWD_OVERRIDES.get(key)
-                if cwd is None:
+                with _SPAWN_OVERRIDES_LOCK:
+                    ov = _SPAWN_OVERRIDES.get(key)
+                if ov is None:
                     raise ValueError(
                         "裸 jsonl 拉起已废除（任务 ja0vr7）：直开该路径不再拉起宿主；"
                         "浏览器会话入口 = .agent 声明者（唯一），agentd 登记会话的拉起/"
                         "复活归 agentd 监督（本路径经 socket 透传）")
-                b = Bridge(session_path, cwd=cwd)
+                b = Bridge(session_path, cwd=ov.get("cwd"),
+                           profile=ov.get("profile"))
             _BRIDGES[key] = b
             b.sup.ensure_started()
             _ensure_idle_reaper()
