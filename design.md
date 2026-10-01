@@ -78,7 +78,7 @@ frag 显式映射表内的后缀，如 `.txt`、`.log`；注意 `.svg` 有映射
 
 - **cwd（缺省 = .agent 文件所在目录）**：会话进程的 pi 工作目录，决定加载哪个
   工作区的 AGENTS/扩展（如 `~/m/assistant/*.agent` → cwd=`~/m/assistant` → 命中
-  `assistant/.pi` 全套扩展与 `assistant/AGENTS.md`）。天然在 ~/m 服务树内，无逃逸问题。
+  该 cwd 的 `.pi` 全套扩展与 `AGENTS.md`）。天然在 ~/m 服务树内，无逃逸问题。
 - **`sessionDir`（可选）= 会话目录**：会话 jsonl 的落盘处，也是跨机可观测的
   bot 目录。缺省 = cwd 目录（会话文件落在 .agent 旁边，最朴素形态）。
 - **`cwd`（可选，票 7t0ufv）= 显式工作目录**：覆盖缺省的「.agent 所在目录」（~/ 展开，
