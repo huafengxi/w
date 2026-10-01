@@ -14,6 +14,19 @@
       // mode is fixed per route at load time (?v=iflow → flow, ?v=itab → tab,
       // ?v=iframe → flow compat alias); no runtime flow/tab switch.
       var ARGS = (function () { try { return $QUERY_ARGS || {}; } catch (e) { return {}; } })();
+      // 代理前缀感知（任务 z293ql；机制事实同 ext/sessiond/view/index.html 的 __PREFIX__）：
+      // 服务端注入 ARGS_JSON（含 src = 上游看到的站内路径，代理已剥前缀），浏览器
+      // location.pathname 带前缀 ⇒ PREFIX = pathname 去掉 src 尾巴的差。无前缀直开 ⇒ ""，
+      // 行为零变化。用途 = @dynamic 指令行的 fetch 目标必须带前缀才打到对的机器（itab 的
+      // 静态行自带 /dev/ 一类前缀 ⇒ 不需要它；getUrl() 的既有行为⛔ 不改）。
+      var PREFIX = (function () {
+         var src = '';
+         try { var a = $ARGS_JSON; if (a && typeof a.src === 'string') src = a.src; } catch (e) {}
+         if (!src && ARGS && typeof ARGS.src === 'string') src = ARGS.src;
+         var p = window.location.pathname;
+         return (src && p.length > src.length && p.slice(p.length - src.length) === src)
+            ? p.slice(0, p.length - src.length) : '';
+      })();
       var layoutMode = (function () {
          var m = ARGS.mode;
          if (!m) {  // fallback: derive from URL when QUERY_ARGS is not substituted/parseable
@@ -204,7 +217,73 @@
          // 任务 8a1xdz：tab 列表改异步拉取（启动时的一次性同步 XHR 同样冻结主线程）
          httpAsync(getUrl(), '', function (text) { buildApp(text.split('\n')); });
       }
+      // ---- @dynamic 指令行（任务 z293ql，设计稿 §4.3 方案 B；⛔ 不用 CmdStore）----
+      // 语法：`@dynamic <站内路径>` —— 该路径是一个吐 itab 格式行（`名字 URL [k=v …]`，
+      // 一行一枚）的端点；返回的行**就地 splice** 进列表（指令行的位置即展开位置）。
+      // 通用增强：任何 itab/iflow 页都可用，⛔ 不只服务 dash（非 dash 用例 = /w/demo/dyn.itab）。
+      // 语义边界（设计稿已裁「加载快照」）：只在 buildApp 时 fetch 一次，⛔ 无轮询、
+      // ⛔ 无定时刷新（新建/删除会话后刷新页面才反映）；端点失败/超时/吐出认不出的正文
+      // ⇒ 该指令展开零行（⛔ 不阻塞静态行渲染、⛔ 不重试）；返回行里的 @dynamic ⛔ 不递归展开。
+      var DYNAMIC_TAG = '@dynamic';
+      var DYNAMIC_TIMEOUT_MS = 10000;   // 有界等待（假活防线）：超时即当零行，绝不让列表无限期不渲染
+      function dynamicSpec(s) {
+         var parts = String(s).trim().split(/\s+/);
+         if (parts[0] !== DYNAMIC_TAG) return null;
+         return parts[1] ? PREFIX + parts[1] : null;
+      }
+      function plausibleRow(s) {
+         // 端点异常时会吐 HTML/JSON 正文 ⇒ 只认「≥2 段 ∧ 第 2 段是站内/绝对 URL」的行
+         var p = String(s).trim().split(/\s+/);
+         return p.length >= 2 && /^(\/|https?:\/\/)/.test(p[1]);
+      }
+      function fetchDynamicRows(path) {
+         return new Promise(function (resolve) {
+            var done = false;
+            var finish = function (rows) { if (!done) { done = true; resolve(rows); } };
+            var t = setTimeout(function () { finish([]); }, DYNAMIC_TIMEOUT_MS);
+            httpAsync(path, '', function (text) {
+               clearTimeout(t);
+               finish(String(text || '').split('\n').filter(function (x) {
+                  return x && !x.startsWith('#') && !dynamicSpec(x) && plausibleRow(x);
+               }));
+            }, function () { clearTimeout(t); finish([]); });
+         });
+      }
+      // specs = [{row: '<原始行>'} | {dynamic: '<带前缀路径>'}]；dynResults 与 dynamic 项同序。
+      function flattenSpecs(specs, dynResults) {
+         var rows = [], n = 0;
+         for (var i = 0; i < specs.length; i++) {
+            if (specs[i].dynamic) {
+               var got = (dynResults && dynResults[n++]) || [];
+               for (var j = 0; j < got.length; j++) rows.push(got[j]);
+            } else {
+               rows.push(specs[i].row);
+            }
+         }
+         return rows;
+      }
       function buildApp(links){
+         var specs = [], dyn = [];
+         for (var i in links) {
+            var s = links[i];
+            if (!s || s.startsWith('#')) continue;
+            var d = dynamicSpec(s);
+            if (d) { specs.push({dynamic: d}); dyn.push(specs.length - 1); continue; }
+            specs.push({row: s});
+         }
+         if (!dyn.length) {                 // 无 @dynamic ⇒ 全同步，行为与既有逐字一致
+            buildRows(flattenSpecs(specs, null));
+            finishLayout();
+            return;
+         }
+         Promise.all(dyn.map(function (k) { return fetchDynamicRows(specs[k].dynamic); }))
+            .then(function (results) {
+               buildRows(flattenSpecs(specs, results));
+               finishLayout();
+            });
+      }
+      // 逐行建 DOM（= 原 buildApp 的循环体，逐字搬移；@dynamic 展开出的行走同一条路）
+      function buildRows(links){
          var body = $("iframe-list");
          var checklist = $("check-list");
          var tabbar = $("tab-bar");
@@ -225,7 +304,12 @@
              // branch). Flow mode still loads every row up front.
              if (layoutMode != 'tab') setIframeSrc(item.active, link);
          }
-         // single-shot layout init by route mode (replaces the old runtime switch)
+      }
+      // single-shot layout init by route mode (replaces the old runtime switch)
+      //（= 原 buildApp 的收尾块，逐字搬移；checklist/tabbar 是同一批 DOM 节点）
+      function finishLayout(){
+         var checklist = $("check-list");
+         var tabbar = $("tab-bar");
          if (layoutMode == 'tab') {
              checklist.style.display = 'none';
              tabbar.style.display = 'block';

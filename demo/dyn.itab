@@ -1,0 +1,7 @@
+# @dynamic demo（任务 z293ql）：本页证明 frame ext 的 @dynamic 指令是**通用增强**、
+# ⛔ 不只服务 dash。指令行故意放在中间 ⇒ 展开出的两个 tab 落在 readme 与 dir 之间
+# （= 就地 splice，指令行的位置即展开位置）。端点 = /w/demo/dyn-rows.py。
+# 打开：/w/demo/dyn.itab（tab 模式）∨ /w/demo/dyn.itab?v=iflow（flow 模式）。
+readme /w/README.md
+@dynamic /w/demo/dyn-rows.py
+dir /w/demo/?v=dir
