@@ -463,8 +463,9 @@ timeout 清扫机制（0830-1104-eji4）：pi rpc-mode 的 dialog 超时是内�
 
 设计稿 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §4.2/§4.3 的服务端半面：
 按需创建「即用即弃」的交互会话（pi-web 式工作区），人格 = `command-center` profile
-（`form: interactive`）。消费方 = `dash/sessions.md`（工作区页）+ `dash/sessions.py`（表单与列表端点）
-+ `dash/session-tabs.py`（`@dynamic` 的 tab 行 rpc）。
+（`form: interactive`）。消费方 = `dash/sessions.md`（工作区页）+ `dash/sessions.py`（只读列表命令）
++ `dash/sessions-act.py`（新建/改名/删除的表单端点与命令行同款）+ `dash/session-tabs.py`
+（`@dynamic` 的 tab 行 rpc）。
 
 ### 12.1 落盘面与生命周期
 

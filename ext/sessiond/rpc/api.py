@@ -24,8 +24,9 @@
 #              cwd = 显式 `cwd` 字段（缺省 = .agent 文件所在目录），会话目录 = sessionDir（缺省 = .agent 所在目录，不存在自动创建）→
 #              返回会话 jsonl 站内路径（= <sessionDir>/<name>.jsonl）与 cwd/sessionDir。
 #              启动参数解析单点，host v1 仅保存/可见、不跨机拉起（见 design.md .agent 小节）。
-# 指挥中心临时会话（任务 z293ql，设计稿 §4.2；消费方 = dash/sessions.md 工作区页与
-# dash/sessions.py 端点）——声明者与 jsonl 都落宿主本地运行时区 `run/sessiond/`，
+# 指挥中心临时会话（任务 z293ql，设计稿 §4.2；消费方 = dash/sessions.md 工作区页、
+# dash/sessions.py 只读列表命令与 dash/sessions-act.py 变更端点）
+# ——声明者与 jsonl 都落宿主本地运行时区 `run/sessiond/`，
 # 生命周期全在本层（⛔ 不经 agentd，web 自有 Supervisor spawn）：
 #   op=create_session  新建：只收 `cwd`（相对 WS 的项目路径）→ 服务端枚举白名单成员校验
 #              + 既有逃逸校验 → 现场写 .agent（host/cwd/sessionDir/profile/name/createdAt
@@ -376,8 +377,9 @@ def _resolve_agent(store, session):
 
 # ---------------- 指挥中心临时会话（任务 z293ql，设计稿 §4.2/§4.3） ----------------
 # 实现面（枚举/校验/写盘/删除纪律）单点在 proc.py；进程面（杀 Supervisor）在
-# bridge.drop_session；本层只做参数面、编排与响应形状。消费方 = dash/sessions.py
-# （工作区页的表单与列表）与 dash/session-tabs.py（@dynamic 的 itab 行 rpc）。
+# bridge.drop_session；本层只做参数面、编排与响应形状。消费方 = dash/sessions-act.py
+# （工作区页的表单与命令行同款）、dash/sessions.py（只读列表，子进程直调 proc.py 而 ⛔ 不经
+# 本层）与 dash/session-tabs.py（@dynamic 的 itab 行 rpc）。
 
 # 服务端恒定/自动生成的字段：客户端传任一 ⇒ 400 显式拒绝（⛔ 不只是忽略）。
 # `command` 在列 = create_bot 时代的硬约束同族：spawn argv 的单点是
