@@ -463,9 +463,9 @@ timeout 清扫机制（0830-1104-eji4）：pi rpc-mode 的 dialog 超时是内�
 
 设计稿 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §4.2/§4.3 的服务端半面：
 按需创建「即用即弃」的交互会话（pi-web 式工作区），人格 = `command-center` profile
-（`form: interactive`）。消费方 = `dash/sessions.md`（工作区页）+ `dash/sessions.py`（只读列表命令）
-+ `dash/sessions-act.py`（新建/改名/删除的表单端点与命令行同款）+ `dash/session-tabs.py`
-（`@dynamic` 的 tab 行 rpc）。
+（`form: interactive`）。消费方 = `dash/sessions.md`（工作区页）+ `dash/sessions.py`（只读取数面：
+CLI `list` = 每节 widget 的表、HTTP `interp` = `@dynamic` 的 tab 行 rpc）+ `dash/session-new.html`
+（新建的静态视图，页内直调 op）+ `dash/sessions-act.py`（改名/删除的表单端点与命令行同款）。
 
 ### 12.1 落盘面与生命周期
 
@@ -495,7 +495,7 @@ timeout 清扫机制（0830-1104-eji4）：pi rpc-mode 的 dialog 超时是内�
 `ext/frame/view/iframe.html` 认 `@dynamic <站内路径>` 指令行：额外 fetch 该路径（一个吐 itab
 格式行的端点）→ 把返回行**就地 splice** 进 tab 列表（指令行的位置即展开位置）。这是 frame ext 的
 **通用增强**（任何 itab/iflow 页可用；非 dash 用例 = `/w/demo/dyn.itab` + `/w/demo/dyn-rows.py`），
-`dash/dash.itab` 只是它的第一个生产消费者（末行 `@dynamic /dash/session-tabs.py`）。
+`dash/dash.itab` 只是它的第一个生产消费者（末行 `@dynamic /dash/sessions.py`）。
 语义边界 = **加载快照**（frame 加载时 fetch 一次；新建/删除后刷新页面才反映，⛔ 无轮询、⛔ 无自动刷新）；
 端点失败 ⇒ 即刻展开零行；超时上界 10s ⇒ 期间**整表（含静态行）延迟渲染**（静态行与动态行
 同批渲染）。tab bar **纯展示**（⛔ 不放新建按钮：

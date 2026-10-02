@@ -377,9 +377,12 @@ def _resolve_agent(store, session):
 
 # ---------------- 指挥中心临时会话（任务 z293ql，设计稿 §4.2/§4.3） ----------------
 # 实现面（枚举/校验/写盘/删除纪律）单点在 proc.py；进程面（杀 Supervisor）在
-# bridge.drop_session；本层只做参数面、编排与响应形状。消费方 = dash/sessions-act.py
-# （工作区页的表单与命令行同款）、dash/sessions.py（只读列表，子进程直调 proc.py 而 ⛔ 不经
-# 本层）与 dash/session-tabs.py（@dynamic 的 itab 行 rpc）。
+# bridge.drop_session；本层只做参数面、编排与响应形状。消费方 = dash 侧三枚（各文件里
+# **HTTP 面经本层、CLI 面子进程直调 proc.py** —— 子进程里 run_script 不可用）：
+#   dash/sessions.py       CLI `list` = 每节 widget 的表（⛔ 不经本层）；HTTP interp = 本层
+#                          `op=session_tabs` ⇒ dash/dash.itab 末行 @dynamic 的 itab 行 rpc
+#   dash/sessions-act.py   HTTP `?act=rename|delete` = 本层 op；CLI `projects`/`new` 直调 proc.py
+#   dash/session-new.html  静态视图（新建），页内 fetch 本层 `op=list_sessions`/`op=create_session`
 
 # 服务端恒定/自动生成的字段：客户端传任一 ⇒ 400 显式拒绝（⛔ 不只是忽略）。
 # `command` 在列 = create_bot 时代的硬约束同族：spawn argv 的单点是
