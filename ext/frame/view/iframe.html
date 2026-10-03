@@ -5,9 +5,18 @@
     <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
     <style type="text/css">
     .checkbox { float: left; }
-    #tab-bar { display: none; }
-    #tab-bar .tab { display: inline-block; padding: 1px 6px; margin-right: 2px; border: none; font-size: 12px; color: #666; cursor: pointer; }
+    /* Chrome-like tab strip：恒一行 —— tab 等分宽度（上限 max-width，长名省略号 +
+       title 悬停全名），空间不够时等比缩到 min-width，再不够则 tab 条内部横向滚动
+       （滚动条隐藏，触屏/滚轮可滑）。外层 #tab-bar 只住「滚动条 + 右侧固定控件」的
+       分栏 ⇒ 全屏钮不随 tab 滚走。#tab-bar 的 display 由 finishLayout() 置 'flex'
+       （flow 模式恒 none）。 */
+    #tab-bar { display: none; align-items: stretch; }
+    #tab-scroll { display: flex; flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+    #tab-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+    #tab-bar .tab { flex: 1 1 0; min-width: 4em; max-width: 240px; padding: 1px 6px; margin-right: 2px; border: none; font-size: 12px; color: #666; cursor: pointer; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #tab-bar .tab.selected { background: #dce6f2; color: #111; font-weight: bold; }
+    /* 全屏钮：不参与等分/收缩，恒占最右 */
+    #tab-bar #fs-toggle { flex: 0 0 auto; min-width: 0; max-width: none; margin-right: 0; }
     </style>
     <script type="application/javascript" src="/w/view/my.js"></script>
     <script type="application/javascript">
@@ -196,6 +205,7 @@
       function appendTab(tabbar, name, idx) {
              var tab = document.createElement('div');
              tab.className = 'tab';
+             tab.title = name;   // 省略号截断后的全名（Chrome 同款悬停提示）
              tab.appendChild(document.createTextNode(name));
              tab.onclick = function () { selectTab(idx); };
              tabbar.appendChild(tab);
@@ -288,7 +298,7 @@
       function buildRows(links){
          var body = $("iframe-list");
          var checklist = $("check-list");
-         var tabbar = $("tab-bar");
+         var tabbar = $("tab-scroll");
          for(var i in links) {
              var s = links[i];
              if (!s || s.startsWith('#')) continue;
@@ -311,22 +321,21 @@
       //（= 原 buildApp 的收尾块，逐字搬移；checklist/tabbar 是同一批 DOM 节点）
       function finishLayout(){
          var checklist = $("check-list");
-         var tabbar = $("tab-bar");
+         var tabbar = $("tab-bar");   // 外层栏（tab 条本体在 #tab-scroll）
          if (layoutMode == 'tab') {
              checklist.style.display = 'none';
-             tabbar.style.display = 'block';
+             tabbar.style.display = 'flex';
              // tab mode: viewport-fill layout — no whole-page scrolling;
              // scrolling happens only inside the embedded page.
              document.body.style.overflow = 'hidden';
-             // fullscreen button floats right; insert before tabs so inline tabs
-             // flow into the remaining left space
+             // fullscreen button: 挂在滚动条外、作为外层栏的末项 ⇒ 恒占最右且不随 tab 滚走
              var fsBtn = document.createElement('div');
              fsBtn.id = 'fs-toggle';
              fsBtn.className = 'tab';
-             fsBtn.style.cssFloat = 'right';
+             fsBtn.title = 'fullscreen';
              fsBtn.textContent = '⛶';
              fsBtn.onclick = toggleFullscreen;
-             tabbar.insertBefore(fsBtn, tabbar.firstChild);
+             tabbar.appendChild(fsBtn);
              selectTab(currentTab >= 0 ? currentTab : 0);
          }
       }
@@ -354,6 +363,8 @@
              var it = items[j];
              if (j == idx) {
                  it.tab.className = 'tab selected';
+                 // tab 多于一条能容纳时整条可横向滚动 ⇒ 把选中项滚进可视区（Chrome 同款）
+                 try { it.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
                  if (!iframeLoaded(it)) {
                      setIframeSrc(it.active, it.link);  // lazy load; onload sets height
                  } else if (layoutMode == 'tab') {
@@ -431,7 +442,7 @@
     </script>
   </head>
   <body onload="initApp()" style="margin:0">
-   <div id="tab-bar"></div>
+   <div id="tab-bar"><div id="tab-scroll"></div></div>
    <div id="check-list"></div>
    <div id="iframe-list">
   </body>
