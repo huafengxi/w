@@ -114,7 +114,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 ### 去保活语义（任务 ja0vr7，设计 du44uj；resident 机制已退役）
 
-定位收敛：sessiond = 浏览器聊天载体/观测层（懒拉起 + 在场订阅期间监督）；常驻/自愈语义统一归 agentd（生产的 dispatcher position = 稳定信箱 `queue/dispatcher` + 进程型 watcher bot `bot/dispatcher-watcher` + 一次性 handler，⛔ 不是长寿命会话；见 §10 透传链路与 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §2/§3）。原 resident 钩子（`resident.py` + `core/wsgi.py` ready 钩子）已删除。
+定位收敛：sessiond = 浏览器聊天载体/观测层（懒拉起 + 在场订阅期间监督）；常驻/自愈语义统一归 agentd（生产的 dispatcher position = 一枚 `queue/` 族参与方 `queue/dispatcher`（稳定信箱与 watcher 进程**同目录**）+ 一次性 handler，⛔ 不是长寿命会话；见 §10 透传链路与 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §2/§3）。原 resident 钩子（`resident.py` + `core/wsgi.py` ready 钩子）已删除。
 
 | 项 | 语义 |
 |---|---|
@@ -378,7 +378,7 @@ bot 登记 = 命令行两步：`agentd/agentctl.py --root <工作区根> bot reg
 | spec.host ≠ 本机 | 拒绝 400 | 「请通过 <host> 的服务访问」（同 host_guard 口径） |
 | 身份一致但 sock 不可连 | 拒绝 400 | 「观测通道未就绪，稍后重试」（启动窗口/封装异常降级提示） |
 
-agentd 监督的常驻载体（如各 position 的 watcher 进程型 bot `bot/dispatcher-watcher`，spec.command 带 `AGENTD_RESIDENT=1` 前缀，见 `agentd/agent-file-protocol.md`）与任务会话同表同链路——该前缀是「**agentd 监督的会话**」标记（全局 `profile-loader.ts` 的零行为规则用它判是否装配人格），⛔ **不是形态轴**：会话形态住 profile 清单的 `form` 字段（三档 `task|resident|interactive`）；浏览器入口即直播窗（进程缺席时显示等待提示，不代拉）。
+agentd 监督的常驻载体（如各 position 的 watcher 进程 = `queue/<position>` 参与方，spec.command 带 `AGENTD_RESIDENT=1` 前缀，见 `agentd/agent-file-protocol.md`）与任务会话同表同链路——该前缀是「**agentd 监督的会话**」标记（全局 `profile-loader.ts` 的零行为规则用它判是否装配人格），⛔ **不是形态轴**：会话形态住 profile 清单的 `form` 字段（三档 `task|resident|interactive`）；浏览器入口即直播窗（进程缺席时显示等待提示，不代拉）。
 
 ### SocketSupervisor（`proc.py`，独立类，风险圈养）
 
