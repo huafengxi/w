@@ -6,7 +6,7 @@
 `名字 URL [k=v …]` 格式的纯文本（一行一枚，`#` 起首的行与认不出的行由前端过滤）。
 
 配套页面 = [/w/demo/dyn.itab](/w/demo/dyn.itab)：指令行放在**中间**，用来证明「就地
-splice」而不是「一律追加到末尾」。生产用例 = `/dash/sessions.py` 的 HTTP interp 面（活跃指挥
+splice」而不是「一律追加到末尾」。生产用例 = `/dash/session-ctl.py` 的 HTTP interp 面（活跃指挥
 中心会话，数据源 = `ext/sessiond/rpc/api.py` 的 `op=session_tabs`；同一文件的 CLI 面是工作区页
 每节 widget 的只读列表）。
 
