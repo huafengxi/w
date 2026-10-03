@@ -112,10 +112,11 @@ agent 名 = 文件名。
   聊天页可见；不做跨机拉起。
 - **旧 `workdir` 字段（kcywpy v1）不再识别**：读到忽略并记日志提示，不报错。
 
-**`.agent` 的第二种来源 = web 现场自建（任务 z293ql，设计稿 §4.2）**：`op=create_session`
-按用户在会话工作区页选的项目目录，现场写一枚 `run/sessiond/<时间戳-uuid>.agent`
-（`cwd`=所选项目、`sessionDir`=`run/sessiond/`、`host`=本机规范名、`profile`=`command-center`、
-`name`=文件名；⛔ 无 `command` 键）→ 前端转 `?v=chat` 即聊天窗。与手写 `.agent` 的差别只有
+**`.agent` 的第二种来源 = web 现场自建（任务 z293ql，设计稿 §4.2）**：会话工作区页的手动 widget
+直调 `dash/session-ctl.py new --profile <名>`（⛔ 不是 HTTP op），现场写一枚
+`run/sessiond/<时间戳-uuid>.agent`（`profile`=指名的 interactive 清单、`cwd`=该清单的 `cwd` 字段
+经项目白名单校验、`sessionDir`=`run/sessiond/`、`host`=本机规范名、`name`=文件名；⛔ 无 `command`
+键）→ widget 输出里的 `?v=chat` 链接即聊天窗。与手写 `.agent` 的差别只有
 「谁写的」与「落宿主本地运行时区（ephemeral：`run/` 被清即丢、⛔ 不进 agents-sync）」；
 链路完全同族（`.agent` 仍是 web 唯一拉起入口）。枚举/校验/删除面纪律 =
 `ext/sessiond/ARCHITECTURE.md` §12（单点，不复述）。

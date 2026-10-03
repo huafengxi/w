@@ -8,8 +8,9 @@
      既有逃逸校验**双保险（正控 ≥1 / 反控 ≥5；清单写错 = 拒建、⛔ 不回落）；
   ③ profile 白名单（形态 + 清单在场 + **只放行 form: interactive**）、可选集枚举、
      sessionDir/name 服务端恒定或自动生成；
-  ④ ⛔ 无 `command` 键（客户端传 command/cwd/sessionDir/name/host ⇒ api 层 400；
-     rename/delete 另拒 profile）；
+  ④ ⛔ 无 `command` 键（rename/delete 两枚 op 只接 `session`/`title`/`confirm`；客户端传
+     command/cwd/profile/sessionDir/name/host ⇒ api 层 400）；**新建面不经 op**（页面手动
+     widget 直调 CLI → `proc.create_cc_session`）；
   ⑤ delete 的删除面：realpath 前缀断言（拒符号链接逃逸）+ root 身份断言 + 删前 stat
      三要素证据 + 删后复核；rename 的标题校验与 override 落点（.agent 的 title 字段）。
 
@@ -386,64 +387,49 @@ def case8_delete(ws, outside, created, second):
 # ---------------------------------------------------------------- ⑨ api 层（in-process）
 
 def case9_api(ws, outside):
-    """op 层：客户端传服务端恒定字段 ⇒ 400；正常建/列/改名/删各一次（in-process，
-    ⛔ 不打现网 8080）。"""
+    """op 层：**新建面不经 op**（页面手动 widget 直调 CLI → proc）；客户端传服务端恒定
+    字段 ⇒ 400；列/改名/删各一次（in-process，⛔ 不打现网 8080）。"""
     store = FakeStore(ws)
 
     def call(**kw):
         meta, body = _api.interp(store, **kw)
         return meta.get("http_status", "200 OK"), json.loads(body)
 
+    # 新建 = CLI 面（零 HTTP 参数面；校验全在 proc）
+    created = _proc.create_cc_session("ccw")
+    name = created["name"]
+    assert created["profile"] == "ccw" and created["host"] == "test-host", created
+    assert created["cwd"] == os.path.realpath(os.path.join(ws, "w")), created
+    assert created["agent_site"] == "/run/sessiond/%s.agent" % name, created
+    print("case9 OK: 新建走 CLI 面（proc.create_cc_session profile=ccw → %s，cwd 由清单声明 = %s）"
+          % (name, created["cwd"]))
+
+    # 退役面钉桩：create_session 不在 op 集内 ⇒ 落到既有 session 参数门的 400
+    #（⛔ 不得静默可用；口径同下面 op=nope 那一段）
     st, doc = call(op="create_session", profile="ccw")
-    assert st == "200 OK" and doc["ok"], (st, doc)
-    name = doc["name"]
-    assert doc["profile"] == "ccw" and doc["host"] == "test-host", doc
-    assert doc["cwd"] == os.path.realpath(os.path.join(ws, "w")), doc
-    assert doc["agent"].endswith("/run/sessiond/%s.agent" % name), doc
-    print("case9 OK: op=create_session profile=ccw → %s（cwd 由清单声明 = %s）"
-          % (name, doc["cwd"]))
+    assert st.startswith("400") and doc["ok"] is False, (st, doc)
+    print("   reject op=create_session（新建面不经 HTTP）→ %s %s" % (st, doc["error"]))
 
-    for kw, label in (({"op": "create_session", "profile": "ccw",
-                        "command": "rm -rf /"}, "command"),
-                      ({"op": "create_session", "profile": "ccw", "cwd": "lore"},
-                       "cwd"),
-                      ({"op": "create_session", "profile": "ccw", "sessionDir": "/tmp"},
-                       "sessionDir"),
-                      ({"op": "create_session", "profile": "ccw", "name": "pwn"}, "name"),
-                      ({"op": "create_session", "profile": "ccw", "host": "mac"}, "host")):
-        st, doc = call(**kw)
-        assert st.startswith("400"), (label, st, doc)
-        assert doc["ok"] is False
-        print("   reject 客户端传 %-11s → %s %s" % (label, st, doc["error"]))
-
-    st, doc = call(op="create_session", profile="ccenv")
-    assert st.startswith("400") and "whitelist" in doc["error"], (st, doc)
-    print("   reject 清单声明 cwd='env'（根集内非项目）→ %s %s" % (st, doc["error"]))
-    st, doc = call(op="create_session", profile="executor")
-    assert st.startswith("400") and "interactive" in doc["error"], (st, doc)
-    print("   reject profile='executor'（form: task）→ %s %s" % (st, doc["error"]))
-    st, doc = call(op="create_session")
-    assert st.startswith("400") and "profile" in doc["error"], (st, doc)
-    print("   reject 缺 profile → %s %s" % (st, doc["error"]))
+    for field, val in (("command", "rm -rf /"), ("cwd", "lore"), ("profile", "ccw"),
+                       ("sessionDir", "/tmp"), ("name", "pwn"), ("host", "mac")):
+        for op in ("rename_session", "delete_session"):
+            st, doc = call(op=op, session="/run/sessiond/%s.jsonl" % name,
+                           title="x", confirm="1", **{field: val})
+            assert st.startswith("400") and field in doc["error"], (op, field, st, doc)
+            assert doc["ok"] is False
+        print("   reject 客户端传 %-11s（rename/delete 两枚 op 各一次）→ %s %s"
+              % (field, st, doc["error"]))
 
     st, doc = call(op="list_sessions")
     assert st == "200 OK" and doc["ok"], (st, doc)
     assert any(s["name"] == name for s in doc["sessions"]), doc
-    pnames = [p["name"] for p in doc["profiles"]]
-    assert "ccw" in pnames and "command-center" in pnames, doc["profiles"]
-    assert "executor" not in pnames and "dispatcher" not in pnames, pnames
-    assert "projects" not in doc, sorted(doc)
-    print("case9 OK: op=list_sessions → %d 枚会话 / %d 枚 interactive profile（%s）"
-          % (len(doc["sessions"]), len(doc["profiles"]), ",".join(pnames)))
+    assert "projects" not in doc and "profiles" not in doc, sorted(doc)
+    print("case9 OK: op=list_sessions → %d 枚会话（响应面 = %s）"
+          % (len(doc["sessions"]), ",".join(sorted(doc))))
 
     st, doc = call(op="rename_session", session="/run/sessiond/%s.jsonl" % name,
                    title="改名后的标题")
     assert st == "200 OK" and doc["title"] == "改名后的标题", (st, doc)
-    for op in ("rename_session", "delete_session"):
-        st, doc = call(op=op, session="/run/sessiond/%s.jsonl" % name,
-                       title="x", confirm="1", profile="ccw")
-        assert st.startswith("400") and "profile" in doc["error"], (op, st, doc)
-        print("   reject %s 带 profile → %s %s" % (op, st, doc["error"]))
     st, doc = call(op="session_tabs")
     assert st == "200 OK" and doc["ok"] and doc["prefix"] == "test-host", (st, doc)
     assert len(doc["rows"]) == 1 and doc["rows"][0]["title"] == "改名后的标题", doc

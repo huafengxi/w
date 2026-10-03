@@ -28,12 +28,11 @@
 # dash/session-ctl.py 的只读列表命令 + 变更端点）
 # ——声明者与 jsonl 都落宿主本地运行时区 `run/sessiond/`，
 # 生命周期全在本层（⛔ 不经 agentd，web 自有 Supervisor spawn）：
-#   op=create_session  新建：只收 `profile`（必须命中 `form: interactive` 的清单）→ 服务端
-#              按该清单的 `cwd` 字段定工作目录（白名单成员校验 + 既有逃逸校验）→ 现场写
-#              .agent（host/cwd/sessionDir/name/createdAt 全部服务端恒定、自动生成 ∨ 由清单
-#              派生）→ 返回 {name, profile, cwd, agent, session, chatUrl}
+#   ⚠ **新建不经本层**（本层零新建 op）：它是页面手动 widget 直调的 CLI
+#              （`dash/session-ctl.py new --profile <名>` → `proc.create_cc_session`；
+#              cwd 由该 profile 清单的 `cwd` 字段声明）⇒ 零 HTTP 参数面，收口全在 proc 的校验。
 #   op=list_sessions   只读：本机 run/sessiond/*.agent 全量（自动标题/最近活动/运行态/
-#              项目分组）+ interactive profile 清单（新建面的可选集）
+#              项目分组）——消费方 = 变更端点的表单/确认页取会话现值
 #   op=rename_session  改标题 override（落 .agent 的 title 字段；空标题 = 清除回落自动标题）
 #   op=delete_session  删除（需 confirm=1，轻确认一次、⛔ 不做 nonce，设计稿已裁）：
 #              杀 Supervisor 进程 + rm .agent + rm jsonl（realpath 前缀断言 + 删前身份证据 + 删后复核）
@@ -193,8 +192,8 @@ def _agentd_control_proxy(b, action, reason):
 #     票 7t0ufv）；缺省回退 = .agent 文件所在目录。cwd 决定 pi 加载哪个工作区的**项目级**
 #     资源（该 cwd 的 AGENTS.md 与 <cwd>/.pi/extensions）；⚠ agentd 的工具面**不靠 cwd**——
 #     该扩展已迁全局装载面 pi-core/agent/extensions/agentd/（自动发现、cwd 无关），可用性由
-#     profile 的工具白名单 gate（现行例子 = run/sessiond/<name>.agent 的 cwd 指向某个项目目录，
-#     见 op=create_session 与 ARCHITECTURE.md §12）。
+#     profile 的工具白名单 gate（现行例子 = run/sessiond/<name>.agent 的 cwd 由 profile 清单声明，
+#     见 proc.profile_cwd 与 ARCHITECTURE.md §12）。
 #   - sessionDir = 会话目录（会话 jsonl 落盘处，宿主本地运行时状态，*.jsonl 全局 gitignore；
 #     经 2026-08-31 票 7t0ufv 拍板不再共享参与方同步目录）；缺省 = .agent 文件所在目录。
 #   - 会话 jsonl = <sessionDir>/<agent名>.jsonl（每 agent 一会话、可重连续聊，如
@@ -378,33 +377,31 @@ def _resolve_agent(store, session):
 
 # ---------------- 指挥中心临时会话（任务 z293ql，设计稿 §4.2/§4.3） ----------------
 # 实现面（枚举/校验/写盘/删除纪律）单点在 proc.py；进程面（杀 Supervisor）在
-# bridge.drop_session；本层只做参数面、编排与响应形状。消费方 = dash 侧两枚（各文件里
-# **HTTP 面经本层、CLI 面子进程直调 proc.py** —— 子进程里 run_script 不可用）：
-#   dash/session-ctl.py    CLI `list` = 每节 widget 的表（⛔ 不经本层）；HTTP interp 不带 `act` =
-#                          本层 `op=session_tabs` ⇒ dash/dash.itab 末行 @dynamic 的 itab 行 rpc；
-#                          HTTP `?act=rename|delete` = 本层 op；CLI `projects`/`new` 直调 proc.py
-#   dash/session-new.html  静态视图（新建），页内 fetch 本层 `op=list_sessions`/`op=create_session`
+# bridge.drop_session；本层只做参数面、编排与响应形状。消费方 = `dash/session-ctl.py` 一枚
+# （该文件里 **HTTP 面经本层、CLI 面子进程直调 proc.py** —— 子进程里 run_script 不可用）：
+#   CLI `list` = 每节 widget 的表（⛔ 不经本层）；HTTP interp 不带 `act` = 本层 `op=session_tabs`
+#   ⇒ dash/dash.itab 末行 @dynamic 的 itab 行 rpc；HTTP `?act=rename|delete` = 本层 op；
+#   CLI `profiles`/`new` = 页面手动 widget 与命令行同款，直调 proc.py（⛔ 不经本层）。
 
 # 服务端恒定/自动生成/由 profile 清单派生的字段：客户端传任一 ⇒ 400 显式拒绝（⛔ 不只是忽略）。
+# 两枚变更 op 只控 `session`/`title`/`confirm`：`profile` 在列 = 人格只在创建时定（而创建不经本层）；
+# `cwd` 在列 = 它由 profile 清单的 `cwd` 字段声明（proc.profile_cwd）；
 # `command` 在列 = create_bot 时代的硬约束同族：spawn argv 的单点是
 # proc.Supervisor._spawn，声明者不可控（故 .agent 字段集里根本没有这个键）。
-# `cwd` 在列 = 它由 profile 清单的 `cwd` 字段声明（proc.profile_cwd）⇒ 客户端控 profile、
-# ⛔ 控不到工作目录。
-_SERVER_FIXED_FIELDS = ("command", "cwd", "sessionDir", "name", "host")
-# 变更面（rename/delete）另拒 `profile`：那两枚 op 不改人格（人格只在创建时定）。
-_MUTATE_FIXED_FIELDS = ("profile",)
+_SERVER_FIXED_FIELDS = ("command", "cwd", "profile", "sessionDir", "name", "host")
 
 
-def _fixed_field_rejection(kw, extra=()):
+def _fixed_field_rejection(kw):
     """客户端传了服务端恒定字段 → 400 响应元组；都没传 → None。"""
-    hit = sorted(k for k in tuple(_SERVER_FIXED_FIELDS) + tuple(extra)
+    hit = sorted(k for k in _SERVER_FIXED_FIELDS
                  if kw.get(k) not in (None, ""))
     if not hit:
         return None
     return _j({"ok": False,
                "error": "field(s) %s are server-side fixed, auto-generated or derived "
-                        "from the profile manifest for command-center sessions; the "
-                        "client controls only 'profile' (at creation)"
+                        "from the profile manifest for command-center sessions; these "
+                        "ops take only 'session'/'title'/'confirm' (session creation is "
+                        "not an HTTP surface: dash/session-ctl.py new --profile <名>)"
                         % ", ".join(hit)},
               '400 Bad Request')
 
@@ -444,30 +441,6 @@ def _chat_url(agent_site, host):
     return "/%s%s?v=chat" % (host, agent_site) if host and agent_site else ""
 
 
-def _create_session(kw):
-    rej = _fixed_field_rejection(kw)
-    if rej:
-        return rej
-    prof = kw.get("profile")
-    if not (isinstance(prof, str) and prof.strip()):
-        return _j({"ok": False,
-                   "error": "missing 'profile' (the client's only controllable field: "
-                            "an interactive profile name = bots/profiles/<名>.json 里声明 "
-                            "form: interactive 的那枚；cwd 由该清单声明)"},
-                  '400 Bad Request')
-    try:
-        doc = _proc.create_cc_session(prof)
-    except ValueError as e:
-        return _j({"ok": False, "error": str(e)}, '400 Bad Request')
-    host = doc["host"]
-    return _j({"ok": True, "created": True, "name": doc["name"],
-               "profile": doc["profile"], "cwd": doc["cwd"], "host": host,
-               "sessionDir": _os.path.realpath(_proc.sessions_dir()),
-               "agent": doc["agent_site"], "session": doc["session_site"],
-               "chatUrl": _chat_url(doc["agent_site"], host),
-               "ephemeral": "run/ 是宿主本地运行时区：被清即丢会话（设计稿已接受）"})
-
-
 def _list_sessions():
     host = _prefix()
     sessions = []
@@ -480,14 +453,10 @@ def _list_sessions():
             "agent": r["agent_site"], "session": r["session_site"],
             "chatUrl": _chat_url(r["agent_site"], host),
         })
-    profiles = [dict(p, label=p["name"],
-                     cwdLabel=("~/m（工作区根）" if p["cwd"] == "."
-                               else "~/m/" + p["cwd"]))
-                for p in _proc.list_interactive_profiles()]
     return _j({"ok": True, "host": host, "prefix": host or "",
                "sessionsDir": _proc.site_path_of(
                    _os.path.realpath(_proc.sessions_dir())),
-               "sessions": sessions, "profiles": profiles})
+               "sessions": sessions})
 
 
 def _session_tabs():
@@ -508,7 +477,7 @@ def _session_tabs():
 
 
 def _rename_session(session, kw):
-    rej = _fixed_field_rejection(kw, _MUTATE_FIXED_FIELDS)
+    rej = _fixed_field_rejection(kw)
     if rej:
         return rej
     try:
@@ -519,7 +488,7 @@ def _rename_session(session, kw):
 
 
 def _delete_session(session, kw):
-    rej = _fixed_field_rejection(kw, _MUTATE_FIXED_FIELDS)
+    rej = _fixed_field_rejection(kw)
     if rej:
         return rej
     if str(kw.get("confirm") or "").strip() != "1":
@@ -559,14 +528,12 @@ def interp(store, op='', session='', cmd='', **kw):
         # .agent 规格解析（任务 kcywpy）：不走会话桥接——会话路径由规格文件推导，
         # 前端拿推导结果再走正常 attach。
         return _resolve_agent(store, session)
-    if op in ('create_session', 'list_sessions', 'rename_session',
+    if op in ('list_sessions', 'rename_session',
               'delete_session', 'session_tabs'):
-        # 指挥中心临时会话（任务 z293ql）：五个 op 都**不走** _bridge_or_err —— 建桥会
-        # 为「还没打开过 ∨ 即将被删」的会话拉起进程（create/list/session_tabs 无需会话，
+        # 指挥中心临时会话（任务 z293ql）：四个 op 都**不走** _bridge_or_err —— 建桥会
+        # 为「还没打开过 ∨ 即将被删」的会话拉起进程（list/session_tabs 无需会话，
         # rename/delete 按 session 参数定位 run/sessiond/ 下那一枚；杀进程走
         # bridge.drop_session 的「绝不建桥」查表）。
-        if op == 'create_session':
-            return _create_session(kw)
         if op == 'list_sessions':
             return _list_sessions()
         if op == 'session_tabs':
