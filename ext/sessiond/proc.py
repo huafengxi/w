@@ -416,12 +416,15 @@ def pi_binary():
 #   - `run/` 已被主仓 .gitignore 覆盖 ∧ 不进 agents-sync ⇒ **ephemeral**：`run/` 被清 =
 #     临时会话丢失（设计稿已接受），删除 = 直接 rm（⛔ 不走 `agents-sync/gc.py` 铁律，
 #     那条的射程是 `agents/**` 的参与方目录）；
-#   - 字段集全部**服务端恒定 ∨ 自动生成**，客户端只控 `cwd`（且必须命中服务端现算的
-#     项目白名单）；⛔ 无 `command` 键（spawn argv 单点在 `Supervisor._spawn`）。
+#   - 字段集全部**服务端恒定 ∨ 自动生成**，客户端只控 `profile`（且必须是 `form: interactive`
+#     的清单名）；`cwd` 由该清单的 `cwd` 字段声明、经项目白名单校验（⛔ 客户端不控）；
+#     ⛔ 无 `command` 键（spawn argv 单点在 `Supervisor._spawn`）。
 # 进程面（杀 Supervisor）归 `bridge.drop_session`；本层只管文件系统面与校验。
 
 SESSIONS_SUBDIR = ("run", "sessiond")   # 宿主本地运行时区（⛔ 不入 git / 不同步）
-CC_PROFILE = "command-center"           # 服务端恒定（客户端不控；设计稿 §7.3 的 interactive 档）
+CC_PROFILE = "command-center"           # `create_cc_session` 的缺省 profile（客户端可指名，
+                                        # 但只放行 form: interactive 的清单 = validate_profile）
+PROFILE_CWD_DEFAULT = "."               # 清单未声明 `cwd` 时的缺省（= 工作区根）
 SESSION_NAME_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 PROFILE_NAME_OK = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 TITLE_MAX = 80              # rename 的标题上限（字符）
@@ -518,7 +521,15 @@ def validate_profile(name):
     ③ 该清单声明 **`form: interactive`** —— 只放行交互档：给交互会话配 `form: task`
     的清单会得到「无基线能力 + `ask_user` 被排除」的**静默形态**（结构上可达、零 WARN），
     配 `form: resident` 则拿不到 interactive 档的 ask_user 保留 ⇒ 两类都是配错形态即静默失能。
-    非法抛 ValueError（调用方回 400）。返回归一后的名字。"""
+    非法抛 ValueError（调用方回 400）。返回归一后的名字（判据本体 = `profile_spec`）。"""
+    return profile_spec(name)[0]
+
+
+def profile_spec(name):
+    """profile 名 → (归一名, 清单 doc)。三道校验的实现单点（`validate_profile` 与
+    `list_interactive_profiles` 共用；读盘也只在此一处）：① 名字形态（小写字母数字与
+    连字符）；② `bots/profiles/<名>.json` 在场且是合法 JSON 对象；③ **`form: interactive`**
+    （理由见 `validate_profile`）。非法抛 ValueError（调用方回 400）。"""
     if not isinstance(name, str) or not PROFILE_NAME_OK.match(name.strip()):
         raise ValueError("profile name invalid: %r (expect ^[a-z0-9][a-z0-9-]{0,63}$)"
                          % (name,))
@@ -531,11 +542,65 @@ def validate_profile(name):
         raise ValueError("profile not found: %s (no %s)" % (n, manifest))
     except ValueError:
         raise ValueError("profile manifest is not valid JSON: %s" % manifest)
-    form = doc.get("form") if isinstance(doc, dict) else None
+    if not isinstance(doc, dict):
+        raise ValueError("profile manifest is not a JSON object: %s" % manifest)
+    form = doc.get("form")
     if form != "interactive":
         raise ValueError("profile %s: form=%r ≠ interactive（交互会话只放行声明 "
                          "form: interactive 的清单；task/resident/缺 form 一律拒）" % (n, form))
-    return n
+    return n, doc
+
+
+def profile_cwd(name, doc=None):
+    """profile 清单声明的**会话工作目录** → 项目白名单校验后的 realpath。
+    `cwd` 是 profile 级运行环境字段（口径 = `bots/README.md`「人格资产」节）：新建交互会话时
+    客户端只控 profile、cwd 从该清单读 ⇒ 客户端结构上控不到工作目录，而声明值仍走
+    `resolve_project_cwd` 的白名单成员校验 + 逃逸校验（清单写错 = 拒建，⛔ 不回落）。"""
+    if doc is None:
+        name, doc = profile_spec(name)
+    raw = doc.get("cwd", PROFILE_CWD_DEFAULT)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        raw = PROFILE_CWD_DEFAULT
+    try:
+        return resolve_project_cwd(raw)
+    except ValueError as e:
+        raise ValueError("profile %s declares an unusable cwd: %s" % (name, e))
+
+
+def list_interactive_profiles():
+    """枚举 `form: interactive` 的 profile 清单 = **新建面的可选集**（页面链接与 CLI 的
+    现值面；判据与 `profile_spec` 同源，⛔ 不另写一份）。返回
+    `[{name, summary, cwd}]`（`cwd` = 清单声明原文，缺省 `"."`），按名排序；
+    坏文件宽容跳过（记 WARN，⛔ 不整页失败）。只扫一层、零递归成本。"""
+    pdir = os.path.join(WS, "bots", "profiles")
+    out = []
+    try:
+        names = sorted(fn for fn in os.listdir(pdir) if fn.endswith(".json"))
+    except OSError:
+        return out
+    for fn in names:
+        path = os.path.join(pdir, fn)
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, ValueError) as e:
+            log.warning("list_interactive_profiles: skip unreadable/invalid %s: %s",
+                        path, e)
+            continue
+        if not isinstance(doc, dict) or doc.get("form") != "interactive":
+            continue
+        name = doc.get("name") or fn[:-len(".json")]
+        if not isinstance(name, str) or not PROFILE_NAME_OK.match(name.strip()):
+            log.warning("list_interactive_profiles: skip %s (invalid name %r)",
+                        path, name)
+            continue
+        cwd = doc.get("cwd", PROFILE_CWD_DEFAULT)
+        out.append({"name": name.strip(),
+                    "summary": (doc.get("summary") or "") if isinstance(
+                        doc.get("summary"), str) else "",
+                    "cwd": cwd if isinstance(cwd, str) and cwd.strip()
+                    else PROFILE_CWD_DEFAULT})
+    return out
 
 
 def new_session_name():
@@ -543,20 +608,21 @@ def new_session_name():
     return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
 
 
-def create_cc_session(cwd_rel, profile=CC_PROFILE):
+def create_cc_session(profile=CC_PROFILE):
     """新建一枚指挥中心临时会话 = 现场写 `run/sessiond/<name>.agent`。
-    字段集（全部服务端恒定 ∨ 自动生成）：
+    字段集（全部服务端恒定 ∨ 自动生成 ∨ 由 profile 清单派生）：
       `host`       = 本机规范名（`env/host-id` 查表；不可得 ⇒ 拒绝，⛔ 不猜）
-      `cwd`        = `resolve_project_cwd` 校验后的 realpath（客户端唯一可控面）
+      `cwd`        = 该 profile 清单声明的 `cwd`（`profile_cwd`；缺省 = 工作区根）经
+                     白名单/逃逸校验后的 realpath（⛔ 客户端不控）
       `sessionDir` = `<WS>/run/sessiond`（服务端恒定）
-      `profile`    = `validate_profile` 放行的名字（缺省 = `CC_PROFILE`）
+      `profile`    = `profile_spec` 放行的名字（客户端唯一可控面；缺省 = `CC_PROFILE`）
       `name`       = `new_session_name()`（自动生成）
       `createdAt`  = UTC ISO 时刻
     ⛔ **无 `command` 键**：spawn argv 的单点是 `Supervisor._spawn`，声明者不可控。
     落盘 = 临时文件 + `os.replace` 原子写，目录 0700 / 文件 0600（宿主本地运行时区）。
     返回 dict(name, profile, cwd, host, agent_site, session_site, agent_path, session_path)。"""
-    cwd = resolve_project_cwd(cwd_rel)
-    prof = validate_profile(profile)
+    prof, pdoc = profile_spec(profile)
+    cwd = profile_cwd(prof, pdoc)
     host = _self_host()
     if not host:
         raise ValueError("cannot determine local host (env/host-id missing or no "

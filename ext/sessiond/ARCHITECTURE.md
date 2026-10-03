@@ -168,8 +168,8 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 | `inspect` | — | `{ok, session, inspect:{ok, generatedAt, sessionFile, cwd, toolCount, tools[], systemPrompt}}` | 探针转储（任务 s0f1la）：经 `-e` 注入的探针扩展命令取当前系统提示词全文 + 工具清单（侧车文件握手，见 §3/§2 探针小节）；payload 几十 KB 走本 HTTP 响应，不进事件环/jsonl | 502 超时/不就位/被拒/侧车文件缺失 |
 | `reload` | — | `{ok, session, gen, pid}` | 杀进程 + resume 重拉，语义见 §2 reload 表（干净进程 = extension 全新加载）；等监督循环重拉完成（20s 超时）。**socket 会话**：代理 `control/restart`（保历史换代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 重拉超时等失败；socket 代理 504 等回执超时 / 409 `rejected`（已 final）/ 403 跨机 |
 | `clear` | — | `{ok, session, gen, pid}` | 保留路径清空全部内容，语义见 §2 clear 表；删除失败 → 会话虽已重拉但报 `ok:false`（错误信息含原因）。**socket 会话**：代理 `control/clear`（弃历史换代：杀→备份 `run/backup/`→截断→空白新代，任务 dsuqbi），响应另带 `outcome/detail/controlReq` | 502 失败（含删文件失败）；socket 代理 504 等回执超时 / 409 `rejected`（已 final/备份失败）/ 403 跨机 |
-| `create_session` | `cwd`（**相对 WS 的项目路径**，如 `w` ∨ `.`） | `{ok, created, name, profile, cwd, host, sessionDir, agent, session, chatUrl, ephemeral}` | 新建指挥中心临时会话（任务 z293ql，§12）：服务端枚举的项目白名单成员校验 + 既有逃逸校验 → 现场写 `run/sessiond/<name>.agent`。**服务端恒定/自动生成**：`host`（env/host-id 查表）/`sessionDir`/`profile`（`CC_PROFILE`）/`name`（时间戳+uuid4）；客户端传 `command`/`profile`/`sessionDir`/`name`/`host` 任一 → 400 显式拒绝（`.agent` 字段集里根本没有 `command` 键） | 400 cwd 非法/不在白名单、profile 白名单不过、host 不可得、写盘失败 |
-| `list_sessions` | — | `{ok, host, prefix, sessionsDir, sessions[], projects[]}` | 只读：本机 `run/sessiond/*.agent` 全量（每项 = 自动标题/标题来源/项目分组键/最近活动 mtime/运行态 running∨dormant + pids/resume 链接）+ 项目清单（新建表单的 `<select>` 选项）。运行态 = 一次 `proc.host_map` 的 /proc 扫描（列表可能在 widget 子进程里渲染、看不到进程内桥接注册表） | — |
+| `create_session` | `profile`（**`form: interactive` 的清单名**，如 `command-center`） | `{ok, created, name, profile, cwd, host, sessionDir, agent, session, chatUrl, ephemeral}` | 新建指挥中心临时会话（任务 z293ql，§12）：profile 三道白名单校验（名字形态 + 清单在场 + `form: interactive`）→ `cwd` 取该清单声明的 `cwd` 字段（缺省 = 工作区根）经项目白名单成员校验 + 既有逃逸校验 → 现场写 `run/sessiond/<name>.agent`。**服务端恒定/自动生成/由清单派生**：`host`（env/host-id 查表）/`sessionDir`/`cwd`（清单声明）/`name`（时间戳+uuid4）；客户端传 `command`/`cwd`/`sessionDir`/`name`/`host` 任一 → 400 显式拒绝（`.agent` 字段集里根本没有 `command` 键）；rename/delete 另拒 `profile`（人格只在创建时定） | 400 缺 profile、profile 白名单不过、清单声明的 cwd 不在白名单、host 不可得、写盘失败 |
+| `list_sessions` | — | `{ok, host, prefix, sessionsDir, sessions[], profiles[]}` | 只读：本机 `run/sessiond/*.agent` 全量（每项 = 自动标题/标题来源/项目分组键/最近活动 mtime/运行态 running∨dormant + pids/resume 链接）+ interactive profile 清单（新建面的可选集：每项 = name/summary/cwd 声明原文 + 人读 label）。运行态 = 一次 `proc.host_map` 的 /proc 扫描（列表可能在 widget 子进程里渲染、看不到进程内桥接注册表） | — |
 | `rename_session` | `session`（`.jsonl` ∨ `.agent` 站内路径）、`title` | `{ok, name, title, auto, override}` | 改标题 override（落 `.agent` 的 `title` 字段，⛔ 无旁挂 sidecar）；空标题 = 清除 override 回落自动标题。标题 ≤80 字符、⛔ 无控制字符 | 400 名字非法/会话不存在/标题超长或含控制字符 |
 | `delete_session` | `session`、`confirm=1` | `{ok, process, name, removed[], evidence, afterExists}` | 删除（**轻确认一次、⛔ 不做 nonce** = 设计稿已裁）：`bridge.drop_session` 杀 Supervisor（**绝不建桥** ⇒ 删一枚从未打开过的会话不会反而把它拉起来；未命中桥接再按 environ 标记扫残留宿主 `proc.kill_hosts`）→ rm `.agent` + rm jsonl。删除面纪律 = 名字白名单正则 + root 身份断言 + realpath 严格前缀断言（拒符号链接逃逸）+ 删前 stat 三要素证据 + ⛔ 不用 `ignore_errors` + 删后复核 | 400 缺 confirm / 名字或路径非法；500 删除失败（含删后复核仍在场） |
 | `session_tabs` | — | `{ok, prefix, rows[{name,title,url}]}` | 只读：`@dynamic` 的数据源（§12.3）——本机活跃会话的 tab 行。`prefix` = 本机规范名（`proc._self_host`，⛔ 不从请求路径派生：代理 `strip_prefix: true` ⇒ 被请求机看不到前缀）；空态 = **零行**；⛔ 不标运行态（tab 只管快速进，live/dormant 看工作区） | — |
@@ -462,31 +462,32 @@ timeout 清扫机制（0830-1104-eji4）：pi rpc-mode 的 dialog 超时是内�
 ## 12. 指挥中心临时会话（`run/sessiond/*.agent`，任务 z293ql）
 
 设计稿 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §4.2/§4.3 的服务端半面：
-按需创建「即用即弃」的交互会话（pi-web 式工作区），人格 = `command-center` profile
-（`form: interactive`）。消费方 = `dash/sessions.md`（工作区页）+ `dash/session-ctl.py`（单文件
-控制面：CLI `list` = 每节 widget 的表、HTTP `interp` 不带 `act` = `@dynamic` 的 tab 行 rpc、
-HTTP `?act=rename|delete` = 改名/删除的表单端点、CLI `projects`/`new` = 白名单与新建的命令行同款）
-+ `dash/session-new.html`（新建的静态视图，页内直调 op）。
+按需创建「即用即弃」的交互会话（pi-web 式工作区），人格 = 客户端指名的 **`form: interactive`
+profile**（缺省 `command-center`），工作目录由该 profile 清单的 `cwd` 字段声明。消费方 =
+`dash/sessions.md`（工作区页：每机一节列出**逐 profile 的创建链接**）+ `dash/session-ctl.py`
+（单文件控制面：CLI `list` = 每节 widget 的表、HTTP `interp` 不带 `act` = `@dynamic` 的 tab 行 rpc、
+HTTP `?act=rename|delete` = 改名/删除的表单端点、CLI `profiles`/`new` = 可选集与新建的命令行同款）
++ `dash/session-new.html`（新建的静态视图，按 `?profile=` 预填、页内直调 op）。
 
 ### 12.1 落盘面与生命周期
 
 | 项 | 语义 |
 |---|---|
 | 声明者 | `<WS>/run/sessiond/<name>.agent`，`name` = `YYYYmmdd-HHMMSS-<uuid4 前 6 位>`（服务端生成）；目录 0700 / 文件 0600，原子写（tmp + `os.replace`） |
-| 字段集 | `host`（本机规范名）/`cwd`（项目 realpath）/`sessionDir`（= 会话目录 realpath）/`profile`（`CC_PROFILE`）/`name`/`createdAt`；可选 `title`（rename 的 override）。**⛔ 无 `command` 键**：spawn argv 的单点是 `Supervisor._spawn`，声明者不可控 |
+| 字段集 | `host`（本机规范名）/`cwd`（项目 realpath，**由 profile 清单的 `cwd` 字段派生**）/`sessionDir`（= 会话目录 realpath）/`profile`（客户端指名的 interactive 清单；缺省 `CC_PROFILE`）/`name`/`createdAt`；可选 `title`（rename 的 override）。**⛔ 无 `command` 键**：spawn argv 的单点是 `Supervisor._spawn`，声明者不可控 |
 | 会话文件 | `<sessionDir>/<name>.jsonl`（每会话一枚；打开走 `?v=chat` 的 `.agent` 入口，与普通 `.agent` 同链路） |
 | ephemeral | `run/` 是宿主本地运行时区（主仓 `.gitignore` 覆盖 ∧ ⛔ 不进 agents-sync）⇒ **被清即丢会话**（设计稿已接受），且**每台机器各有各的**（工作区页与 tab 都按机器前缀分机） |
 | 删除 | `op=delete_session`：杀 Supervisor（`bridge.drop_session` 绝不建桥；未命中再 `proc.kill_hosts` 兼顶）→ rm `.agent` + rm jsonl。⛔ 不走 `agents-sync/gc.py`（那条铁律的射程是 `agents/**` 的参与方目录，本面是宿主本地运行时文件） |
 | 进程回收 | 沿用既有去保活（§2）：空闲超阈杀进程转懒态、文件留、重开即 resume；`reload`/`clear` 对本族会话直接可用（web 自有 Supervisor，⛔ 不是 socket 会话） |
 | 人格 | `.agent` 的 `profile` → `_resolve_agent` 白名单校验（名字形态 + `bots/profiles/<名>.json` 在场 + **只放行 `form: interactive`**：给交互会话配 `task`/`resident`/缺 `form` 的清单会得到「无基线能力 ∨ `ask_user` 被排除」的静默失能形态）→ `bridge.set_session_cwd(..., profile)` → `_spawn` 在 `clean_env()` **之后**回注 `DISPATCH_PROFILE`（该 env 属剥除名单，⛔ 不得继承）→ 全局 `profile-loader.ts` 兑现人格正文/model/形态档 |
 
-### 12.2 攻击面收口（cwd 是客户端可选字段 ⇒ 比单一指挥中心大一档）
+### 12.2 攻击面收口（客户端只控 profile ⇒ 工作目录结构上不可选）
 
 | 面 | 收口 |
 |---|---|
-| ① 项目清单 | **服务端枚举**（`proc.list_projects`）= `~/m` 自身 + 顶层含 `.git` 的子目录（只扫一层、零递归成本；⛔ 无静态清单可漂；realpath 逃出根集者不入白名单）。客户端只提交**相对路径**（表单 `<select>` 的 value），⛔ 不提交绝对路径 |
-| ② cwd 校验 | 双保险 = 白名单**成员校验**（`resolve_project_cwd`）+ 既有 `resolve_cwd`（根集 = `WS_REAL` + `realpath(WS/run)`、realpath 前缀，防穿越与符号链接逃逸）。⇒ `~/m/env`（凭据面）、`~/m/run/agentd`（运行态）、`~/m/agents/task/<他人 id>`（他人任务目录）这些「在根集内但不是项目」的目录**结构上选不到** |
-| ③ 服务端恒定 | `profile`/`sessionDir`/`name`/`host` 恒定或自动生成；客户端传这五个键（含 `command`）任一 ⇒ **400 显式拒绝**（⛔ 不只是忽略，`_SERVER_FIXED_FIELDS`） |
+| ① 客户端可控面 | **只有 `profile` 一枚**，且必须命中三道白名单（名字形态 + `bots/profiles/<名>.json` 在场且是合法 JSON 对象 + 该清单声明 **`form: interactive`**；`proc.profile_spec`）⇒ 可选集 = `proc.list_interactive_profiles()` 的枚举面（⛔ 无静态清单可漂） |
+| ② cwd 派生与校验 | `cwd` **不由客户端提交**：取该 profile 清单的 `cwd` 字段（缺省 = 工作区根）→ 双保险 = 项目白名单**成员校验**（白名单 = `proc.list_projects()` 服务端枚举：`~/m` 自身 + 顶层含 `.git` 的子目录，只扫一层、零递归成本；realpath 逃出根集者不入白名单）+ 既有 `resolve_cwd`（根集 = `WS_REAL` + `realpath(WS/run)`、realpath 前缀，防穿越与符号链接逃逸）。⇒ 清单写错（`~/m/env` 凭据面 ∨ `~/m/run/agentd` 运行态 ∨ `~/m/agents/task/<他人 id>` 这些「在根集内但不是项目」的目录）= **拒建、⛔ 不回落**；提交期另有 `bots/cap_lint.py` 的 E18 判形状 |
+| ③ 服务端恒定 | `cwd`（由清单派生）/`sessionDir`/`name`/`host` 恒定或自动生成；客户端传这几个键（含 `command`）任一 ⇒ **400 显式拒绝**（⛔ 不只是忽略，`_SERVER_FIXED_FIELDS`）；rename/delete 另拒 `profile`（`_MUTATE_FIXED_FIELDS`：人格只在创建时定） |
 | ④ 删除面 | 名字白名单正则（⛔ 无路径分隔符/穿越段）+ **root 身份断言**（会话目录的 realpath 不得等于 WS 根、也不得是它的祖先）+ 两个目标文件各自的 realpath **严格前缀断言**（拒符号链接逃逸）+ 删前 `stat` 三要素（dev/ino/size）+ realpath 记日志与响应 + ⛔ 不用 `ignore_errors` + 删后复核 `exists` 为假 |
 | 残余面（已裁接受） | 框架不把 `REQUEST_METHOD` 传给端点（口径同 `lore/tools/todo-act.py` 头注）⇒「轻确认一次」挡不住带 `confirm=1` 的跨站 GET；设计稿明裁**不做 nonce** ⇒ 不加固。缓解 = 发布链接刻意不带变更参数（列表里的 delete 只到确认页）；后果上界 = 杀一枚 ephemeral 会话 + rm 两个宿主本地文件（与 `run/` 被清同量级） |
 | 跨机误开 | `.agent` 的 `host` 字段只作展示/记录：本族声明者落 `run/sessiond/`，⛔ 不在 `proc._scan_agent_declarations` 的扫描面（`assistant/**`）内 ⇒ `host_guard` 对它们不生效。⛔ 有意不扩扫描面：跨机访问天然被机器前缀挡住（`/nv1/…` 经代理落到 nv1 自己的 8080），且 `run/` 宿主本地 ⇒ 误开只是在本机另起一个会话、**不会双写同一 jsonl**（`host_guard` 要挡的正是双写）；扩扫描面 = 给每次建桥加一次 `os.walk`（为小概率事件加常驻成本） |

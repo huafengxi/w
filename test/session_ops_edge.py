@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """session_ops_edge.py — 指挥中心临时会话（run/sessiond/*.agent）的边界与正反控套件。
 
-任务 z293ql（设计稿 §4.2）：cwd 成了客户端可选字段 ⇒ 攻击面比单一指挥中心大一档。
+任务 z293ql（设计稿 §4.2）：新建面开放给客户端 ⇒ 攻击面比单一指挥中心大一档。
 本套件钉住四件收口 + 删除纪律：
   ① 项目清单**服务端枚举**（~/m 自身 + 顶层含 .git 的子目录；⛔ 无静态清单）；
-  ② 客户端 cwd 经**成员校验 + 既有逃逸校验**双保险（正控 ≥1 / 反控 ≥5）；
-  ③ profile 白名单（形态 + 清单在场 + **只放行 form: interactive**）、
+  ② **cwd 由 profile 清单声明**（客户端结构上控不到），声明值仍经**成员校验 +
+     既有逃逸校验**双保险（正控 ≥1 / 反控 ≥5；清单写错 = 拒建、⛔ 不回落）；
+  ③ profile 白名单（形态 + 清单在场 + **只放行 form: interactive**）、可选集枚举、
      sessionDir/name 服务端恒定或自动生成；
-  ④ ⛔ 无 `command` 键（客户端传 command/profile/sessionDir/name/host ⇒ api 层 400）；
+  ④ ⛔ 无 `command` 键（客户端传 command/cwd/sessionDir/name/host ⇒ api 层 400；
+     rename/delete 另拒 profile）；
   ⑤ delete 的删除面：realpath 前缀断言（拒符号链接逃逸）+ root 身份断言 + 删前 stat
      三要素证据 + 删后复核；rename 的标题校验与 override 落点（.agent 的 title 字段）。
 
@@ -56,7 +58,8 @@ def _write_json(path, doc):
 
 def _mkws(base):
     """造一枚假 ~/m：两枚项目（w = .git 目录、lore = .git 文件）、一枚非项目目录（env）、
-    运行时区（run/sessiond）、四枚 profile 清单（interactive/task/resident/缺 form）、
+    运行时区（run/sessiond）、profile 清单族（interactive 四枚：缺 cwd ∨ cwd=w ∨ cwd=env
+    ∨ cwd=/etc；另有 task/resident/缺 form 三枚做反控）、
     一枚逃出根集的符号链接（evil → base/outside）。"""
     ws = os.path.join(base, "real-ws")
     outside = os.path.join(base, "outside")
@@ -72,7 +75,15 @@ def _mkws(base):
     os.symlink(outside, os.path.join(ws, "evil"))   # 符号链接逃逸用
     profiles = os.path.join(ws, "bots", "profiles")
     _write_json(os.path.join(profiles, "command-center.json"),
-                {"name": "command-center", "form": "interactive", "caps": []})
+                {"name": "command-center", "summary": "交互档（未声明 cwd）",
+                 "form": "interactive", "caps": []})
+    _write_json(os.path.join(profiles, "ccw.json"),
+                {"name": "ccw", "summary": "交互档（cwd = 项目 w）",
+                 "form": "interactive", "caps": [], "cwd": "w"})
+    _write_json(os.path.join(profiles, "ccenv.json"),
+                {"name": "ccenv", "form": "interactive", "caps": [], "cwd": "env"})
+    _write_json(os.path.join(profiles, "ccabs.json"),
+                {"name": "ccabs", "form": "interactive", "caps": [], "cwd": "/etc"})
     _write_json(os.path.join(profiles, "executor.json"),
                 {"name": "executor", "form": "task", "caps": ["executor"]})
     _write_json(os.path.join(profiles, "dispatcher.json"),
@@ -140,7 +151,13 @@ def case2_cwd_controls(ws, outside):
 
 def case3_profile_whitelist(ws, outside):
     assert _proc.validate_profile("command-center") == "command-center"
-    print("case3 OK: 正控 form: interactive 通过（command-center）")
+    names = [p["name"] for p in _proc.list_interactive_profiles()]
+    assert names == ["ccabs", "ccenv", "ccw", "command-center"], names
+    by_name = {p["name"]: p for p in _proc.list_interactive_profiles()}
+    assert by_name["command-center"]["cwd"] == ".", by_name["command-center"]
+    assert by_name["ccw"]["cwd"] == "w" and by_name["ccw"]["summary"], by_name["ccw"]
+    print("case3 OK: 正控 form: interactive 通过（command-center）；可选集枚举 = %s"
+          "（task/resident/缺 form 不在集内，缺 cwd 回落 '.'）" % names)
     for name, label in (("executor", "form: task"), ("dispatcher", "form: resident"),
                         ("noform", "缺 form 字段"), ("nosuchprofile", "清单不在场"),
                         ("../evil", "名字含穿越段"), ("CMD", "大写/形态非法"),
@@ -154,7 +171,7 @@ def case3_profile_whitelist(ws, outside):
 # ---------------------------------------------------------------- ④ 建会话与字段集
 
 def case4_create(ws, outside):
-    doc = _proc.create_cc_session("w")
+    doc = _proc.create_cc_session("ccw")            # cwd 由清单声明（= 项目 w）
     agent_path = doc["agent_path"]
     assert os.path.exists(agent_path), agent_path
     with open(agent_path, encoding="utf-8") as f:
@@ -162,7 +179,7 @@ def case4_create(ws, outside):
     assert set(spec) == {"host", "cwd", "sessionDir", "profile", "name",
                          "createdAt"}, sorted(spec)
     assert "command" not in spec and "cmd" not in spec, spec
-    assert spec["profile"] == "command-center", spec
+    assert spec["profile"] == "ccw", spec
     assert spec["host"] == "test-host", spec
     assert spec["cwd"] == os.path.realpath(os.path.join(ws, "w")), spec
     assert spec["sessionDir"] == os.path.realpath(os.path.join(ws, "run", "sessiond"))
@@ -173,21 +190,33 @@ def case4_create(ws, outside):
     assert oct(os.stat(agent_path).st_mode & 0o777) == "0o600", "文件权限须 0600"
     print("case4 OK: 字段集 = %s（⛔ 无 command 键；0600）" % sorted(spec))
 
-    # profile 不由客户端控：传非 interactive 档 ⇒ 拒
-    msg = _reject(_proc.create_cc_session, "w", "executor")
-    print("   reject 客户端传 profile='executor' → %s" % msg)
-    # cwd 非法 ⇒ 拒（不落盘）
+    # 缺省 profile = CC_PROFILE（未声明 cwd ⇒ 工作区根）
+    d0 = _proc.create_cc_session()
+    assert d0["profile"] == _proc.CC_PROFILE == "command-center", d0
+    assert d0["cwd"] == os.path.realpath(ws), d0
+    print("case4 OK: 缺省 profile=%s、清单未声明 cwd ⇒ 工作区根（%s）"
+          % (d0["profile"], d0["cwd"]))
+    _proc.delete_cc_session(d0["name"])
+
+    # 非 interactive 档 ⇒ 拒
+    for bad, label in (("executor", "form: task"), ("dispatcher", "form: resident"),
+                       ("noform", "缺 form"), ("nosuchprofile", "清单不在场")):
+        msg = _reject(_proc.create_cc_session, bad)
+        print("   reject profile=%-14s %-10s → %s" % (bad, label, msg))
+    # 清单声明的 cwd 非法 ⇒ 拒（不落盘、⛔ 不回落）
     before = len(os.listdir(os.path.join(ws, "run", "sessiond")))
-    _reject(_proc.create_cc_session, "env")
+    for bad, label in (("ccenv", "根集内非项目"), ("ccabs", "绝对路径")):
+        msg = _reject(_proc.create_cc_session, bad)
+        print("   reject 清单 cwd 非法（%s：%s）→ %s" % (bad, label, msg))
     after = len(os.listdir(os.path.join(ws, "run", "sessiond")))
     assert before == after, (before, after)
-    print("case4 OK: 非法 cwd 拒绝且零落盘（%d → %d）" % (before, after))
+    print("case4 OK: 清单 cwd 非法拒绝且零落盘（%d → %d）" % (before, after))
 
     # host 不可得 ⇒ 拒（⛔ 不猜）
     saved = _proc._self_host
     _proc._self_host = lambda: None
     try:
-        msg = _reject(_proc.create_cc_session, "w")
+        msg = _reject(_proc.create_cc_session, "ccw")
         print("   reject host 不可得 → %s" % msg)
     finally:
         _proc._self_host = saved
@@ -248,7 +277,7 @@ def case5_title(ws, outside):
 # ---------------------------------------------------------------- ⑥ 列表与分组
 
 def case6_list(ws, outside, created):
-    second = _proc.create_cc_session(".")            # 第二枚：cwd = ~/m 自身
+    second = _proc.create_cc_session()               # 第二枚：cwd = ~/m 自身（清单未声明）
     rows = _proc.list_cc_sessions()
     by_name = {r["name"]: r for r in rows}
     assert created["name"] in by_name and second["name"] in by_name, sorted(by_name)
@@ -365,43 +394,56 @@ def case9_api(ws, outside):
         meta, body = _api.interp(store, **kw)
         return meta.get("http_status", "200 OK"), json.loads(body)
 
-    st, doc = call(op="create_session", cwd="w")
+    st, doc = call(op="create_session", profile="ccw")
     assert st == "200 OK" and doc["ok"], (st, doc)
     name = doc["name"]
-    assert doc["profile"] == "command-center" and doc["host"] == "test-host", doc
+    assert doc["profile"] == "ccw" and doc["host"] == "test-host", doc
+    assert doc["cwd"] == os.path.realpath(os.path.join(ws, "w")), doc
     assert doc["agent"].endswith("/run/sessiond/%s.agent" % name), doc
-    print("case9 OK: op=create_session → %s（agent=%s）" % (name, doc["agent"]))
+    print("case9 OK: op=create_session profile=ccw → %s（cwd 由清单声明 = %s）"
+          % (name, doc["cwd"]))
 
-    for kw, label in (({"op": "create_session", "cwd": "w", "command": "rm -rf /"},
-                       "command"),
-                      ({"op": "create_session", "cwd": "w", "profile": "executor"},
-                       "profile"),
-                      ({"op": "create_session", "cwd": "w", "sessionDir": "/tmp"},
+    for kw, label in (({"op": "create_session", "profile": "ccw",
+                        "command": "rm -rf /"}, "command"),
+                      ({"op": "create_session", "profile": "ccw", "cwd": "lore"},
+                       "cwd"),
+                      ({"op": "create_session", "profile": "ccw", "sessionDir": "/tmp"},
                        "sessionDir"),
-                      ({"op": "create_session", "cwd": "w", "name": "pwn"}, "name"),
-                      ({"op": "create_session", "cwd": "w", "host": "mac"}, "host")):
+                      ({"op": "create_session", "profile": "ccw", "name": "pwn"}, "name"),
+                      ({"op": "create_session", "profile": "ccw", "host": "mac"}, "host")):
         st, doc = call(**kw)
         assert st.startswith("400"), (label, st, doc)
         assert doc["ok"] is False
         print("   reject 客户端传 %-11s → %s %s" % (label, st, doc["error"]))
 
-    st, doc = call(op="create_session", cwd="env")
+    st, doc = call(op="create_session", profile="ccenv")
     assert st.startswith("400") and "whitelist" in doc["error"], (st, doc)
-    print("   reject 客户端传 cwd='env'（根集内非项目）→ %s %s" % (st, doc["error"]))
+    print("   reject 清单声明 cwd='env'（根集内非项目）→ %s %s" % (st, doc["error"]))
+    st, doc = call(op="create_session", profile="executor")
+    assert st.startswith("400") and "interactive" in doc["error"], (st, doc)
+    print("   reject profile='executor'（form: task）→ %s %s" % (st, doc["error"]))
     st, doc = call(op="create_session")
-    assert st.startswith("400"), (st, doc)
-    print("   reject 缺 cwd → %s %s" % (st, doc["error"]))
+    assert st.startswith("400") and "profile" in doc["error"], (st, doc)
+    print("   reject 缺 profile → %s %s" % (st, doc["error"]))
 
     st, doc = call(op="list_sessions")
     assert st == "200 OK" and doc["ok"], (st, doc)
     assert any(s["name"] == name for s in doc["sessions"]), doc
-    assert doc["projects"][0]["rel"] == ".", doc["projects"]
-    print("case9 OK: op=list_sessions → %d 枚会话 / %d 个项目选项"
-          % (len(doc["sessions"]), len(doc["projects"])))
+    pnames = [p["name"] for p in doc["profiles"]]
+    assert "ccw" in pnames and "command-center" in pnames, doc["profiles"]
+    assert "executor" not in pnames and "dispatcher" not in pnames, pnames
+    assert "projects" not in doc, sorted(doc)
+    print("case9 OK: op=list_sessions → %d 枚会话 / %d 枚 interactive profile（%s）"
+          % (len(doc["sessions"]), len(doc["profiles"]), ",".join(pnames)))
 
     st, doc = call(op="rename_session", session="/run/sessiond/%s.jsonl" % name,
                    title="改名后的标题")
     assert st == "200 OK" and doc["title"] == "改名后的标题", (st, doc)
+    for op in ("rename_session", "delete_session"):
+        st, doc = call(op=op, session="/run/sessiond/%s.jsonl" % name,
+                       title="x", confirm="1", profile="ccw")
+        assert st.startswith("400") and "profile" in doc["error"], (op, st, doc)
+        print("   reject %s 带 profile → %s %s" % (op, st, doc["error"]))
     st, doc = call(op="session_tabs")
     assert st == "200 OK" and doc["ok"] and doc["prefix"] == "test-host", (st, doc)
     assert len(doc["rows"]) == 1 and doc["rows"][0]["title"] == "改名后的标题", doc

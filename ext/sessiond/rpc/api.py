@@ -28,11 +28,12 @@
 # dash/session-ctl.py 的只读列表命令 + 变更端点）
 # ——声明者与 jsonl 都落宿主本地运行时区 `run/sessiond/`，
 # 生命周期全在本层（⛔ 不经 agentd，web 自有 Supervisor spawn）：
-#   op=create_session  新建：只收 `cwd`（相对 WS 的项目路径）→ 服务端枚举白名单成员校验
-#              + 既有逃逸校验 → 现场写 .agent（host/cwd/sessionDir/profile/name/createdAt
-#              全部服务端恒定或自动生成）→ 返回 {name, agent, session, chatUrl}
+#   op=create_session  新建：只收 `profile`（必须命中 `form: interactive` 的清单）→ 服务端
+#              按该清单的 `cwd` 字段定工作目录（白名单成员校验 + 既有逃逸校验）→ 现场写
+#              .agent（host/cwd/sessionDir/name/createdAt 全部服务端恒定、自动生成 ∨ 由清单
+#              派生）→ 返回 {name, profile, cwd, agent, session, chatUrl}
 #   op=list_sessions   只读：本机 run/sessiond/*.agent 全量（自动标题/最近活动/运行态/
-#              项目分组）+ 项目清单（新建表单的 <select> 选项）
+#              项目分组）+ interactive profile 清单（新建面的可选集）
 #   op=rename_session  改标题 override（落 .agent 的 title 字段；空标题 = 清除回落自动标题）
 #   op=delete_session  删除（需 confirm=1，轻确认一次、⛔ 不做 nonce，设计稿已裁）：
 #              杀 Supervisor 进程 + rm .agent + rm jsonl（realpath 前缀断言 + 删前身份证据 + 删后复核）
@@ -384,21 +385,26 @@ def _resolve_agent(store, session):
 #                          HTTP `?act=rename|delete` = 本层 op；CLI `projects`/`new` 直调 proc.py
 #   dash/session-new.html  静态视图（新建），页内 fetch 本层 `op=list_sessions`/`op=create_session`
 
-# 服务端恒定/自动生成的字段：客户端传任一 ⇒ 400 显式拒绝（⛔ 不只是忽略）。
+# 服务端恒定/自动生成/由 profile 清单派生的字段：客户端传任一 ⇒ 400 显式拒绝（⛔ 不只是忽略）。
 # `command` 在列 = create_bot 时代的硬约束同族：spawn argv 的单点是
 # proc.Supervisor._spawn，声明者不可控（故 .agent 字段集里根本没有这个键）。
-_SERVER_FIXED_FIELDS = ("command", "profile", "sessionDir", "name", "host")
+# `cwd` 在列 = 它由 profile 清单的 `cwd` 字段声明（proc.profile_cwd）⇒ 客户端控 profile、
+# ⛔ 控不到工作目录。
+_SERVER_FIXED_FIELDS = ("command", "cwd", "sessionDir", "name", "host")
+# 变更面（rename/delete）另拒 `profile`：那两枚 op 不改人格（人格只在创建时定）。
+_MUTATE_FIXED_FIELDS = ("profile",)
 
 
-def _fixed_field_rejection(kw):
+def _fixed_field_rejection(kw, extra=()):
     """客户端传了服务端恒定字段 → 400 响应元组；都没传 → None。"""
-    hit = sorted(k for k in _SERVER_FIXED_FIELDS
+    hit = sorted(k for k in tuple(_SERVER_FIXED_FIELDS) + tuple(extra)
                  if kw.get(k) not in (None, ""))
     if not hit:
         return None
     return _j({"ok": False,
-               "error": "field(s) %s are server-side fixed or auto-generated for "
-                        "command-center sessions; the client controls only 'cwd'"
+               "error": "field(s) %s are server-side fixed, auto-generated or derived "
+                        "from the profile manifest for command-center sessions; the "
+                        "client controls only 'profile' (at creation)"
                         % ", ".join(hit)},
               '400 Bad Request')
 
@@ -442,8 +448,15 @@ def _create_session(kw):
     rej = _fixed_field_rejection(kw)
     if rej:
         return rej
+    prof = kw.get("profile")
+    if not (isinstance(prof, str) and prof.strip()):
+        return _j({"ok": False,
+                   "error": "missing 'profile' (the client's only controllable field: "
+                            "an interactive profile name = bots/profiles/<名>.json 里声明 "
+                            "form: interactive 的那枚；cwd 由该清单声明)"},
+                  '400 Bad Request')
     try:
-        doc = _proc.create_cc_session(kw.get("cwd"))
+        doc = _proc.create_cc_session(prof)
     except ValueError as e:
         return _j({"ok": False, "error": str(e)}, '400 Bad Request')
     host = doc["host"]
@@ -467,13 +480,14 @@ def _list_sessions():
             "agent": r["agent_site"], "session": r["session_site"],
             "chatUrl": _chat_url(r["agent_site"], host),
         })
-    projects = [{"rel": rel, "path": real,
-                 "label": ("~/m（工作区根）" if rel == "." else "~/m/" + rel)}
-                for rel, real in _proc.list_projects()]
+    profiles = [dict(p, label=p["name"],
+                     cwdLabel=("~/m（工作区根）" if p["cwd"] == "."
+                               else "~/m/" + p["cwd"]))
+                for p in _proc.list_interactive_profiles()]
     return _j({"ok": True, "host": host, "prefix": host or "",
                "sessionsDir": _proc.site_path_of(
                    _os.path.realpath(_proc.sessions_dir())),
-               "sessions": sessions, "projects": projects})
+               "sessions": sessions, "profiles": profiles})
 
 
 def _session_tabs():
@@ -494,7 +508,7 @@ def _session_tabs():
 
 
 def _rename_session(session, kw):
-    rej = _fixed_field_rejection(kw)
+    rej = _fixed_field_rejection(kw, _MUTATE_FIXED_FIELDS)
     if rej:
         return rej
     try:
@@ -505,7 +519,7 @@ def _rename_session(session, kw):
 
 
 def _delete_session(session, kw):
-    rej = _fixed_field_rejection(kw)
+    rej = _fixed_field_rejection(kw, _MUTATE_FIXED_FIELDS)
     if rej:
         return rej
     if str(kw.get("confirm") or "").strip() != "1":
