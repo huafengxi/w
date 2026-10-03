@@ -114,7 +114,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 ### 去保活语义（任务 ja0vr7，设计 du44uj；resident 机制已退役）
 
-定位收敛：sessiond = 浏览器聊天载体/观测层（懒拉起 + 在场订阅期间监督）；常驻/自愈语义统一归 agentd（生产的 dispatcher position = 稳定信箱 `topic/dispatcher` + 进程型 watcher bot `bot/dispatcher-watcher` + 一次性 handler，⛔ 不是长寿命会话；见 §10 透传链路与 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §2/§3）。原 resident 钩子（`resident.py` + `core/wsgi.py` ready 钩子）已删除。
+定位收敛：sessiond = 浏览器聊天载体/观测层（懒拉起 + 在场订阅期间监督）；常驻/自愈语义统一归 agentd（生产的 dispatcher position = 稳定信箱 `queue/dispatcher` + 进程型 watcher bot `bot/dispatcher-watcher` + 一次性 handler，⛔ 不是长寿命会话；见 §10 透传链路与 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §2/§3）。原 resident 钩子（`resident.py` + `core/wsgi.py` ready 钩子）已删除。
 
 | 项 | 语义 |
 |---|---|
