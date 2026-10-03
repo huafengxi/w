@@ -5,15 +5,15 @@
     <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
     <style type="text/css">
     .checkbox { float: left; }
-    /* Chrome-like tab strip：恒一行 —— tab 等分宽度（上限 max-width，长名省略号 +
-       title 悬停全名），空间不够时等比缩到 min-width，再不够则 tab 条内部横向滚动
-       （滚动条隐藏，触屏/滚轮可滑）。外层 #tab-bar 只住「滚动条 + 右侧固定控件」的
-       分栏 ⇒ 全屏钮不随 tab 滚走。#tab-bar 的 display 由 finishLayout() 置 'flex'
-       （flow 模式恒 none）。 */
+    /* Chrome-like tab strip：恒一行 —— tab 宽度随内容自适应（上限 max-width，长名省略号
+       + title 悬停全名），短名不占多余空间；总宽超出时按 flex-shrink 收缩到 min-width，
+       再不够则 tab 条内部横向滚动（滚动条隐藏，触屏/滚轮可滑）。外层 #tab-bar 只住
+       「滚动条 + 右侧固定控件」的分栏 ⇒ 全屏钮不随 tab 滚走。#tab-bar 的 display 由
+       finishLayout() 置 'flex'（flow 模式恒 none）。 */
     #tab-bar { display: none; align-items: stretch; }
     #tab-scroll { display: flex; flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
     #tab-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
-    #tab-bar .tab { flex: 1 1 0; min-width: 4em; max-width: 240px; padding: 1px 6px; margin-right: 2px; border: none; font-size: 12px; color: #666; cursor: pointer; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #tab-bar .tab { flex: 0 1 auto; min-width: 4em; max-width: 240px; padding: 1px 6px; margin-right: 2px; border: none; font-size: 12px; color: #666; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #tab-bar .tab.selected { background: #dce6f2; color: #111; font-weight: bold; }
     /* 全屏钮：不参与等分/收缩，恒占最右 */
     #tab-bar #fs-toggle { flex: 0 0 auto; min-width: 0; max-width: none; margin-right: 0; }
