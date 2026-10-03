@@ -602,6 +602,17 @@ def _idle_scan():
                 continue
             if now - b.last_activity < IDLE_TIMEOUT:
                 continue
+        # 阻塞在未答 dialog 的会话 = **在等用户**，⛔ 不是空闲（上面三条空闲判据它全中：
+        # 用户关了 tab ⇒ 无订阅；等答题 ⇒ 无上行活动；不写盘 ⇒ jsonl mtime 老化）。
+        # 杀它 = 不可逆地销毁问题：pi 侧 dialog Promise 随进程死，respawn 广播的
+        # `sessiond.session_restarted` 清空 pending_dialogs（0830-1104-eji4 的正确语义：
+        # 重放已死 dialog 会让应答无处可去）⇒ 重挂接的基线再也带不出它，jsonl 只留
+        # 一个没有 toolResult 的 toolCall，agent 侧结算成「无答复」。
+        # 代价（已裁接受）：pi 只在请求自带 `timeout` 时自动结算（pi docs/rpc.md「Extension
+        # UI Protocol」）⇒ 无 timeout 的 dialog 会让该进程活到答题 ∨ 会话被删（个人单用户面，
+        # ⛔ 不为此加 TTL 常量）。
+        if b.pending_dialog_list():      # 自带超时清扫 + 结算广播；⛔ 不得持 b.lock 调（非重入锁）
+            continue
         try:
             # 会话仍在干活（近阈值内有写入）→ 不回收；文件尚不存在（pi 懒落盘，
             # 无任何写入）也算空闲——否则从未写过盘的会话永不被回收。
