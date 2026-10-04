@@ -466,9 +466,13 @@ profile**（缺省 `command-center`），工作目录由该 profile 清单的 `c
 **新建面 ⛔ 不是 HTTP op**：它是 `dash/sessions.md` 每机一节的**手动 widget**（`${!…}`，
 autorun/run-all 跳过）直调的 CLI `dash/session-ctl.py new --profile <名>` →
 `proc.create_cc_session`（子进程里 `run_script` 不可用，与 `dash/gc-tasks.py run --yes` 同款）
-⇒ 本层只有四枚 op（list/rename/delete/session_tabs），消费方 = `dash/session-ctl.py` 一枚
-（单文件控制面：CLI `list` = 每节 widget 的表、HTTP `interp` 不带 `act` = `@dynamic` 的 tab 行 rpc、
-HTTP `?act=rename|delete` = 改名/删除的表单端点、CLI `profiles`/`new` = 可选集与新建）。
+⇒ 本层只有四枚 op（list/rename/delete/session_tabs），消费方 = **两枚**：`view/index.html`
+（聊天窗的斜杠命令 `/rename <标题>`、`/delete` = 会话级变更的**日常入口**，`fetch` 直调本层；
+只在本族会话在场 = 客户端 `IS_CC` 按 `run/sessiond/` 前缀判，服务端 `_cc_name` 仍是唯一判据）与
+`dash/session-ctl.py`（单文件控制面：CLI `list` = 每节 widget 的表、HTTP `interp` 不带 `act` =
+`@dynamic` 的 tab 行 rpc、HTTP `?act=rename|delete` = 改名/删除的 **URL 面**〔⛔ 无发布链接：
+表内不放行级操作链接，用户拍板；保留理由 = 两枚变更都 ⛔ 需进程在场 ⇒ 清休眠会话不必先拉起它〕、
+CLI `profiles`/`new` = 可选集与新建）。
 
 ### 12.1 落盘面与生命周期
 
@@ -490,7 +494,7 @@ HTTP `?act=rename|delete` = 改名/删除的表单端点、CLI `profiles`/`new` 
 | ② cwd 派生与校验 | `cwd` **不由创建方提交**：取该 profile 清单的 `cwd` 字段（缺省 = 工作区根）→ 双保险 = 项目白名单**成员校验**（白名单 = `proc.list_projects()` 服务端枚举：`~/m` 自身 + 顶层含 `.git` 的子目录，只扫一层、零递归成本；realpath 逃出根集者不入白名单）+ 既有 `resolve_cwd`（根集 = `WS_REAL` + `realpath(WS/run)`、realpath 前缀，防穿越与符号链接逃逸）。⇒ 清单写错（`~/m/env` 凭据面 ∨ `~/m/run/agentd` 运行态 ∨ `~/m/agents/task/<他人 id>` 这些「在根集内但不是项目」的目录）= **拒建、⛔ 不回落**；提交期另有 `bots/cap_lint.py` 的 E18 判形状 |
 | ③ 服务端恒定 | `.agent` 的字段全部服务端恒定 ∨ 自动生成 ∨ 由清单派生（`cwd`/`sessionDir`/`name`/`host`/`profile`）；本层两枚变更 op（rename/delete）只接 `session`/`title`/`confirm`，客户端传那几个键（含 `command`）任一 ⇒ **400 显式拒绝**（⛔ 不只是忽略，`_SERVER_FIXED_FIELDS`） |
 | ④ 删除面 | 名字白名单正则（⛔ 无路径分隔符/穿越段）+ **root 身份断言**（会话目录的 realpath 不得等于 WS 根、也不得是它的祖先）+ 两个目标文件各自的 realpath **严格前缀断言**（拒符号链接逃逸）+ 删前 `stat` 三要素（dev/ino/size）+ realpath 记日志与响应 + ⛔ 不用 `ignore_errors` + 删后复核 `exists` 为假 |
-| 残余面（已裁接受） | 框架不把 `REQUEST_METHOD` 传给端点（口径同 `lore/tools/todo-act.py` 头注）；设计稿明裁**不做 nonce** ⇒ 不加固。**删除端点无确认页**（用户拍板：`?act=delete&name=<n>` 链接即删，端点自向 op 传 `confirm=1`）⇒ 残余 CSRF/预取面 = 带 name 的跨站 GET 可直杀一枚会话；后果上界 = 杀一枚 ephemeral 会话 + rm 两个宿主本地文件（与 `run/` 被清同量级），且只限本机宿主运行时区。删除面纪律（下行 ④）是它的唯一服务端闸 |
+| 残余面（已裁接受） | 框架不把 `REQUEST_METHOD` 传给端点（口径同 `lore/tools/todo-act.py` 头注）；设计稿明裁**不做 nonce** ⇒ 不加固。**删除两个入口都无确认步**（用户拍板）：聊天窗 `/delete` 直执行（口径同 `/clear`、`/reload` 已废二次确认）、URL 面 `?act=delete&name=<n>` 即删（端点自向 op 传 `confirm=1`）⇒ 残余面 = 带 name 的跨站 GET 可直杀一枚会话（URL 面无发布链接 ⇒ 需先拿到 name），聊天窗面则需已登入该会话页；后果上界 = 杀一枚 ephemeral 会话 + rm 两个宿主本地文件（与 `run/` 被清同量级），且只限本机宿主运行时区。删除面纪律（下行 ④）是它的唯一服务端闸 |
 | 跨机误开 | `.agent` 的 `host` 字段只作展示/记录：本族声明者落 `run/sessiond/`，⛔ 不在 `proc._scan_agent_declarations` 的扫描面（`assistant/**`）内 ⇒ `host_guard` 对它们不生效。⛔ 有意不扩扫描面：跨机访问天然被机器前缀挡住（`/nv1/…` 经代理落到 nv1 自己的 8080），且 `run/` 宿主本地 ⇒ 误开只是在本机另起一个会话、**不会双写同一 jsonl**（`host_guard` 要挡的正是双写）；扩扫描面 = 给每次建桥加一次 `os.walk`（为小概率事件加常驻成本） |
 
 ### 12.3 tab 面（`@dynamic`，设计稿 §4.3 方案 B）

@@ -347,6 +347,10 @@ function parseAgentFromUrl() {
 const SESSION = parseSessionFromUrl();
 const AGENT = SESSION ? null : parseAgentFromUrl();   // 两者互斥（后缀不同）
 const AGENT_NAME = AGENT ? AGENT.replace(/^\//, "").replace(/\.agent$/, "") : null;
+// 指挥中心临时会话（run/sessiond/，ARCHITECTURE §12）：只有这一族有 rename/delete 两枚
+// 会话级变更 op（op 侧 `_cc_name` 只认 run/sessiond/ 下的路径 ⇒ 他族一律 400），故
+// /rename 与 /delete 只在本族会话里进斜杠提示（客户端先挡一道，服务端仍是唯一判据）。
+const IS_CC = /^\/run\/sessiond\//.test(SESSION || AGENT || "");
 if (SESSION) {
   document.title = SESSION.replace(/\/spec\.json$/, "").replace(/\.jsonl$/, "") + " · chat";
 } else if (AGENT) {
@@ -395,6 +399,7 @@ let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件
 let toolBlocks = {};          // toolCallId -> 折叠块引用
 let healBusy = false;
 let healFails = 0;
+let sessionGone = false;      // /delete 已执行：本 tab 无会话可续（终态，不再重挂接/不重拉进程）
 // 基线分片渲染（任务 bw333x）：大历史（675 entries/1.3MB）同步一次渲染会阻塞主线程
 // 秒级（且每 addDiv 触发 scrollStream 强制布局，近二次方）。改时间切片渲染：
 // baselineGen = 渲染代际号（attach/heal/clear 重入 → 旧分片循环放弃）；
@@ -1795,12 +1800,63 @@ async function doClear() {
   healBusy = false;
 }
 
+// ---------------- 会话级变更（/rename · /delete） ----------------
+// 入口从 sessions.md 表内链接搬进聊天窗（用户拍板）⇒ 删一枚会话先打开它（`.agent` 是
+// 唯一拉起入口）；⛔ 不先拉起就删的批量面 = `dash/session-ctl.py?act=delete&name=<n>`
+// 的 URL 面（无发布链接，见 dash/README.md）。两枚都只接 `run/sessiond/` 那一族（op 侧
+// `_cc_name` 是唯一判据；客户端 IS_CC 只为提示面不给他族会话列这两条命令）。
+// /delete 直接执行、⛔ 不二次确认（口径同 /clear、/reload：用户拍板）；删完本 tab 即死 ⇒
+// 停流 + 摘 `attached`（`heal()`/`openStream()` 都以 `!attached` 短路 ⇒ 不重挂接、不为已删
+// 会话重拉进程）+ 锁输入框 + 粘性回执（删了什么、进程面、不可撤销）。
+async function doRename(arg) {
+  if (!IS_CC) { flash("/rename is only for command-center sessions (run/sessiond/)", "err"); return; }
+  if (!attached) { flash("Not attached to a session, cannot rename", "err"); return; }
+  if (!arg) {
+    showNotice("Usage: /rename <new title>\n/rename -  = drop the override (fall back to the auto title)", "err");
+    return;
+  }
+  try {
+    const d = await api("rename_session", {session: attached,
+      title: (arg === "-") ? "" : arg});        // op 侧：空标题 = 清除 override
+    document.title = (d.title || AGENT_NAME || "session") + " · chat";
+    showNotice("Title: " + d.title + (d.override ? "  (override)"
+      : "  (auto — override cleared)"), "", true);
+  } catch (e) {
+    flash("Rename failed: " + e.message, "err");
+  }
+}
+
+async function doDelete() {
+  if (!IS_CC) { flash("/delete is only for command-center sessions (run/sessiond/)", "err"); return; }
+  if (!attached) { flash("Not attached to a session, cannot delete", "err"); return; }
+  if (sessionGone) return;
+  const target = attached;
+  flash("Deleting session…");
+  try {
+    const d = await api("delete_session", {session: target, confirm: "1"});
+    sessionGone = true;
+    stopStream();
+    attached = null;
+    clearPendingDialogs();
+    const el = $("promptInput");
+    if (el) { el.disabled = true; el.placeholder = "session deleted"; }
+    showNotice("Session deleted: " + target
+      + "\nremoved: " + ((d.removed || []).join(", ") || "(nothing)")
+      + "  ·  process: " + JSON.stringify(d.process || {})
+      + "\n不可撤销（声明者与历史已 rm）；本 tab 已无会话可续 ⇒ 可关闭，刷新 dash 后该 tab 消失。",
+      "", true);
+  } catch (e) {
+    flash("Delete failed: " + e.message, "err");
+  }
+}
+
 // ---------------- 斜杠命令拦截 ----------------
 // 以 / 开头的输入不进 prompt：可映射 pi rpc 命令的做真实现，其余内联提示。
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const SLASH_HELP = "Session commands: /abort · /clear · /compact · /model <provider>/<modelId> · "
   + "/thinking <" + THINKING_LEVELS.join("|") + "> · /export · /fork [<entryId>]"
-  + " · /image · /inspect · /reload · /sound [on|off]";
+  + " · /image · /inspect · /reload · /sound [on|off]"
+  + (IS_CC ? " · /rename <title> · /delete" : "");   // 会话级变更只在本族会话在场
 let noticeTimer = null;
 let slashNoticeOn = false;    // 当前粘性展示的是斜杠命令提示（0830-1257-vwzb，供 get_state 回执定点刷新）
 function showNotice(text, cls, sticky) {
@@ -1909,6 +1965,8 @@ function handleSlash(msg) {
     case "/compact":
       sendCmd({type: "compact", id: uid(), ...(arg ? {customInstructions: arg} : {})});
       showNotice("Compaction requested…"); return;
+    case "/delete":
+      doDelete(); return;
     case "/model": {
       if (!arg) { showNotice("Usage: /model <provider>/<modelId>", "err"); return; }
       const i = arg.indexOf("/");
@@ -1959,6 +2017,8 @@ function handleSlash(msg) {
       return;
     case "/reload":
       doReload(); return;
+    case "/rename":
+      doRename(arg); return;
     case "/sound": {
       // 提示音开关（任务 0829-2103-dpe4）：无参切换，默认开；无图形控件。
       if (!arg) soundOn = !soundOn;
