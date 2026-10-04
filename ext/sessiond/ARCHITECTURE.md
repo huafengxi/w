@@ -95,7 +95,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 | 项 | 语义 |
 |---|---|
-| 命令 | 仅注册一个内部斜杠命令 `sessiond-inspect`（命名经冲突排查：不与 pi 内置命令、已装 npm 包命令、用户/项目扩展命令、skill `skill:` 命名空间冲突；不注册任何工具，工具名冲突面为零）。前端不直接敲它，由后端 `op=inspect` 编排 |
+| 命令 | 仅注册一个内部斜杠命令 `sessiond-inspect`（命名经冲突排查：不与 pi 内置命令、已装 npm 包命令、用户/项目扩展命令、skill `skill:` 命名空间冲突；不注册任何工具，工具名冲突面为零）。前端不直接敲它，由后端 `op=inspect` 编排；它列在前端 `INTERNAL_COMMANDS` 里 ⇒ 既不列进 `/inspect` 的命令清单、也不进斜杠透传白名单（任务 8kq2vt） |
 | 行为 | `/sessiond-inspect <nonce>` 把当前系统提示词全文（`ctx.getSystemPrompt()`）+ 工具清单（`pi.getAllTools()`）写侧车文件 `~/m/run/sessiond-inspect/<nonce>.json`（临时文件+rename 原子） |
 | 零污染 | 侧车文件不进事件环、不进 jsonl、不进 LLM 上下文；转储经 `bridge.py:inspect` → HTTP 响应（`op=inspect`）下发 |
 | 容错 | 运行期异常（命令/钩子）→ pi 发 `extension_error` 不崩进程，且探针 handler 内部自包 try/catch（异常也写 error payload 进侧车文件）；**但 pi 对 `-e` 扩展的加载（语法）错误是致命的**（启动直接退出，与自动发现扩展的 errors 收集不同）——探针保持极小面（只一个命令、无钩子），`_spawn` 仅在文件存在时注入，语法回归由发版前的会话实测闸门拦截 |
@@ -199,8 +199,8 @@ attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries
 
 | type | 发起入口 | 附加字段 | 语义 |
 |---|---|---|---|
-| `prompt` | Enter 且 **`turnActive == false`**（agent 空闲） | `message`, `id`, 可选 `images`（`[{type:"image", data:<b64>, mimeType}]`） | 新回合提示词；被拒语义见下 |
-| `follow_up` | Enter 且 **`turnActive == true`**（流式中自动排队）；及 prompt 被 "already processing" 拒后的自动转换 | 同 `prompt`（转换时仅重发文本，图片不可恢复） | 排队至 agent 完全停止后才投递；送达信号 = 对应 user `message_start`（文本匹配，幂等转正） |
+| `prompt` | Enter 且 **`turnActive == false`**（agent 空闲）；及会话内 **extension** 命令透传（**恒走 prompt、与 `turnActive` 无关**，见下「斜杠透传面」） | `message`, `id`, 可选 `images`（`[{type:"image", data:<b64>, mimeType}]`） | 新回合提示词；被拒语义见下 |
+| `follow_up` | Enter 且 **`turnActive == true`**（流式中自动排队）；及 prompt 被 "already processing" 拒后的自动转换；及流式中透传会话内 **prompt 模板 / skill** 命令 | 同 `prompt`（转换时仅重发文本，图片不可恢复） | 排队至 agent 完全停止后才投递；送达信号 = 对应 user `message_start`（文本匹配，幂等转正） |
 | `abort` | `/abort` | `id` | 立即执行、不进队列；后端对悬空 dialog 同步发 `cancelled` 代答并广播结算（见 `bridge.py:send`、§11.4），前端同步关闭本地 dialog |
 | `extension_ui_response` | dialog 应答/取消 | `id` + `{value}` / `{confirmed}` / `{cancelled}` | 应答悬空 dialog；无对应悬空 id → 403 |
 | `compact` | `/compact [自定义指令]` | `customInstructions?` | 请求压缩 |
@@ -215,6 +215,8 @@ attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries
 |---|---|
 | `steer` | pi rpc 支持「当前工具完成后、下一次模型调用前投递」的插队命令；本前端无发送入口，但 `queue_update.steering` 队列会在 QUEUED 面板以蓝色 `steer` 徽标展示（如其它客户端入队） |
 | `switch_session` / `set_session_name` | **后端硬拦截**（`bridge.py:BLOCKED_COMMANDS`），发送返回 403 |
+
+**斜杠透传面（任务 8kq2vt）**：`/` 开头的输入先过 `handleSlash` 的本表固定命令（abort/clear/compact/delete/model/thinking/export/fork/image/inspect/reload/rename/sound）；未命中则查**动态白名单** `loadedCmdIndex`（= `op=commands` 的会话内真清单，name → source；刷新点 = 基线落地 + `/inspect` 现拉复用），命中才把原文下发 ⇒ **展示面与可执行面同源**（消除了「/inspect 清单里看得见、敲了只报 Unknown command」的错位），未命中（含 typo 与大小写不匹配）仍报 Unknown command ⇒ typo 不进上下文、不触发一轮生成。按 source 分路：**extension** → 恒 `prompt`（pi 的 `prompt()` 对 extension 命令即时执行、流式中也执行且不把提示词送给模型；⛔ 不能走 `follow_up`/`steer`——`agent-session` 的 `followUp()`/`steer()` 对 extension 命令直接抛错）；**prompt / skill** → pi 会展开成 user 消息并触发一轮 ⇒ 与普通文本同路（空闲 `prompt` / 流式中 `follow_up`）。内部探针名（`INTERNAL_COMMANDS`，现值 = `sessiond-inspect`）不入白名单。只读取证类 extension 命令的输出面 = `ctx.ui.notify` → 渲染见 §7.2 `.notifybox`。
 
 **"already processing" 拒绝语义**：前端以 `turnActive` 判空闲发 `prompt`，与 agent 启动存在同瞬竞态；pi 对处理中的 `prompt` 回 `{success:false, error:"already processing"}`。前端 `index.html:handleCmdResponse` 识别后不标红、不标 rejected，自动转 `follow_up` 重发入队（flash「Agent busy → queued as follow-up」）。其余拒绝 → flash 红色并置面板条目 `rejected` 态。
 
@@ -245,7 +247,8 @@ attach 响应形状由 `api.py:_baseline_doc` 整理；`watermark` = get_entries
 |---|---|---|
 | `#flashNotice` flash 轻提示 | 顶部居中浮层，承载所有系统提示（挂接/自愈/reload/熔断/发送被拒等），**错误不静默吞掉** | `flash()` 触发；普通 4s、`err` 8s 自动隐藏 |
 | `#slashNotice` 斜杠提示条 | 输入框上方内联提示（`/` 支持表粘性展示、命令结果/用法错误）；粘性展示时顶部为 `slashStatusLine()` 状态行：model/thinking、msgs/gen/restarts、ctx 占用、host/workDir/sessionDir（末行双数据源，任务 bjhzvj：.agent 会话 = op=agent 回执（优先）；其余会话（普通/socket）= op=status 附加字段，attach 基线完成后回填——host=本机规范名（env/host-id）、sessionDir=会话文件目录；workDir 分两路：普通会话 = 进程拉起 cwd（未拉起 → 显 `?`），socket 会话（agentd 族）= 参与方 spec.json 声明的 workdir（= runner 拉起会话进程的 cwd，任务 8r0tww；读取失败 → 显 `?` 不猜）；回填对三值整体替换（null 显式清回 `?`，防进程被回收/停止后残留旧值，任务 8r0tww 评审捎带项）；其余缺失亦显 `?`）。粘性提示仅状态行 + `SLASH_HELP`（任务 de3opk：原已加载命令清单段迁至 `.inspectbox` 探针面板，见下行） | 输入以 `/` 开头 → 粘性显示 `SLASH_HELP`；执行命令后非粘性 6s 自动隐藏；非 `/` 输入清除 |
-| `.inspectbox` 探针面板（任务 s0f1la；任务 55qdzm 做减法） | `/inspect` 的输出：可折叠 `<details>`（默认展开）追加进 `#stream`：summary = 提示词字数/生成时间；**已加载命令清单段**（任务 de3opk 从 slashNotice 迁入）：数据源 = `op=commands`（前端 `/inspect` 打开时与 `op=inspect` 并行现拉，不缓存）；按 source 分组，**仅 extension/prompt 组**逐条 `name — description`（description 截断 80 字符）全量列出（长清单靠 `<pre>` 限高滚动容纳）；拉取失败/空清单 → 该段不渲染、不闪 err（优雅降级）；+ 系统提示词全文（限高滚动 `<pre>`）。数据源 = `op=inspect`（后端编排探针扩展，见 §4）。任务 55qdzm 删除工具清单段与 skill 段——系统提示词全文本身已含工具描述与 skill 清单，重复渲染冗余；转储的 `tools` 字段保留、前端不再消费（探针/后端零改动）。**瞬态**：不进 jsonl，heal/刷新后消失（与 sysLine/flash 同类，探针输出非会话内容）；失败 → flash err | `/inspect` 命令成功返回时 |
+| `.inspectbox` 探针面板（任务 s0f1la；任务 55qdzm 做减法） | `/inspect` 的输出：可折叠 `<details>`（默认展开）追加进 `#stream`：summary = 提示词字数/生成时间；**已加载命令清单段**（任务 de3opk 从 slashNotice 迁入）：数据源 = `op=commands`（前端 `/inspect` 打开时与 `op=inspect` 并行现拉，不缓存）；按 source 分组，**仅 extension/prompt 组**逐条 `name — description`（description 截断 80 字符）全量列出（长清单靠 `<pre>` 限高滚动容纳）；拉取失败/空清单 → 该段不渲染、不闪 err（优雅降级）；+ 系统提示词全文（限高滚动 `<pre>`）。数据源 = `op=inspect`（后端编排探针扩展，见 §4）；本段列的名字与斜杠透传白名单同源（§6「斜杠透传面」），内部探针名不列。任务 55qdzm 删除工具清单段与 skill 段——系统提示词全文本身已含工具描述与 skill 清单，重复渲染冗余；转储的 `tools` 字段保留、前端不再消费（探针/后端零改动）。**瞬态**：不进 jsonl，heal/刷新后消失（与 sysLine/flash 同类，探针输出非会话内容）；失败 → flash err | `/inspect` 命令成功返回时 |
+| `.notifybox` extension 通知块（任务 8kq2vt） | extension 的 `ctx.ui.notify(text, type)` 在 rpc 模式 = fire-and-forget 的 `extension_ui_request{method:"notify", message, notifyType}`（pi `docs/rpc.md`「Extension UI Protocol」）⇒ **无应答面**，独立成块追加进 `#stream`（`<pre>` 存多行正文，按 `notifyType` 上色：info 中性 / warning 黄 / error 红 + 额外 flash），⛔ 不进 dialog 槽位也不进 `pendingDialogs`（进则弹假框、Submit 必被后端拒 `no pending dialog`、且占框让后续真 dialog 排队）；典型来源 = `/persona`、`/compaction-policy` 一类只读取证命令。**瞬态**：不进 jsonl，heal/刷新后消失（与 `.inspectbox` 同类） | `extension_ui_request` 且 `method === "notify"` 时 |
 | `#queuedPanel` QUEUED 面板 | 「QUEUED · N」：后端权威队列（`queue_update`）+ 本地乐观补位（`pendingSends`，同文本不重复）；条目 = 徽标（`steer` 蓝色描边 / `follow-up` 灰色）+ 单行截断文本；被拒条目红色；**无 Recall 按钮**（pi rpc 协议无召回能力） | 有任一条目时显示，空则隐藏；`queue_update`/发送/送达/清屏时重渲染 |
 | `#attachBar` 附件条 | 输入栏上方待发送图片缩略图（粘贴取图，仅拦 `image/*`），单个移除 + Clear (N) | `pendingImages` 非空时显示；发送后清空隐藏 |
 | `#dialogBox` dialog 模态盒 | 右下固定浮层：标题（`dialog [method] id=…`）+ 正文 + 按 method 生成控件 + Cancel + 倒计时「Auto-settle in Ns」（250ms tick，到期由 pi 端超时结算） | 默认 `display:none`；`extension_ui_request` 到达且当前无其它框时显示；同框异 id 时仅登记排队（`showDialog` 同 id 幂等）；应答/`cancelled`/`sessiond.dialog_resolved`/`/abort` 时关闭并自动弹下一个排队框；应答被服务端拒绝（如对端已结算的 `no pending dialog`）时 `replyDialog` catch 分支也本地关框（双保险，§11.4） |
@@ -281,6 +284,7 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 | `pendingSends` / `queueState` | 本地待送达跟踪（cmd id → {mode,text,rejected}）/ 后端权威队列快照 {steering, followUp} |
 | `pendingDialogs` / `dialogTimer` / `dialogDeadline` | 悬空 dialog 请求体集（含排队）/ 倒计时定时器 / 到期时间戳 |
 | `pendingImages` | 待发送附件 [{mime, b64, dataUrl}] |
+| `loadedCmdIndex` / `INTERNAL_COMMANDS` | 会话内命令索引（name → source，斜杠透传白名单；刷新点 = 基线落地 + `/inspect` 现拉复用；HTTP 层抛错保留旧值、后端 `ok:false` 清空）/ 不可手敲的内部探针名（现值 `sessiond-inspect`），见 §6「斜杠透传面」 |
 | `retryBoxEl` / `lastRenderedErrorMsg` | 当前重试警告框 / 最近已渲染错误文本（去重键） |
 | `healBusy` / `healFails` | 自愈互斥锁（`doClear` 亦借用）/ 连续失败计数（5 次耗尽） |
 | `soundOn` / `soundCtx` / `soundUnlocked` / `lastBeepAt` | 提示音开关 / AudioContext / 手势解锁标志 / 节流时间戳 |
@@ -335,7 +339,7 @@ dialog 控件按 `method` 分支：`select` → 每选项一个按钮；`confirm
 | `tool_execution_start` | 工具开始执行 | 建/更新工具块 `run` 态、计时起点，见 §7.1 工具块 |
 | `tool_execution_update` | 工具流式输出（`partialResult` 为累积值） | 整段替换工具输出区，见 §7.1 |
 | `tool_execution_end` | 工具结束（`result`/`isError`） | 写结果、算耗时、`done`/`err` 态+waiting，见 §7.1 |
-| `extension_ui_request` | dialog 请求（`method` ∈ select/confirm/input/editor，带 `id`/`title`/`options`/`timeout` 等） | `showDialog` 显示或排队，见 §7.2；后台 notify 音见 §11.5 |
+| `extension_ui_request` | dialog 请求（`method` ∈ select/confirm/input/editor，带 `id`/`title`/`options`/`timeout` 等）；**或** fire-and-forget 通知（`method == "notify"`，带 `message`/`notifyType`，无应答面） | dialog → `showDialog` 显示或排队，见 §7.2/§11.4；notify → `renderNotify` 独立成块（⛔ 不进 dialog 槽位），见 §7.2 `.notifybox`；后台 notify 音见 §11.5 |
 
 ### 9.3 回合状态事件
 
@@ -411,6 +415,7 @@ agentd 监督的常驻载体（如各 position 的 watcher 进程 = `queue/<posi
 
 ### 11.4 dialog（extension_ui_request）双端同弹与结算
 
+- 本节只涉 **dialog 方法**（select/confirm/input/editor）；`method == "notify"` 是 fire-and-forget，不属 dialog 面（不入 `pending_dialogs`、不参与双端同弹与结算广播，各端各自渲染一块，见 §7.2 `.notifybox`）。
 - 双端同弹：`extension_ui_request` 多播到所有订阅者，各页签 `showDialog` 弹同一模态盒（同框异 id 排队登记）；刷新/重连后靠基线 `pendingDialogs` 重建（`bridge.py:pending_dialog_list`）。
 - 先到生效双保险：应答校验见 §3 `bridge.py:send`——先到的一端生效，另一端再答被拒 403；前端 `index.html:replyDialog` 对服务端报错（如 `no pending dialog` = 对端已结算）在 catch 分支也本地 `closeDialog` 关框，防非应答端 Cancel 永久卡死，与后端广播互为兜底。
 - `sessiond.dialog_resolved` 结算广播入事件环、多播到**所有订阅者**——一端结算、各端同步关框；含应答端自身：其前端已本地关框删表，`index.html` handler 查无 `pendingDialogs[id]` 幂等 no-op，安全；事件入环，晚到订阅者（since 回放）也能收到。

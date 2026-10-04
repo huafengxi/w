@@ -159,6 +159,16 @@ details summary::-webkit-details-marker { display: none; }
 .inspectbox pre { font-size: 11px; margin: 4px 0; padding: 6px; background: #eef2f7;
   border-radius: 6px; max-height: 320px; overflow: auto; white-space: pre-wrap;
   word-break: break-word; }
+/* extension 的 ctx.ui.notify() 输出块（任务 8kq2vt）：fire-and-forget、无应答面 ⇒
+   不进 dialog 槽位（进则弹假框 + Submit 必被后端拒），独立成块进 #stream；
+   多行正文靠 <pre> pre-wrap，按 notifyType 上色（info 中性 / warning 黄 / error 红）。
+   与 .inspectbox 同为瞬态：不进 jsonl，heal/刷新后消失。 */
+.notifybox { margin: 4px 0; border: 1px solid #c9d4e3; background: #f6f9fc;
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.notifybox pre { font-size: 11px; margin: 0; white-space: pre-wrap;
+  word-break: break-word; }
+.notifybox.warn { border-color: #eed888; background: #fff8c5; color: var(--warn); }
+.notifybox.err { border-color: #e6b3b3; background: #fdeeee; color: var(--err); }
 .tool-block .tbody { padding: 0; }
 .tool-block pre { font-size: 11px; margin: 4px 0; white-space: pre-wrap;
   word-break: break-all; }
@@ -591,6 +601,7 @@ function renderBranchSliced(branch, doc) {
     sendGetState();                              // 基线完成 → 拉权威模型/思考强度（0830-1257-vwzb）
     sendCtxStats();                              // 基线完成 → 拉上下文占用（0830-1324-3qet）
     sendStatusQuery();                           // 基线完成 → 拉 host/workDir/sessionDir 等（任务 bjhzvj；回填内部 !AGENT 门控）
+    refreshLoadedCommands();                     // 基线完成 → 刷会话内命令索引（斜杠透传白名单，任务 8kq2vt）
   };
   const slice = () => {
     // 进入时 batchDepth 已为 1（入口/续片保持），渲染全程维持 → scrollStream 被抑制；
@@ -1039,7 +1050,13 @@ function renderEvent(o) {
     showWaiting();                              // 工具执行完成 → 等下一轮模型响应（0829-2107-cvdn）
     scrollStream(); return;
   }
-  if (t === "extension_ui_request") { showDialog(o); return; }
+  if (t === "extension_ui_request") {
+    // notify 是 fire-and-forget（pi docs/rpc.md「Extension UI Protocol」：不期待应答）
+    // ⇒ 独立渲染成流内块，⛔ 不进 dialog 槽位（任务 8kq2vt；进则弹假框、
+    // Submit 必被后端拒 no pending dialog、且占着框让后续真 dialog 排队）。
+    if (o.method === "notify") { renderNotify(o); return; }
+    showDialog(o); return;
+  }
 }
 
 // ---------------- 事件分类（主流 = 对话；其余系统/控制面帧不展示） ----------------
@@ -1856,7 +1873,9 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 const SLASH_HELP = "Session commands: /abort · /clear · /compact · /model <provider>/<modelId> · "
   + "/thinking <" + THINKING_LEVELS.join("|") + "> · /export · /fork [<entryId>]"
   + " · /image · /inspect · /reload · /sound [on|off]"
-  + (IS_CC ? " · /rename <title> · /delete" : "");   // 会话级变更只在本族会话在场
+  + (IS_CC ? " · /rename <title> · /delete" : "")   // 会话级变更只在本族会话在场
+  + "\nAny other /name is passed through to pi if this session actually loaded it"
+  + " (extension / prompt template / skill — list: /inspect)";   // 透传面（任务 8kq2vt）
 let noticeTimer = null;
 let slashNoticeOn = false;    // 当前粘性展示的是斜杠命令提示（0830-1257-vwzb，供 get_state 回执定点刷新）
 function showNotice(text, cls, sticky) {
@@ -1907,10 +1926,40 @@ function slashStatusLine() {
 // 任务 55qdzm 做减法：skill 组不再渲染——系统提示词全文本身已含 skill 清单，
 // 重复展示冗余（同批删除的还有工具清单段）；本段只留 /slash 命令（不在提示词里）。
 // 展示规则：extension/prompt 组逐条 `name — description`（desc 截 80 字符），
-// 全量列出（面板 <pre> 限高滚动，长清单不挤占流）。
+// 全量列出（面板 <pre> 限高滚动，长清单不挤占流）；内部探针名不列（见 INTERNAL_COMMANDS）。
 // 失败/空清单 → 该段不渲染、不闪 err（优雅降级）。
 // 局限：仅列出注册了斜杠命令的 extension；只注册工具/事件钩子的不出现（预期）。
 const CMD_DESC_LIMIT = 80;          // description 截断长度（a16jpj）
+
+// ---------------- 会话内命令索引（任务 8kq2vt：斜杠透传的可执行面） ----------------
+// 数据源与上面那段同源 = op=commands（pi rpc get_commands）；用途 = handleSlash 的
+// default 分支动态白名单：命中才把原文透传成 pi prompt，未命中仍报 Unknown command
+// ⇒ typo 不进上下文、不触发一轮生成（展示面与执行面同源，消除「清单里有、敲了没用」）。
+// 刷新点 = 基线落地（renderBranchSliced 的 finish）+ /inspect 现拉复用。失败分两档：
+// HTTP/网络层抛错 → 保留旧索引（一次毛刺不关掉整个透传面）；后端明确回
+// ok:false（超时/不就位/被拒）→ 清空（清单未知即关透传，⛔ 不拿陈旧名单猜）。
+let loadedCmdIndex = new Map();     // name -> source（extension | prompt | skill）
+// 内部探针：需 nonce、由后端 op=inspect 编排（bridge.py:inspect），人手敲只会写一个
+// 没人读的侧车文件 ⇒ 既不列进清单、也不进透传白名单（人用的入口是 /inspect）。
+const INTERNAL_COMMANDS = new Set(["sessiond-inspect"]);
+
+// 入参 = op=commands 的 commands 数组（null/非数组 → 清成空索引）。
+function setLoadedCommands(cmds) {
+  const m = new Map();
+  if (Array.isArray(cmds)) for (const c of cmds) {
+    const n = (c && c.name) ? "" + c.name : "";
+    if (!n || INTERNAL_COMMANDS.has(n)) continue;
+    m.set(n, (c && c.source) ? "" + c.source : "other");
+  }
+  loadedCmdIndex = m;
+}
+async function refreshLoadedCommands() {
+  if (!attached) { loadedCmdIndex = new Map(); return; }
+  try {
+    const d = await api("commands", {session: attached});
+    setLoadedCommands((d && d.ok && Array.isArray(d.commands)) ? d.commands : null);
+  } catch (e) { /* 静默降级：保留旧索引，透传面不因一次拉取失败而失效 */ }
+}
 
 // 纯函数：入参为命令清单数组；非数组/空 → 返回 ""（调用方据此不渲染该段）。
 function loadedCommandsText(cmds) {
@@ -1919,6 +1968,7 @@ function loadedCommandsText(cmds) {
   for (const c of cmds) {
     const src = c && c.source ? "" + c.source : "other";
     if (src === "skill") continue;          // skill 清单在系统提示词全文里，不重复渲染（55qdzm）
+    if (INTERNAL_COMMANDS.has(c && c.name ? "" + c.name : "")) continue;   // 内部探针不列（8kq2vt）
     (groups[src] || (groups[src] = [])).push(c);
   }
   const labels = {"extension": "extension", "prompt": "prompt"};
@@ -2010,6 +2060,7 @@ function handleSlash(msg) {
           .then(d => (d && d.ok && Array.isArray(d.commands)) ? d.commands : null)
           .catch(() => null),                 // 静默降级（de3opk，沿用 a16jpj 口径）
       ]).then(([d, cmds]) => {
+        if (cmds) setLoadedCommands(cmds);        // 现拉的清单回填透传白名单（不额外再拉一次，8kq2vt）
         renderInspectPanel(d && d.inspect, cmds);
       }).catch(e => { flash("Inspect failed: " + e.message, "err"); });
       return;
@@ -2027,9 +2078,58 @@ function handleSlash(msg) {
       if (soundOn) beep("notify");            // 响一声确认（未解锁则静默）
       return;
     }
-    default:
-      showNotice("Unknown command " + cmd + " — " + SLASH_HELP, "err"); return;
+    default: {
+      // 会话内命令透传（任务 8kq2vt）：动态白名单 = op=commands 的索引（本表固定
+      // 命令已在上面各 case 处理完）。名字按原文大小写精确匹配（⛔ 用 lowercased 的
+      // cmd 查会漏掉大小写敏感的名字）。
+      const raw = (sp < 0 ? msg : msg.slice(0, sp)).slice(1);
+      const src = loadedCmdIndex.get(raw);
+      if (!src) {
+        showNotice("Unknown command " + cmd + " — " + SLASH_HELP, "err"); return;
+      }
+      if (src === "extension") {
+        // extension 命令恒走 prompt：pi 的 prompt() 对它即时执行（流式中也执行、
+        // 且不发提示词给模型）；⛔ 不能走 follow_up/steer —— agent-session 的
+        // followUp()/steer() 对 extension 命令直接抛错（不可排队）。
+        const c2 = {type: "prompt", message: msg, id: uid()};
+        pendingSends[c2.id] = {mode: "prompt", text: msg, rejected: false};
+        sendTracked(c2);
+        showNotice("Sent " + cmd + " to pi (extension command)");
+      } else {
+        // prompt 模板 / skill：pi 会把它展开成 user 消息并触发一轮 ⇒ 与普通文本同路
+        //（空闲 prompt / 流式中 follow_up 排队），队列面板与送达跟踪一并复用。
+        const type = turnActive ? "follow_up" : "prompt";
+        const c2 = {type: type, message: msg, id: uid()};
+        if (type === "follow_up") addPendingSend(c2.id, msg, "queue");
+        else pendingSends[c2.id] = {mode: "prompt", text: msg, rejected: false};
+        sendTracked(c2);
+        stickyBottom = true; scrollStream(true);
+      }
+      return;
+    }
   }
+}
+
+// ---------------- extension notify 输出块（任务 8kq2vt） ----------------
+// extension 的 ctx.ui.notify(text, type) 在 rpc 模式下 = fire-and-forget 的
+// extension_ui_request{method:"notify", message, notifyType}（pi docs/rpc.md
+// 「Extension UI Protocol」：不期待应答）⇒ 无 dialog 语义、也无应答面。
+// 渲染：追加进 #stream 的独立块（<pre> 存多行正文，按 notifyType 上色），不占
+// dialog 槽位、不进 pendingDialogs（attach 基线也不重建：后端只快照 DIALOG_METHODS）。
+// 瞬态：与 .inspectbox 同类，不进 jsonl，heal/刷新后消失。
+// 典型来源 = 只读取证类 extension 命令的输出面（/persona、/compaction-policy）。
+function renderNotify(o) {
+  const nt = o.notifyType === "error" ? "err"
+    : (o.notifyType === "warning" ? "warn" : "");
+  const box = document.createElement("div");
+  box.className = "ev notifybox" + (nt ? " " + nt : "");
+  const pre = document.createElement("pre");
+  pre.textContent = (o.message != null) ? "" + o.message : "";
+  box.appendChild(pre);
+  $("stream").appendChild(box);
+  scrollStream();
+  // error 类通知额外走一道 flash：顶层浮层不随流滚走，避开长输出被忽略。
+  if (nt === "err") flash("Extension error notification (see stream)", "err");
 }
 
 // ---------------- 探针面板渲染（任务 s0f1la：op=inspect 转储） ----------------
