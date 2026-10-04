@@ -22,6 +22,7 @@ Expect: ALL PASS, exit code 0（任一断言失败 → AssertionError + 非 0 �
 """
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -186,6 +187,10 @@ def case4_create(ws, outside):
     assert spec["sessionDir"] == os.path.realpath(os.path.join(ws, "run", "sessiond"))
     assert spec["name"] == doc["name"] == os.path.basename(agent_path)[:-len(".agent")]
     assert _proc.SESSION_NAME_OK.match(doc["name"]), doc["name"]
+    # 现名形态 = 短名 `s<rand4>`（用户拍板 2026-10-04；旧存量名仍是长形态 ⇒
+    # SESSION_NAME_OK 是校验面、本行钉的是生成面）
+    assert re.fullmatch(r"s[a-z0-9]{4}", doc["name"]), doc["name"]
+    assert len(doc["name"]) == 5, doc["name"]
     assert doc["agent_site"] == "/run/sessiond/%s.agent" % doc["name"], doc
     assert doc["session_site"] == "/run/sessiond/%s.jsonl" % doc["name"], doc
     assert oct(os.stat(agent_path).st_mode & 0o777) == "0o600", "文件权限须 0600"
@@ -212,6 +217,37 @@ def case4_create(ws, outside):
     after = len(os.listdir(os.path.join(ws, "run", "sessiond")))
     assert before == after, (before, after)
     print("case4 OK: 清单 cwd 非法拒绝且零落盘（%d → %d）" % (before, after))
+
+    # 撞名 ⇒ 有界重取，⛔ 不覆盖同名 `.agent`（把生成器钉成常量后连建三枚）
+    saved_gen = _proc.new_session_name
+    saved_tries = _proc.SESSION_NAME_TRIES
+    _proc.new_session_name = lambda: "s0000"
+    try:
+        d1 = _proc.create_cc_session("ccw")
+        ino1 = os.stat(d1["agent_path"]).st_ino
+        _proc.SESSION_NAME_TRIES = 2
+        msg = _reject(_proc.create_cc_session, "ccw")
+        assert "free session name" in msg, msg
+        assert os.stat(d1["agent_path"]).st_ino == ino1, "撞名不得覆盖第一枚"
+        with open(d1["agent_path"], encoding="utf-8") as f:
+            assert json.load(f)["name"] == "s0000"
+        print("   reject 撞名（生成器钉常量 + TRIES=%d）→ %s"
+              % (_proc.SESSION_NAME_TRIES, msg))
+    finally:
+        _proc.SESSION_NAME_TRIES = saved_tries
+        _proc.new_session_name = saved_gen
+    # 重取生效（第一枚仍在场 ⇒ 钉成的名字必撞；生成器给第二个自由名）
+    seq = ["s0000", "s9zzz"]
+    _proc.new_session_name = lambda: seq.pop(0)
+    try:
+        d2 = _proc.create_cc_session("ccw")
+        assert d2["name"] == "s9zzz", d2["name"]
+        assert os.stat(d1["agent_path"]).st_ino == ino1, "第一枚不得被动"
+        print("case4 OK: 撞名 ⇒ 重取到下一个自由名（%s），⛔ 零覆盖" % d2["name"])
+    finally:
+        _proc.new_session_name = saved_gen
+        _proc.delete_cc_session(d1["name"])
+        _proc.delete_cc_session(d2["name"])
 
     # host 不可得 ⇒ 拒（⛔ 不猜）
     saved = _proc._self_host

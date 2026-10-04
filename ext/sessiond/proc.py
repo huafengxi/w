@@ -36,10 +36,12 @@ import json
 import logging
 import os
 import posixpath
+import random
 import re
 import shutil
 import signal
 import socket
+import string
 import subprocess
 import sys
 import threading
@@ -426,6 +428,8 @@ CC_PROFILE = "command-center"           # `create_cc_session` 的缺省 profile�
                                         # 但只放行 form: interactive 的清单 = validate_profile）
 PROFILE_CWD_DEFAULT = "."               # 清单未声明 `cwd` 时的缺省（= 工作区根）
 SESSION_NAME_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SESSION_NAME_ALPHABET = string.ascii_lowercase + string.digits
+SESSION_NAME_TRIES = 8            # 撞名重取上界（36^4 空间 ⇒ 常态一次即中）
 PROFILE_NAME_OK = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 TITLE_MAX = 80              # rename 的标题上限（字符）
 AUTO_TITLE_MAX = 48         # 自动标题截断长度（首条 user 消息的首个非空行）
@@ -604,8 +608,12 @@ def list_interactive_profiles():
 
 
 def new_session_name():
-    """会话名（服务端自动生成，⛔ 客户端不控）：时间戳 + uuid4 前 6 位。"""
-    return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    """会话名（服务端自动生成，⛔ 客户端不控）：`s` + 4 位小写字母/数字随机串（短名，
+    用户拍板 2026-10-04：会话名是 tab bar 与列表页的**回落标题** ⇒ ⛔ 不编时间戳，
+    时刻面 = `.agent` 的 `createdAt` 与列表的「最近活动」列）。
+    撞名由 `create_cc_session` 的有界重取吸收（⛔ 不覆盖）。⛔ 不复用
+    `agentd/proto.auto_name()`：`w/` 是独立公开子仓、不 import 工作区其它仓的实现体。"""
+    return "s" + "".join(random.choices(SESSION_NAME_ALPHABET, k=4))
 
 
 def create_cc_session(profile=CC_PROFILE):
@@ -616,7 +624,8 @@ def create_cc_session(profile=CC_PROFILE):
                      白名单/逃逸校验后的 realpath（⛔ 客户端不控）
       `sessionDir` = `<WS>/run/sessiond`（服务端恒定）
       `profile`    = `profile_spec` 放行的名字（客户端唯一可控面；缺省 = `CC_PROFILE`）
-      `name`       = `new_session_name()`（自动生成）
+      `name`       = `new_session_name()`（自动生成的短名；撞名 ⇒ 有界重取，用尽即拒、
+                     ⛔ 不覆盖同名 `.agent`）
       `createdAt`  = UTC ISO 时刻
     ⛔ **无 `command` 键**：spawn argv 的单点是 `Supervisor._spawn`，声明者不可控。
     落盘 = 临时文件 + `os.replace` 原子写，目录 0700 / 文件 0600（宿主本地运行时区）。
@@ -631,8 +640,16 @@ def create_cc_session(profile=CC_PROFILE):
     sdir = os.path.realpath(sessions_dir())
     if not _within_roots(sdir):
         raise ValueError("sessions dir escapes the workspace roots: %s" % sdir)
-    name = new_session_name()
-    agent_path = os.path.join(sdir, name + ".agent")
+    # 撞名收口：重取（有界）→ 用尽即拒。⛔ 不覆盖 —— `os.replace` 对同名 `.agent` 是静默
+    # 覆盖，而短名把撞名概率从「秒级时间戳」提到 36^4 空间 ⇒ 判据落在写盘前。
+    for _ in range(SESSION_NAME_TRIES):
+        name = new_session_name()
+        agent_path = os.path.join(sdir, name + ".agent")
+        if not os.path.exists(agent_path):
+            break
+    else:
+        raise ValueError("cannot allocate a free session name in %d tries "
+                         "(sessions dir=%s)" % (SESSION_NAME_TRIES, sdir))
     jsonl_path = os.path.join(sdir, name + ".jsonl")
     doc = {"host": host, "cwd": cwd, "sessionDir": sdir, "profile": prof,
            "name": name,
