@@ -57,8 +57,13 @@ class DirStore:
             content = safe_read(real_path, 1024)
             if content != None:
                 mime_type = get_mime_type(real_path)
-                first_line = content.split(b'\n', 1)[0]
-                header_vars = dict([(k.decode(), v.decode()) for k,v in re.findall(rb'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', first_line)])
+                # type 标记识别面：首行是 shebang（#!）时顺带扫第二行（脚本既可直跑
+                # 又可作 HTTP 端点的形态，先例 = dash/session-ctl.py）；无 shebang
+                # 的文件仍只扫首行（存量端点行为零变化）。
+                scan_lines = content.split(b'\n', 2)
+                if not scan_lines[0].startswith(b'#!'):
+                    scan_lines = scan_lines[:1]
+                header_vars = dict([(k.decode(), v.decode()) for line in scan_lines[:2] for k,v in re.findall(rb'-\*-\s*(\w+)\s*=\s*(.*?)\s*-\*-', line)])
                 header_vars.update(rpath=real_path)
                 if mime_type.startswith('text'):
                     sample = safe_read(real_path, 1<<14)
