@@ -1907,10 +1907,9 @@ function slashStatusLine() {
 // 任务 55qdzm 做减法：skill 组不再渲染——系统提示词全文本身已含 skill 清单，
 // 重复展示冗余（同批删除的还有工具清单段）；本段只留 /slash 命令（不在提示词里）。
 // 展示规则：extension/prompt 组逐条 `name — description`（desc 截 80 字符），
-// 单组超 CMD_GROUP_LIMIT 折叠为计数摘要。
+// 全量列出（面板 <pre> 限高滚动，长清单不挤占流）。
 // 失败/空清单 → 该段不渲染、不闪 err（优雅降级）。
 // 局限：仅列出注册了斜杠命令的 extension；只注册工具/事件钩子的不出现（预期）。
-const CMD_GROUP_LIMIT = 8;          // extension/prompt 组展示条数阈值，超出折叠为计数摘要（a16jpj）
 const CMD_DESC_LIMIT = 80;          // description 截断长度（a16jpj）
 
 // 纯函数：入参为命令清单数组；非数组/空 → 返回 ""（调用方据此不渲染该段）。
@@ -1930,7 +1929,6 @@ function loadedCommandsText(cmds) {
     const list = groups[src];
     if (!list || !list.length) continue;
     const label = labels[src] || src;
-    if (list.length > CMD_GROUP_LIMIT) { lines.push("\u00b7 " + label + ": " + list.length); continue; }
     for (const c of list) {
       let name = (c && c.name) ? "" + c.name : "?";
       let desc = ((c && c.description) || "").replace(/\s+/g, " ").trim();
