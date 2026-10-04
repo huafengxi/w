@@ -32,9 +32,10 @@
 #              （`dash/session-ctl.py new --profile <名>` → `proc.create_cc_session`；
 #              cwd 由该 profile 清单的 `cwd` 字段声明）⇒ 零 HTTP 参数面，收口全在 proc 的校验。
 #   op=list_sessions   只读：本机 run/sessiond/*.agent 全量（自动标题/最近活动/运行态/
-#              项目分组）——消费方 = 变更端点的表单/确认页取会话现值
+#              项目分组）——消费方 = 变更端点取会话现值（rename 表单页 ∨ delete 结果页）
 #   op=rename_session  改标题 override（落 .agent 的 title 字段；空标题 = 清除回落自动标题）
-#   op=delete_session  删除（需 confirm=1，轻确认一次、⛔ 不做 nonce，设计稿已裁）：
+#   op=delete_session  删除（op 层仍硬需 confirm=1 作内部契约；dash 端点无确认页、
+#              链接即删 ⇒ 由端点自传 confirm=1，⛔ 不做 nonce，设计稿已裁）：
 #              杀 Supervisor 进程 + rm .agent + rm jsonl（realpath 前缀断言 + 删前身份证据 + 删后复核）
 #   op=session_tabs    只读：活跃会话的 tab 行数据（设计稿 §4.3 的 @dynamic rpc 数据源；
 #              机器前缀按 _self_host() 派生，空态吐零行，⛔ 不标运行态）
