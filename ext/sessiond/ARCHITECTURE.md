@@ -478,7 +478,7 @@ CLI `profiles`/`new` = 可选集与新建）。
 
 | 项 | 语义 |
 |---|---|
-| 声明者 | `<WS>/run/sessiond/<name>.agent`，`name` = `s<4 位小写字母/数字随机串>`（服务端生成的**短名**；⛔ 不编时间戳——会话名是 tab bar 与列表页的**回落标题**，时刻面 = `.agent` 的 `createdAt` 与列表「最近活动」列；撞名 ⇒ `create_cc_session` 有界重取、⛔ 不覆盖同名 `.agent`）；目录 0700 / 文件 0600，原子写（tmp + `os.replace`） |
+| 声明者 | `<WS>/run/sessiond/<name>.agent`，`name` = `<4 位小写字母/数字随机串>`（服务端生成的**短名**；⛔ 不编时间戳——会话名是 tab bar 与列表页的**回落标题**，时刻面 = `.agent` 的 `createdAt` 与列表「最近活动」列；撞名 ⇒ `create_cc_session` 有界重取、⛔ 不覆盖同名 `.agent`）；目录 0700 / 文件 0600，原子写（tmp + `os.replace`） |
 | 字段集 | `host`（本机规范名）/`cwd`（项目 realpath，**由 profile 清单的 `cwd` 字段派生**）/`sessionDir`（= 会话目录 realpath）/`profile`（创建时指名的 interactive 清单；缺省 `CC_PROFILE`）/`name`/`createdAt`；可选 `title`（rename 的 override）。**⛔ 无 `command` 键**：spawn argv 的单点是 `Supervisor._spawn`，声明者不可控 |
 | 会话文件 | `<sessionDir>/<name>.jsonl`（每会话一枚；打开走 `?v=chat` 的 `.agent` 入口，与普通 `.agent` 同链路） |
 | ephemeral | `run/` 是宿主本地运行时区（主仓 `.gitignore` 覆盖 ∧ ⛔ 不进 agents-sync）⇒ **被清即丢会话**（设计稿已接受），且**每台机器各有各的**（工作区页与 tab 都按机器前缀分机） |

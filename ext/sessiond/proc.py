@@ -608,12 +608,12 @@ def list_interactive_profiles():
 
 
 def new_session_name():
-    """会话名（服务端自动生成，⛔ 客户端不控）：`s` + 4 位小写字母/数字随机串（短名，
+    """会话名（服务端自动生成，⛔ 客户端不控）：4 位小写字母/数字随机串（短名，
     用户拍板 2026-10-04：会话名是 tab bar 与列表页的**回落标题** ⇒ ⛔ 不编时间戳，
     时刻面 = `.agent` 的 `createdAt` 与列表的「最近活动」列）。
     撞名由 `create_cc_session` 的有界重取吸收（⛔ 不覆盖）。⛔ 不复用
     `agentd/proto.auto_name()`：`w/` 是独立公开子仓、不 import 工作区其它仓的实现体。"""
-    return "s" + "".join(random.choices(SESSION_NAME_ALPHABET, k=4))
+    return "".join(random.choices(SESSION_NAME_ALPHABET, k=4))
 
 
 def create_cc_session(profile=CC_PROFILE):
