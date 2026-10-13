@@ -114,7 +114,7 @@ vmap 翻译是服务端行为，浏览器 `location.pathname` 保持原始 `.jso
 
 ### 去保活语义（任务 ja0vr7，设计 du44uj；resident 机制已退役）
 
-定位收敛：sessiond = 浏览器聊天载体/观测层（懒拉起 + 在场订阅期间监督）；常驻/自愈语义统一归 agentd（生产的 dispatcher position = 一枚 `queue/` 族参与方 `queue/dispatcher`（稳定信箱与 watcher 进程同目录）+ 一次性 handler，⛔ 不是长寿命会话；见 §10 透传链路与 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §2/§3）。原 resident 钩子（`resident.py` + `core/wsgi.py` ready 钩子）已删除。
+定位收敛：sessiond = 浏览器聊天载体/观测层（懒拉起 + 在场订阅期间监督）；常驻/自愈语义统一归 agentd（生产的 dispatcher position = 一枚 `queue/` 族参与方 `queue/dispatcher`（稳定信箱与 watcher 进程同目录）+ 一次性 handler，⛔ 不是长寿命会话；见 §10 透传链路与 `dispatch/DISPATCH.md` §1）。原 resident 钩子（`resident.py` + `core/wsgi.py` ready 钩子）已删除。
 
 | 项 | 语义 |
 |---|---|
@@ -465,7 +465,7 @@ timeout 清扫机制（0830-1104-eji4）：pi rpc-mode 的 dialog 超时是内�
 
 ## 12. 指挥中心临时会话（`run/sessiond/*.agent`，任务 z293ql）
 
-设计稿 `dispatch/docs/design/on-demand-session-and-position-redesign.md` §4.2/§4.3 的服务端半面：
+会话工作区服务端入口：
 按需创建「即用即弃」的交互会话（pi-web 式工作区），人格 = 创建时指名的 `form: interactive`
 profile（缺省 `command-center`），工作目录由该 profile 清单的 `cwd` 字段声明。
 **新建面 ⛔ 不是 HTTP op**：它是 `dash/sessions.md` 每机一节的手动 widget（`${!…}`，
