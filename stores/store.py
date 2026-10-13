@@ -73,11 +73,8 @@ class RootStore:
 
     def read(self, path):
         store, new_path = self.get_store(path)
-        if _path_is_dir(path):
-            if callable(getattr(store, 'read_dir', None)):
-                x = store.read_dir(new_path)
-            else:
-                x = store.read(new_path)
+        if _path_is_dir(path) and callable(getattr(store, 'read_dir', None)):
+            x = store.read_dir(new_path)
         else:
             x = store.read(new_path)
         logging.debug("root.read: %s -> %s %.100s", path, store, new_path)
