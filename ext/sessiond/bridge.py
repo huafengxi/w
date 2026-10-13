@@ -227,6 +227,17 @@ class Bridge:
         """向会话发一条命令。返回错误串或 None。"""
         self.note_activity()
         self.sup.ensure_started()   # 懒态复活：去保活后崩溃转懒态的会话经此拉起（幂等）
+        if not self.sup.wait_ready():
+            # 懒态复活是**异步**的（监督线程 spawn，最坏含旧宿主清场宽限 15s+3s），
+            # 不等就位就写 stdin ⇒ proc 仍是 None ⇒ 复活后的第一条命令被丢。一手代价
+            # （2026-10-13 现网实录，会话 lofk 于 00:16 idle-reaped 转 dormant）：
+            #   09:37:41,789 op=cmd {"type":"prompt",...} → ,796 RESP 403（7ms）
+            #   09:37:41,811 spawned gen=15 —— 复活落在拒绝**之后**，用户那条 prompt
+            #   凭空消失（前端输入框已清空，只留一行 sysLine err）。
+            # 口径与 get_entries/get_commands/inspect 一致（都 ensure_started + wait_ready）；
+            # 已在跑 ⇒ wait_ready 立即返回 True，常规路径零额外开销。
+            return ("session process not ready in time (state=%s)"
+                    % self.sup.state)
         t = cmd_obj.get("type")
         if t in BLOCKED_COMMANDS:
             return ("command %r is blocked: it would desync the session "
