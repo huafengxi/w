@@ -17,32 +17,32 @@
 }
 ```
 
-- `prefix`（必填）：路径前缀，以 `/` 开头；多条规则取**最长前缀**匹配。
+- `prefix`（必填）：路径前缀，以 `/` 开头；多条规则取最长前缀匹配。
 - `upstream`（必填）：`http://host[:port]`、`https://...`，或 `unix:///绝对路径.sock`
-  （任务 lzful1：经 AF_UNIX 连**本机** socket，无跨机面。只认 `unix:///abs/path`
+  （任务 lzful1：经 AF_UNIX 连本机 socket，无跨机面。只认 `unix:///abs/path`
   形态——host 位必须为空，否则解析报错；纯标准库 `http.client` 子类实现）。
   unix 上游的典型用途 = rsh 反向端口转发的 hub 侧监听（`rsh/rshd.py` 的
   `run/rsh-fwd/<worker>.sock`），路径须与提供方一致。
 
-  **`${RSH_FWD_DIR}` token**（任务 4ob5de）：unix 路径里可写 `unix:///${RSH_FWD_DIR}/<worker>.sock`，
-  解析时按 **rshd 的 FWD_DIR 约定**展开（单一事实源 = `rsh/rshd.py`：`RSH_FWD_DIR`
+  `${RSH_FWD_DIR}` token（任务 4ob5de）：unix 路径里可写 `unix:///${RSH_FWD_DIR}/<worker>.sock`，
+  解析时按 rshd 的 FWD_DIR 约定展开（单一事实源 = `rsh/rshd.py`：`RSH_FWD_DIR`
   环境变量 > `<REPO_ROOT>/run/rsh-fwd`，`REPO_ROOT` 按 `proxy.py` 自身位置推导）——
   这份被追踪且四机同步的配置里因此不再出现任何机器的绝对 home 路径。token 只认
-  **路径位**（`unix:///` 三斜杠之后）；写在 host 位（`unix://${RSH_FWD_DIR}/x.sock`）
+  路径位（`unix:///` 三斜杠之后）；写在 host 位（`unix://${RSH_FWD_DIR}/x.sock`）
   按「netloc 必须为空」拒掉，不静默走偏。
 - `strip_prefix`（可选，缺省 `false`）：转发时是否剥掉前缀。
 - `timeout`（可选，缺省 `10`）：上游连接/读取超时（秒）。
 - `local_on`（可选，缺省无）：规范名列表（规范名 = `~/m/env/host-id` 按 `$(hostname)`
   查表，未命中回退 hostname 本身）。本机命中时该前缀不走代理：wsgi 层进管线前
   剥前缀改本地直读，效果 = 同一带前缀链接（如 `/dev/…`）在四机任意入口都指向同一机器。
-- 顶层也可以直接写规则数组；顶层 `_comment` 等非标字段会被忽略。
+- 顶层也可直接写规则数组；顶层 `_comment` 等非标字段会被忽略。
 
 文件缺失 / 空 / 解析失败 = 代理功能整体关闭（其余管线不受影响）；
 解析失败会在服务日志记 warning。
 
 ## 行为
 
-- 代理在全局 BasicAuth **之内**：未认证请求到不了代理。
+- 代理在全局 BasicAuth 之内：未认证请求到不了代理。
 - 未命中任何规则 → 落回既有路由，行为零变化（无前缀路径不强制跳转，
   需要统一地址的带前缀链接由使用方自行控制；2026-09-01 用户拍板撤销 se6t32 的 302）。
 - `local_on` 命中本机 → 剥前缀本地直读（不经代理转发）。

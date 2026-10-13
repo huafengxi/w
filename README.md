@@ -3,7 +3,7 @@
 This is a document edit server. see [design.md](design.md).
 once deployed, you can creat file with special extensions for different purpose.
 
-> **shell 路由**：GET 已映射视图的扩展名路径（如 `.md`）即使文件不存在也返 200 + HTML 外壳（内容真实性由客户端取内容时才见分晓）；其余不存在路径返 404（`w/view/404.html`）。页面内容里的链接必须写**绝对路径**，相对链接会被当作页面路径吃掉；`.md` 链接无需 `?v=text/md` 后缀（服务端按扩展名推断视图），仅 `.py` 等非 md 文件渲 md 视图时才带 `?v=...`；md 视图链接带 `_v=inline`（如 `?_v=inline`）表示渲染后默认在页内 iframe 就地展开（点击收起/再展开，可多个同开；`_v=` 是客户端私有参数命名空间——下划线前缀约定，服务端不消费，构造内嵌 iframe 前剥离）。
+> **shell 路由**：GET 已映射视图的扩展名路径（如 `.md`）即使文件不存在也返 200 + HTML 外壳（内容真实性由客户端取内容时才见分晓）；其余不存在路径返 404（`w/view/404.html`）。页面内容里的链接必须写绝对路径，相对链接会被当作页面路径吃掉；`.md` 链接无需 `?v=text/md` 后缀（服务端按扩展名推断视图），仅 `.py` 等非 md 文件渲 md 视图时才带 `?v=...`；md 视图链接带 `_v=inline`（如 `?_v=inline`）表示渲染后默认在页内 iframe 就地展开（点击收起/再展开，可多个同开；`_v=` 是客户端私有参数命名空间——下划线前缀约定，服务端不消费，构造内嵌 iframe 前剥离）。
 
 > **运维要点**：8080 basic auth 凭证 = `~/.auth/passwd`（`env/pi-web.auth` 是 8192 的）；`w/stores/cmd_store.py` 不得删。
 
@@ -15,7 +15,7 @@ git clone git@github.com:huafengxi/w.git w
 log=debug ~/miniconda3/bin/python3 w/core/server.py 8080
 ```
 
-> **解释器 = `~/miniconda3`**：与工作区通则一致（`AGENTS.md`「运行环境」：Python 一律 `~/miniconda3`；本机具体版本以现场 `~/miniconda3/bin/python3 -V` 读数为准，不在本文档写死）。**依赖清单（5 枚，装在 conda，不用 `--user`；包名形态与 `bootstrap/SETUP.md` §3.1「依赖包」表的 web 行逐项一致）**：`WSGIserver`（提供 `wsgiserver`）、`wsgi-basic-auth`（提供 `wsgi_basic_auth`，Requires `webob`）、`chardet`（提供 `chardet`）、`WebOb`（提供 `webob`）、`legacy-cgi`（提供 `cgi`，**分档依赖**，见下）。**`legacy-cgi` 是可判形态的分档，不是无条件必需**：按本机 `~/miniconda3/bin/python3 -V` 判——`<3.13` 由 stdlib 提供 `cgi`、不需装；`>=3.13`（`cgi` 已从标准库移除）必须装 `legacy-cgi`，因为 `core/handler.py:parse_post` 用 `cgi`（`cgi.parse_header` / `cgi.parse_multipart` 解 multipart 上传），且 `webob/compat.py` 有**模块级** `from cgi import parse_header` ⇒ 在 `>=3.13` 的机器上 `legacy-cgi` 必须与 `WebOb` 同装（缺它连 `import webob` 都炸）。**`chardet` 缺失的失败形态是静默的**：全仓唯一 import = `stores/dir_store.py:11`（`:13 chardet.detect(content)['encoding']`），缺包时 Dir/Enc store 的挂载异常被 `stores/store.py` 的 `except` 吞成 `mount skipped` WARNING ⇒ 8080 仍返 **401**、日志**零 Traceback**、而**所有内容路径 404**（看着像服务正常、实则内容面全灭；dev 侧实测吃过一次 2 分 54 秒降级窗，原文 = `agents/task/jckmms/report.md` §7.2）。**重启前自检（5 模块）**：`~/miniconda3/bin/python3 -c 'import cgi, wsgiserver, wsgi_basic_auth, webob, chardet'`（无输出 = OK）。**服务定义形态**：`services/profiles/web.json` 的 `cmd: ["~/miniconda3/bin/python3", w/core/server.py, 0.0.0.0:8080, run/logs/web.log]` 走绝对解释器路径（`serviced/serviced.py:_expand` 对 cmd 逐项 `os.path.expanduser` ⇒ `~` 可用、各机 home 路径不同也可用）；`match: ['^\S*python3? w/core/server\.py 0\.0\.0\.0:8080']` 仍锚定行首、但放行解释器路径前缀：web 的 online 判定走 `status: {http: …}`（不经 match），而 `serviced.py stop web` 的杀进程目标集 = `match` + `stop_match` 对真实 cmdline 的 `re.search` 命中 ⇒ 换解释器后不同批改 match 会 **stop 不掉旧进程**（而 status 仍报 online，零信号）。
+> **解释器 = `~/miniconda3`**：与工作区通则一致（`AGENTS.md`「运行环境」：Python 一律 `~/miniconda3`；本机具体版本以现场 `~/miniconda3/bin/python3 -V` 读数为准，不在本文档写死）。依赖清单（5 枚，装在 conda，不用 `--user`；包名形态与 `bootstrap/SETUP.md` §3.1「依赖包」表的 web 行逐项一致）：`WSGIserver`（提供 `wsgiserver`）、`wsgi-basic-auth`（提供 `wsgi_basic_auth`，Requires `webob`）、`chardet`（提供 `chardet`）、`WebOb`（提供 `webob`）、`legacy-cgi`（提供 `cgi`，分档依赖，见下）。`legacy-cgi` 是可判形态的分档，不是无条件必需：按本机 `~/miniconda3/bin/python3 -V` 判——`<3.13` 由 stdlib 提供 `cgi`、不需装；`>=3.13`（`cgi` 已从标准库移除）必须装 `legacy-cgi`，因为 `core/handler.py:parse_post` 用 `cgi`（`cgi.parse_header` / `cgi.parse_multipart` 解 multipart 上传），且 `webob/compat.py` 有模块级 `from cgi import parse_header` ⇒ 在 `>=3.13` 的机器上 `legacy-cgi` 必须与 `WebOb` 同装（缺它连 `import webob` 都炸）。`chardet` 缺失的失败形态是静默的：全仓唯一 import = `stores/dir_store.py:11`（`:13 chardet.detect(content)['encoding']`），缺包时 Dir/Enc store 的挂载异常被 `stores/store.py` 的 `except` 吞成 `mount skipped` WARNING ⇒ 8080 仍返 401、日志零 Traceback、而所有内容路径 404（看着像服务正常、实则内容面全灭；dev 侧实测吃过一次 2 分 54 秒降级窗，原文 = `agents/task/jckmms/report.md` §7.2）。重启前自检（5 模块）：`~/miniconda3/bin/python3 -c 'import cgi, wsgiserver, wsgi_basic_auth, webob, chardet'`（无输出 = OK）。服务定义形态：`services/profiles/web.json` 的 `cmd: ["~/miniconda3/bin/python3", w/core/server.py, 0.0.0.0:8080, run/logs/web.log]` 走绝对解释器路径（`serviced/serviced.py:_expand` 对 cmd 逐项 `os.path.expanduser` ⇒ `~` 可用、各机 home 路径不同也可用）；`match: ['^\S*python3? w/core/server\.py 0\.0\.0\.0:8080']` 仍锚定行首、但放行解释器路径前缀：web 的 online 判定走 `status: {http: …}`（不经 match），而 `serviced.py stop web` 的杀进程目标集 = `match` + `stop_match` 对真实 cmdline 的 `re.search` 命中 ⇒ 换解释器后不同批改 match 会 stop 不掉旧进程（而 status 仍报 online，零信号）。
 
 > **传输层现值 = HTTP（不上 HTTPS）**：四机的 `~/.auth/` 只有 `passwd`、无证书文件 ⇒ 8080 一律以 HTTP 运行，BasicAuth 凭证与页面内容在公司内网明文传输（知情接受；排查结论 = 工作区内无任何 HTTPS 消费方：dash 入口 / `ext/proxy/routes.json` 的 upstream / rsh 转发面全为 http 或 unix socket）。`core/wsgi.py` 的 cert/keyfile 分支已在场、只缺文件 ⇒ 真要上 TLS 不必改代码，但那是四机证书分发 + 续期运维面的立项决定（裁定与重议触发 = `lore/library/agentfw/facts/not-doing.md`）。
 
@@ -28,21 +28,21 @@ from `ext/<name>/{vmap,mime,sh.rc}.frag` and `ext/<name>/bin/` (composed by
 
 ## Tests
 
-`test/` 下每枚都是**自包含**的（自带临时夹具、⛔ 不写生产树、⛔ 不改现网配置）。下表的跑法与
-期望尾行**取自各文件的头注/docstring**（核法 = `grep -n 'RESULT\|Expect\|Run:' test/<文件>`；
-改判据同批改本表）；尾行里的**计数是现场实跑值 ⇒ 一律写 `<N>`、⛔ 不写死字面数**（源码里那些
+`test/` 下每枚都是自包含的（自带临时夹具、⛔ 不写生产树、⛔ 不改现网配置）。下表的跑法与
+期望尾行取自各文件的头注/docstring（核法 = `grep -n 'RESULT\|Expect\|Run:' test/<文件>`；
+改判据同批改本表）；尾行里的计数是现场实跑值 ⇒ 一律写 `<N>`、⛔ 不写死字面数（源码里那些
 位置是 `%d` 格式串 ⇒ 写死一个数就会在加减 check 时把本表变红）。⚠ 一枚例外 =
-`proxy_test.sh`：**⛔ 不得在承载流量的机器上跑**。
+`proxy_test.sh`：⛔ 不得在承载流量的机器上跑。
 
 | 文件 | 跑法 | 期望尾行 | 覆盖面 |
 |---|---|---|---|
 | `smoke.py` | `cd ~/m && python3 w/test/smoke.py`（可用 `webroot=`/`fstab=` 环境覆写；头注逐字 `Usage: cd <webroot> && fstab=<path> python3 w/test/smoke.py`） | `--- smoke done ---`，且逐行以 `OK` 起（出现 `ERR` 行即红） | 请求管线的 in-process 冒烟（无 socket/fork）：md 视图 / `?v=read` / `?v=head` / 目录视图 |
 | `resolve_agent_edge.py` | `cd ~/m/w && python3 test/resolve_agent_edge.py` | `ALL PASS` | `_resolve_agent` 的软链逃逸边界三例（run 区 sessionDir 缺省 / 根集逃逸 400 / 软链逃出根集 400） |
-| `session_ops_edge.py` | `cd ~/m/w && python3 test/session_ops_edge.py` | `ALL PASS` | 指挥中心临时会话（`run/sessiond/*.agent`）的 12 组正反控：项目枚举、**cwd 由 profile 清单声明**（声明值仍过白名单双保险；写错 = 拒建、⛔ 不回落）、profile 白名单（只放行 `form: interactive`）与可选集枚举、`.agent` 字段集（⛔ 无 `command`）、标题两级回落、rename、删除面 realpath/root 断言、op 层的服务端恒定字段 400（rename/delete 只接 `session`/`title`/`confirm`；新建面不经 op）、`_spawn` 的 `DISPATCH_PROFILE` 回注、`bridge.drop_session` 的杀进程与「绝不建桥」 |
+| `session_ops_edge.py` | `cd ~/m/w && python3 test/session_ops_edge.py` | `ALL PASS` | 指挥中心临时会话（`run/sessiond/*.agent`）的 12 组正反控：项目枚举、cwd 由 profile 清单声明（声明值仍过白名单双保险；写错 = 拒建、⛔ 不回落）、profile 白名单（只放行 `form: interactive`）与可选集枚举、`.agent` 字段集（⛔ 无 `command`）、标题两级回落、rename、删除面 realpath/root 断言、op 层的服务端恒定字段 400（rename/delete 只接 `session`/`title`/`confirm`；新建面不经 op）、`_spawn` 的 `DISPATCH_PROFILE` 回注、`bridge.drop_session` 的杀进程与「绝不建桥」 |
 | `idle_reap_dialog.py` | `cd ~/m/w && python3 test/idle_reap_dialog.py` | `ALL PASS` | 空闲回收（`bridge.py:_idle_scan`）对「阻塞在未答 dialog 的会话」的豁免（① 有未答 dialog ⇒ 不回收 / ② 无 dialog 且三判据全中 ⇒ 照常回收 / ③ dialog 自带 `timeout` 已过期 ⇒ 被清扫 + 广播结算 ⇒ 照常回收（豁免不变成永久保活）/ ④ 有订阅者 ⇒ 不回收 / ⑤ 豁免优先于 mtime·活动老化）；stub 桥接只借真 `Bridge` 的 dialog 三个方法（⛔ 二次实现）、⛔ 不经 `get_bridge`（不拉真进程、不启动 reaper 线程），tearDown 单向钉生产 `_BRIDGES` 与会话目录零触碰 |
 | `test_regress_multipart_dir_read.py` | `python3 w/test/test_regress_multipart_dir_read.py` | `--- <N> checks, 0 failed ---`（N = 现场实跑值；判红只看 `0 failed`） | 两枚回归：multipart POST 的 boundary bytes/str 归一（`core/handler.py:parse_post`）；Cmd store 的目录读（`stores/cmd_store.py`） |
-| `proxy_unix_test.py` | `python3 w/test/proxy_unix_test.py [--proxy PATH] [--keep]` | `RESULT: PASS (<N>/<N> passed)`，exit code 0（N = 现场实跑值；判红看 `PASS` 与 exit code） | 代理的 `unix://` 上游 / SSE 流式透传 / `${RSH_FWD_DIR}` 展开；**第 7 项钉 `ext/proxy/routes.json` 的 prefix·upstream·timeout**（期望值 = 该文件的 `UNIX_ROUTES`/`HTTP_ROUTES` 两个常量 ⇒ 改 routes 同批改常量） |
-| `proxy_test.sh` | `bash w/test/proxy_test.sh`，前置 = 8080 已启动**且不是承载流量的实例**（隔离实例 + 专用 routes 副本）。⛔ **不在现网 8080 上跑**：它把 `ext/proxy/routes.json`（每请求按 mtime 热加载）临时换成 demo 规则、退出才从 `.bak` 恢复 ⇒ 测试期间现网机器前缀路由短暂消失；而路由文件路径由 `ext/proxy/proxy.py` 的 `_routes_file` 按自身 realpath 定死、**无可重定向变量** ⇒ 无法在不碰现网文件的前提下验证热加载 | ⛔ 本表不写死期望尾行（按上一条纪律它不在承载流量的机器上跑 ⇒ 无从实跑取证）；路由面的可复跑覆盖 = 上一行 `proxy_unix_test.py` 的第 7 项 | 端到端代理（前缀路由/剥离/上游透传） |
+| `proxy_unix_test.py` | `python3 w/test/proxy_unix_test.py [--proxy PATH] [--keep]` | `RESULT: PASS (<N>/<N> passed)`，exit code 0（N = 现场实跑值；判红看 `PASS` 与 exit code） | 代理的 `unix://` 上游 / SSE 流式透传 / `${RSH_FWD_DIR}` 展开；第 7 项钉 `ext/proxy/routes.json` 的 prefix·upstream·timeout（期望值 = 该文件的 `UNIX_ROUTES`/`HTTP_ROUTES` 两个常量 ⇒ 改 routes 同批改常量） |
+| `proxy_test.sh` | `bash w/test/proxy_test.sh`，前置 = 8080 已启动且不是承载流量的实例（隔离实例 + 专用 routes 副本）。⛔ 不在现网 8080 上跑：它把 `ext/proxy/routes.json`（每请求按 mtime 热加载）临时换成 demo 规则、退出才从 `.bak` 恢复 ⇒ 测试期间现网机器前缀路由短暂消失；而路由文件路径由 `ext/proxy/proxy.py` 的 `_routes_file` 按自身 realpath 定死、无可重定向变量 ⇒ 无法在不碰现网文件的前提下验证热加载 | ⛔ 本表不写死期望尾行（按上一条纪律它不在承载流量的机器上跑 ⇒ 无从实跑取证）；路由面的可复跑覆盖 = 上一行 `proxy_unix_test.py` 的第 7 项 | 端到端代理（前缀路由/剥离/上游透传） |
 | `dash-shot.sh` | 在装了 playwright(chromium) 的机器上 `bash w/test/dash-shot.sh`（头注：nv1；产物落 `/tmp/dash-shots/`，只读 ⛔ 不写 `~/m`） | 无断言尾行：产物 = 逐页截图（`PLAYWRIGHT_IMPORT_FAIL`/`LAUNCH_FAIL` 即环境不具备） | 浏览器侧渲染取证（CSS/布局/iframe/widget 表格）——纯服务端断言照不到的那一面 |
 | `proxy_upstream.py` | ⛔ 不是测试，是 `proxy_test.sh` 用的临时上游：`python3 test/proxy_upstream.py [port\|/abs/unix.sock]`（缺省 18099） | — | echo 请求方法/路径/头/体为 JSON；`/custom` 返 201 + 自定义头 |
 
@@ -64,9 +64,9 @@ git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
 ## iframe show many doc
 - [/w/demo/list.iframe?v=iframe](/w/demo/list.iframe?v=iframe)
 - `/w/demo/dyn.itab` — `@dynamic` 指令行：一行 `@dynamic <站内路径>` 换成该端点吐出的若干行
-  （`名字 URL [k=v …]`，一行一枚），**就地 splice**（指令行的位置即展开位置）。通用增强：
+  （`名字 URL [k=v …]`，一行一枚），就地 splice（指令行的位置即展开位置）。通用增强：
   任何 `.itab`/`.iframe` 页可用；端点最小形态见 [/w/demo/dyn-rows.py?v=read](/w/demo/dyn-rows.py?v=read)。
-  语义 = **加载快照**（frame 加载时 fetch 一次，⛔ 无轮询/无自动刷新）；端点失败 ⇒
+  语义 = 加载快照（frame 加载时 fetch 一次，⛔ 无轮询/无自动刷新）；端点失败 ⇒
   即刻展开零行，超时上界 10s ⇒ 期间整表（含静态行）延迟渲染；返回行里的 `@dynamic`
   不递归展开。fetch 目标带代理前缀
   （`/dev/`、`/nv1/` 一类，由浏览器 pathname 与服务端注入的 `src` 求差得出）⇒ 经代理打开时
