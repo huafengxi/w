@@ -8,9 +8,25 @@ body {
 }
 
 h1,h2,h3,h4,h5 {};
-th { background: black; color: white; }
-th, td {  vertical-align: middle; text-align:left;  font-family: courier, monospace;}
-table, th, td { border: 1px solid black; border-collapse: collapse; }
+th { background: #f3f5f7; color: #222; }
+th, td {
+    vertical-align: top;
+    text-align: left;
+    font-family: inherit;
+    padding: 5px 8px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    border: 1px solid #dde2e7;
+}
+table {
+    border-collapse: collapse;
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+}
+details { margin: 12px 0; }
+summary { cursor: pointer; color: #555; }
 
 code, pre {
   padding: 0 3px 2px;
