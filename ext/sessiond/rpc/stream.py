@@ -6,9 +6,9 @@
 # （`<ns>:<seq>`，SSE 帧 `id:`）；断线重连带 `since=<上次事件 ID>`。
 # since 不在环内（已淘汰/未知）→ 先发一帧 {"type":"webgw.gap",...} 缺口标记，
 # 再从最旧可用位续流；前端据此走 entries 基线自愈。
+from core.stream import ClosingIterator
 import json as _json
 from ext.sessiond import bridge as _b
-from ext.sessiond import proc as _proc
 
 
 def _j(obj, status='200 OK'):
@@ -20,13 +20,8 @@ def interp(store, session='', since='', **kw):
     if not session:
         return _j({"ok": False, "error": "missing required param: session"},
                   '400 Bad Request')
-    # agentd 族入口归一（任务 60grqq）：spec.json 声明者入口 → 会话产物路径；
-    # 产物路径直开 → 400 + 指引（与 rpc/api.py 同口径单点，_proc.agentd_entry）。
-    session, entry_err = _proc.agentd_entry(session)
-    if entry_err:
-        return _j({"ok": False, "error": entry_err}, '400 Bad Request')
     try:
-        b = _b.get_bridge(session)
+        b = _b.get_bridge(session, store=store)
     except ValueError as e:
         return _j({"ok": False, "error": str(e)}, '400 Bad Request')
     # 订阅上限：防多页签/忘关页签耗尽 wsgiserver 线程池波及 8080 其它服务。
@@ -60,8 +55,9 @@ def interp(store, session='', since='', **kw):
                            ).encode("utf-8")
         except GeneratorExit:
             return
-        finally:
-            with b.cond:
-                b.subscribers -= 1
 
-    return dict(type='text/event-stream'), gen()
+    def unsubscribe():
+        with b.cond:
+            b.subscribers -= 1
+
+    return dict(type='text/event-stream'), ClosingIterator(gen(), unsubscribe)

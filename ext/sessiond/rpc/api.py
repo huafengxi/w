@@ -1,51 +1,12 @@
 # -*- type=script -*-
-# sessiond 控制面 + 上行命令端点（任务 0829-1958-od0t；R1：路径路由）。
-# 会话按路径管理（`session` 参数必填 = 站内 .jsonl 路径，如 /foo/bar/x.jsonl；
-# 校验锁定 ~/m 内，见 proc.resolve_session_path），由 web 进程内各会话监督员
-# （ext/sessiond/proc.py）直接监督，无管理面：
-#   op=status  该会话状态（state/pid/gen/restarts/cwd/session_file）；另附斜杠状态行第 4 行
-#              可见性三值（任务 bjhzvj；任务 8r0tww 补 socket 会话）：host（本机规范名，
-#              env/host-id 查表）/sessionDir（= session_file dirname）/workDir（普通会话 =
-#              会话进程真实在跑时的拉起 cwd，未拉起 → null；socket 会话 = 参与方
-#              spec.json 声明的 workdir，读失败 → null。前端显 `?`，不猜测）
-#   op=attach  建桥 + 经 pi rpc get_entries 返回消息基线（全量）
-#   op=cmd     上行单条 pi 命令
-#   op=commands 该会话实际加载的可发现命令清单（任务 a16jpj：pi rpc get_commands 转发；
-#              extension 斜杠命令 / prompt 模板 / skill；仅注册了斜杠命令的 extension 出现）
-#   op=inspect  探针转储（任务 s0f1la）：经 -e 注入的探针扩展命令 sessiond-inspect
-#              取当前系统提示词全文 + 工具清单（侧车文件握手，见 bridge.py:inspect）；
-#              不进事件环、不进 jsonl，payload 走本 HTTP 响应；
-#              socket 会话同款支持：探针由封装脚本 pi-wrap/pi-rpc-wrap.py -e 注入
-#   op=reload  进程级重载（杀会话进程并从该 .jsonl resume 重拉）
-#   op=clear   保留会话路径、清空全部内容（杀会话进程→截断 jsonl 到 0+去 replica 标记→立即重拉，
-#              0829-2238-atnj，4l3de8 翻案改截断；返回 {ok, gen, pid}）
-#   op=agent   .agent 文件类型（任务 kcywpy；任务 fw2ll1 cwd/sessionDir 拆分）：
-#              session = 站内 /…*.agent 路径；读规格 JSON（host + 可选 cwd/sessionDir/profile）→ 校验 →
-#              cwd = 显式 `cwd` 字段（缺省 = .agent 文件所在目录），会话目录 = sessionDir（缺省 = .agent 所在目录，不存在自动创建）→
-#              返回会话 jsonl 站内路径（= <sessionDir>/<name>.jsonl）与 cwd/sessionDir。
-#              启动参数解析单点，host v1 仅保存/可见、不跨机拉起（见 design.md .agent 小节）。
-# 指挥中心临时会话（任务 z293ql，设计稿 §4.2；消费方 = dash/sessions.md 工作区页与
-# dash/session-ctl.py 的只读列表命令 + 变更端点）
-# ——声明者与 jsonl 都落宿主本地运行时区 `run/sessiond/`，
-# 生命周期全在本层（⛔ 不经 agentd，web 自有 Supervisor spawn）：
-#   ⚠ **新建不经本层**（本层零新建 op）：它是页面手动 widget 直调的 CLI
-#              （`dash/session-ctl.py new --profile <名>` → `proc.create_cc_session`；
-#              cwd 由该 profile 清单的 `cwd` 字段声明）⇒ 零 HTTP 参数面，收口全在 proc 的校验。
-#   op=list_sessions   只读：本机 run/sessiond/*.agent 全量（自动标题/最近活动/运行态/
-#              项目分组）——消费方 = 变更端点取会话现值（rename 表单页 ∨ delete 结果页）
-#   op=rename_session  改标题 override（落 .agent 的 title 字段；空标题 = 清除回落自动标题）
-#   op=delete_session  删除（op 层仍硬需 confirm=1 作内部契约；dash 端点无确认页、
-#              链接即删 ⇒ 由端点自传 confirm=1，⛔ 不做 nonce，设计稿已裁）：
-#              杀 Supervisor 进程 + rm .agent + rm jsonl（realpath 前缀断言 + 删前身份证据 + 删后复核）
-#   op=session_tabs    只读：活跃会话的 tab 行数据（设计稿 §4.3 的 @dynamic rpc 数据源；
-#              机器前缀按 _self_host() 派生，空态吐零行，⛔ 不标运行态）
-# 鉴权由 w 全局 BasicAuth 承担；路径校验非法 → 400。
+"""Chat API: validate requests before opening a declared process channel."""
 import json as _json
 import logging as _logging
 import os as _os
 import posixpath as _posixpath
 from ext.sessiond import bridge as _b
 from ext.sessiond import proc as _proc
+from ext.sessiond.declaration import resolve_agent as _resolve_agent
 
 _log = _logging.getLogger("sessiond-agent")
 
@@ -55,21 +16,14 @@ def _j(obj, status='200 OK'):
         _json.dumps(obj, ensure_ascii=False)
 
 
-def _bridge_or_err(session):
-    """按路径取桥接；缺失/非法路径返回错误响应元组，否则返回 (bridge, None)。
-    前置 agentd 族入口归一（任务 60grqq）：spec.json 声明者入口 → 归一为会话产物路径；
-    产物路径直开 → 400 + 指引（入口唯一化，用户拍板）。"""
-    session, entry_err = _proc.agentd_entry(session)
-    if entry_err:
-        return None, _j({"ok": False, "error": entry_err}, '400 Bad Request')
+def _bridge_or_err(store, session):
     if not session:
-        return None, _j({"ok": False,
-                         "error": "missing required param: session"},
+        return None, _j({"ok": False, "error": "missing required param: session"},
                         '400 Bad Request')
     try:
-        return _b.get_bridge(session), None
-    except ValueError as e:
-        return None, _j({"ok": False, "error": str(e)}, '400 Bad Request')
+        return _b.get_bridge(session, store=store), None
+    except ValueError as exc:
+        return None, _j({"ok": False, "error": str(exc)}, '400 Bad Request')
 
 
 def _baseline_doc(b, r):
@@ -182,198 +136,6 @@ def _agentd_control_proxy(b, action, reason):
     return _j({"ok": True, "session": b.session, "gen": gen,
                "outcome": outcome, "detail": detail,
                "controlReq": rid})
-
-
-# ---------------- .agent 文件类型（任务 kcywpy；fw2ll1 cwd/sessionDir 拆分） ----------------
-# xxx.agent = agent 规格 JSON（字段参考 ~/m/agents/ 任务 spec.json 风格，多余字段宽容）。
-# 访问 /xxx.agent → 聊天视图，会话启动参数改从该 JSON 读取（用户拍板 2026-08-31）：
-#   - 字段 = 必填 `host` + 可选 `cwd`/`sessionDir`/`name`/`profile`/`title`（后两枚 = 任务
-#     z293ql 增，语义见 design.md「.agent 文件类型」节）；旧 `workdir` 不再识别（读到忽略并日志提示）。
-#   - 会话进程 cwd = 显式 `cwd` 字段（~/ 展开，安全红线同 sessionDir；2026-08-31 用户拍板，
-#     票 7t0ufv）；缺省回退 = .agent 文件所在目录。cwd 决定 pi 加载哪个工作区的**项目级**
-#     资源（该 cwd 的 AGENTS.md 与 <cwd>/.pi/extensions）；⚠ agentd 的工具面**不靠 cwd**——
-#     该扩展已迁全局装载面 pi-core/agent/extensions/agentd/（自动发现、cwd 无关），可用性由
-#     profile 的工具白名单 gate（现行例子 = run/sessiond/<name>.agent 的 cwd 由 profile 清单声明，
-#     见 proc.profile_cwd 与 ARCHITECTURE.md §12）。
-#   - sessionDir = 会话目录（会话 jsonl 落盘处，宿主本地运行时状态，*.jsonl 全局 gitignore；
-#     经 2026-08-31 票 7t0ufv 拍板不再共享参与方同步目录）；缺省 = .agent 文件所在目录。
-#   - 会话 jsonl = <sessionDir>/<agent名>.jsonl（每 agent 一会话、可重连续聊，如
-#     nv1-dispatcher.agent → participant/dispatcher/nv1-dispatcher.jsonl，任务 7pwnpa）。
-#     .jsonl 直开路径不走本约定（cwd 仍 = dirname）。
-# 本函数 = 启动参数解析单点，将来加 host 跨机路由（反向通道/各机 8080 代理）只改这里。
-# host v1 边界：仅持久化保存（存于 .agent 文件）+ 随响应返回 + 聊天页可见；
-# 会话一律在本 8080 实例所在机器本地拉起（sessiond 现状即本地监督），不做跨机拉起。
-# 警示：跨机打开他人 .agent 会在本机另起会话写同一同步文件，host 路由落地前勿在
-# 其它机器打开非本机 host 的 .agent（见 design.md）。
-
-
-def _resolve_agent(store, session):
-    """解析 .agent 规格。成功返回响应元组（200 + 规格文档），失败返回错误元组：
-    字段约定（任务 fw2ll1，用户拍板 2026-08-31；2026-08-31 票 7t0ufv 加显式 `cwd`）：
-    只留 `host` + 可选 `cwd`/`sessionDir`；
-    cwd = 显式 `cwd` 字段（~/ 展开，不得逃逸 ~/m + run 运行时区），缺省回退 = .agent 文件
-    所在目录（决定 pi 加载哪个工作区的 AGENTS/扩展）；
-    sessionDir = 会话目录（jsonl 落盘处，宿主本地运行时状态，缺省 = .agent 文件所在目录）；旧 `workdir`
-    字段不再识别（读到忽略并日志提示）。成功返回响应元组（200 + 规格文档），
-    失败返回错误元组：文件缺失 → 404；路径非法/坏 JSON/缺 host/sessionDir 非法或逃逸 ~/m → 400
-    （对齐 w 既有缺失/错误处理口径）。"""
-    if not session:
-        return _j({"ok": False, "error": "missing required param: session"},
-                  '400 Bad Request')
-    p = _posixpath.normpath(session) if isinstance(session, str) else ""
-    if not p.startswith("/") or not p.endswith(".agent") or p == "/":
-        return _j({"ok": False,
-                   "error": "agent path must be /<name>.agent, got %r" % (session,)},
-                  '400 Bad Request')
-    name = _os.path.basename(p)[:-len(".agent")]
-    if not name:
-        return _j({"ok": False, "error": "empty agent name in %r" % (session,)},
-                  '400 Bad Request')
-    try:
-        raw = store.read(p)
-    except (OSError, ValueError) as e:
-        return _j({"ok": False,
-                   "error": "agent file not found or unreadable: %s (%s)" % (p, e)},
-                  '404 Not Found')
-    if raw is None:
-        return _j({"ok": False,
-                   "error": "agent file not found: %s" % p},
-                  '404 Not Found')
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8", "replace")
-    try:
-        spec = _json.loads(raw)
-    except ValueError as e:
-        return _j({"ok": False,
-                   "error": "agent file %s is not valid JSON: %s" % (p, e)},
-                  '400 Bad Request')
-    if not isinstance(spec, dict):
-        return _j({"ok": False,
-                   "error": "agent file %s: top-level must be a JSON object" % p},
-                  '400 Bad Request')
-    missing = [k for k in ("host",)
-               if not isinstance(spec.get(k), str) or not spec.get(k).strip()]
-    if missing:
-        return _j({"ok": False,
-                   "error": "agent file %s: missing or empty field(s): %s"
-                            % (p, ", ".join(missing))},
-                  '400 Bad Request')
-    host = spec["host"].strip()
-    # 旧 workdir 字段（kcywpy v1）不再识别：忽略并日志提示，不报错（用户拍板）。
-    if "workdir" in spec:
-        _log.info("agent %s: legacy 'workdir' field ignored "
-                  "(cwd = 显式 cwd 字段，缺省 .agent 所在目录)", name)
-    # cwd：优先显式 `cwd` 字段（2026-08-31 用户拍板，票 7t0ufv：cwd 不再靠文件位置隐含表达；
-    # 支持 ~/ 展开；安全红线同 sessionDir = 不得逃出 ~/m + run 运行时区）；
-    # 缺省回退 = .agent 文件所在目录（站内路径已校验在 ~/m 内；resolve_cwd 再过一道）。
-    cwd_val = spec.get("cwd")
-    if cwd_val is not None:
-        if not isinstance(cwd_val, str) or not cwd_val.strip():
-            return _j({"ok": False,
-                       "error": "agent file %s: 'cwd' must be a non-empty "
-                                "string when present" % p},
-                      '400 Bad Request')
-        cwd_src = _os.path.realpath(_os.path.expanduser(cwd_val.strip()))
-        roots = [_proc.WS_REAL,
-                 _os.path.realpath(_os.path.join(_proc.WS, "run"))]
-        if not any(cwd_src == r or cwd_src.startswith(r + _os.sep) for r in roots):
-            return _j({"ok": False,
-                       "error": "agent file %s: cwd escapes workspace: %s"
-                                % (p, cwd_val)},
-                      '400 Bad Request')
-    else:
-        cwd_site_dir = _posixpath.dirname(p)
-        cwd_src = (_proc.WS if cwd_site_dir in ("", "/")
-                   else _os.path.join(_proc.WS, cwd_site_dir.lstrip("/")))
-    try:
-        cwd = _proc.resolve_cwd(cwd_src)
-    except ValueError as e:
-        return _j({"ok": False,
-                   "error": "agent file %s: cwd rejected: %s"
-                            % (p, e)},
-                  '400 Bad Request')
-    # profile（任务 z293ql，设计稿 §7.3）：可选字段 = 会话人格输入（spawn 时回注
-    # DISPATCH_PROFILE，由全局 profile-loader 扩展兼现人格/model/form 档）。严格白名单：
-    # 名字形态 + `bots/profiles/<名>.json` 在场 + **只放行 form: interactive**
-    #（proc.validate_profile；给交互会话配错形态 = 静默失能）。缺省 = 不注 ⇒ 裸 pi 会话
-    #（存量 .agent 逐字不变）。
-    prof_val = spec.get("profile")
-    profile = None
-    if prof_val is not None:
-        try:
-            profile = _proc.validate_profile(prof_val)
-        except ValueError as e:
-            return _j({"ok": False,
-                       "error": "agent file %s: %s" % (p, e)},
-                      '400 Bad Request')
-    # sessionDir = 会话目录：可选字段；缺省 = .agent 文件所在目录（2026-08-31 用户拍板，
-    # 票 7t0ufv：会话 jsonl = 宿主本地运行时状态，落 agent 自家目录，不共享 cwd 工作区/
-    # 参与方同步目录）。
-    dir_val = spec.get("sessionDir")
-    if dir_val is None:
-        agent_site_dir = _posixpath.dirname(p)
-        sess_dir_src = (_proc.WS if agent_site_dir in ("", "/")
-                        else _os.path.join(_proc.WS, agent_site_dir.lstrip("/")))
-        sess_dir = _os.path.realpath(sess_dir_src)
-    else:
-        if not isinstance(dir_val, str) or not dir_val.strip():
-            return _j({"ok": False,
-                       "error": "agent file %s: 'sessionDir' must be a non-empty "
-                                "string when present" % p},
-                      '400 Bad Request')
-        sess_dir = _os.path.expanduser(dir_val.strip())
-        # sessionDir 安全红线：与会话路径同一根集（~/m + run 运行时区），防穿越/逃逸。
-        real = _os.path.realpath(sess_dir)
-        roots = [_proc.WS_REAL,
-                 _os.path.realpath(_os.path.join(_proc.WS, "run"))]
-        if not any(real == r or real.startswith(r + _os.sep) for r in roots):
-            return _j({"ok": False,
-                       "error": "agent file %s: sessionDir escapes workspace: %s"
-                                % (p, dir_val)},
-                      '400 Bad Request')
-        sess_dir = real
-    # sessionDir 不存在 → 自动创建（含 participant/ 中间层），创建行为记日志。
-    if not _os.path.isdir(sess_dir):
-        try:
-            _os.makedirs(sess_dir, exist_ok=True)
-        except OSError as e:
-            return _j({"ok": False,
-                       "error": "agent file %s: cannot create sessionDir %s: %s"
-                                % (p, sess_dir, e)},
-                      '500 Internal Server Error')
-        _log.info("agent %s: auto-created sessionDir %s", name, sess_dir)
-    # 会话 = <sessionDir>/<name>.jsonl（每 agent 一会话）；站内路径经既有校验再过一道。
-    # 站内相对路径推导（任务 kqhweh，ticket.gwj1xr ②）：sess_dir 已是 realpath，若 .agent/
-    # sessionDir 经 ~/m/run 软链（→ /data/…/run）落在运行时区，relpath(sess_dir, WS) 会产出
-    # `../…` 畸形站内路径（旧代码未拦，session_file 解析成不存在位置）。先试 WS 锚定，逃逸则
-    # 回退 run 软链锚定（还原为 /run/… 站内路径）；两者都逃逸 → 400。
-    rel_dir = _os.path.relpath(sess_dir, _proc.WS)
-    if rel_dir == ".." or rel_dir.startswith(".." + _os.sep):
-        run_real = _os.path.realpath(_os.path.join(_proc.WS, "run"))
-        rel_run = _os.path.relpath(sess_dir, run_real)
-        if rel_run == ".." or rel_run.startswith(".." + _os.sep):
-            return _j({"ok": False,
-                       "error": "agent file %s: sessionDir %s escapes the site root "
-                                "(rel to %s = %s)" % (p, sess_dir, _proc.WS, rel_dir)},
-                      '400 Bad Request')
-        rel_dir = _posixpath.normpath(_posixpath.join("run", rel_run))
-    site_jsonl = "/" + _posixpath.normpath(_posixpath.join(rel_dir, name + ".jsonl"))
-    try:
-        session_file = _proc.resolve_session_path(site_jsonl)
-    except ValueError as e:
-        return _j({"ok": False,
-                   "error": "agent file %s: derived session path rejected: %s"
-                            % (p, e)},
-                  '400 Bad Request')
-    # 登记显式拉起参数（任务 fw2ll1 cwd；任务 z293ql profile）：该会话路径懒建桥接时
-    # 按此 cwd/profile 拉起，不再恒等于 dirname(session_file) / 裸会话。
-    _b.set_session_cwd(site_jsonl, cwd, profile)
-    return _j({"ok": True, "name": name, "host": host, "cwd": cwd,
-               "profile": profile,
-               "sessionDir": sess_dir, "session": site_jsonl,
-               "session_file": session_file,
-               "hostRouting": "v1: session spawns locally on this 8080 host; "
-                              "host is stored for future cross-host routing"})
 
 
 # ---------------- 指挥中心临时会话（任务 z293ql，设计稿 §4.2/§4.3） ----------------
@@ -498,30 +260,13 @@ def _delete_session(session, kw):
                             ".agent 与 jsonl，不可撤销)"},
                   '400 Bad Request')
     try:
-        name = _cc_name(session)
-        _agent_path, jsonl_path, _base = _proc.session_files(name)
-    except ValueError as e:
-        return _j({"ok": False, "error": str(e)}, '400 Bad Request')
-    site = _proc.site_path_of(jsonl_path)
-    if site is None:
-        return _j({"ok": False,
-                   "error": "session path escapes the site root: %s" % jsonl_path},
-                  '400 Bad Request')
-    # ① 进程面：先杀 Supervisor（bridge.drop_session 绝不建桥 ⇒ 删一枚从未打开过的
-    #    会话不会反而把它拉起来）；未命中桥接时再按 environ 标记扫残留宿主兼顶。
-    res = _b.drop_session(site)
-    if not res.get("found"):
-        stale = _proc.kill_hosts(jsonl_path)
-        if stale:
-            res = dict(res, killed=True, staleHosts=stale)
-    # ② 文件系统面：realpath 断言 + 删前身份证据 + 删后复核全在 proc 层。
-    try:
-        doc = _proc.delete_cc_session(name)
-    except (ValueError, OSError) as e:
-        return _j({"ok": False, "error": "delete failed: %s" % e,
-                   "process": res}, '500 Internal Server Error')
-    _log.info("deleted command-center session %s (process=%s)", name, res)
-    return _j(dict(ok=True, process=res, **doc))
+        doc = _b.delete_cc_session(_cc_name(session))
+    except ValueError as exc:
+        return _j({"ok": False, "error": str(exc)}, '400 Bad Request')
+    except OSError as exc:
+        return _j({"ok": False, "error": "delete failed: %s" % exc},
+                  '500 Internal Server Error')
+    return _j(doc, '200 OK' if doc.get("ok") else '500 Internal Server Error')
 
 
 def interp(store, op='', session='', cmd='', **kw):
@@ -542,14 +287,25 @@ def interp(store, op='', session='', cmd='', **kw):
         if op == 'rename_session':
             return _rename_session(session, kw)
         return _delete_session(session, kw)
-    b, err = _bridge_or_err(session)
+    if op not in ('status', 'attach', 'commands', 'inspect', 'reload', 'clear', 'cmd'):
+        return _j({"ok": False, "error": "unknown op %r" % op}, '400 Bad Request')
+    if op == 'cmd':
+        try:
+            cmd_obj = _json.loads(cmd) if cmd else None
+        except ValueError:
+            return _j({"ok": False, "error": "cmd is not valid JSON"}, '400 Bad Request')
+        if not isinstance(cmd_obj, dict) or not isinstance(cmd_obj.get('type'), str) or not cmd_obj['type']:
+            return _j({"ok": False, "error": "cmd must be an object with type"}, '400 Bad Request')
+        if cmd_obj['type'] in _b.BLOCKED_COMMANDS:
+            return _j({"ok": False, "error": "command is blocked"}, '403 Forbidden')
+    b, err = _bridge_or_err(store, session)
     if err:
         return err
     if op == 'status':
         doc = dict(ok=True, **b.sup.status_doc())
         # 斜杠状态行第 4 行可见性三值（任务 bjhzvj；任务 8r0tww 补 socket 会话）：
         # 服务端既有数据，无新造——host 复用 _self_host()（env/host-id 查表，同
-        # host_guard 口径）；sessionDir = session_file 的 dirname；workDir 分两路：
+        # 宿主映射口径）；sessionDir = session_file 的 dirname；workDir 分两路：
         # socket 会话（agentd 族）= 参与方 spec.json 声明的 workdir（= runner 拉起
         # 会话进程的 cwd，任务 8r0tww），读取失败 → null；普通会话 = 会话进程真实在跑
         # （state=running ∧ pid）时 status_doc 的拉起 cwd，未拉起 → null。缺值前端显 `?`。
@@ -629,14 +385,6 @@ def interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "gen": r.get("gen"), "pid": r.get("pid")})
     if op == 'cmd':
-        try:
-            cmd_obj = _json.loads(cmd) if cmd else None
-        except ValueError:
-            return _j({"ok": False, "error": "cmd is not valid JSON"},
-                      '400 Bad Request')
-        if not isinstance(cmd_obj, dict) or not cmd_obj.get('type'):
-            return _j({"ok": False, "error": "cmd must be an object with type"},
-                      '400 Bad Request')
         err = b.send(cmd_obj)
         if err:
             return _j({"ok": False, "error": err}, '403 Forbidden')

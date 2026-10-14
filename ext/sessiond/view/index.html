@@ -38,7 +38,7 @@ html, body { height: 100%; overflow: hidden; }
 body { margin: 0; background: var(--bg); color: var(--fg);
   font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
 /* flash 轻提示（任务 0829-2035-kyor：替代原顶部状态栏）：顶部居中浮层，自动隐藏；
-   原走系统事件侧栏的用户可见提示（自愈失败、熔断等）改经它承载，错误不静默吞掉 */
+   原走系统事件侧栏的用户可见提示（自愈失败等）改经它承载，错误不静默吞掉 */
 .flashnotice { position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
   max-width: 80vw; padding: 6px 14px; border-radius: 8px; font-size: 12px;
   background: var(--panel2); border: 1px solid var(--line); color: var(--dim);
@@ -398,11 +398,10 @@ let agentWorkDir = null;
 let agentSessionDir = null;
 let curThinkingLevel = null;  // 当前思考强度（thinking_level_change + get_state 跟踪，0830-1257-vwzb）
 // 会话状态行 2（0830-1257-vwzb inbox 增项）：msgs/compacting 来自 get_state 响应，
-// gen/restarts 来自 op=status；缺失显 ?。
+// gen 来自 op=status；缺失显 ?。
 let curMsgCount = null;
 let curCompacting = null;
 let curGen = null;
-let curRestarts = null;
 let curCtx = null;            // 上下文占用（0830-1324-3qet）：get_session_stats 的 contextUsage{tokens,contextWindow,percent}
 let seenEntryIds = new Set(); // 已渲染 entry（幂等去重）
 let seenToolIds = new Set();  // 已渲染 toolCallId（entries ↔ 实时事件互斥）
@@ -462,7 +461,7 @@ async function api(op, extra) {
 }
 
 // ---------------- flash 轻提示（任务 0829-2035-kyor：原顶部状态栏已移除；
-// op=status API 后端保留供评审/调试，前端不再展示 gen/restarts/pid/cwd 等内部字段） ----------------
+// op=status API 后端保留供评审/调试，前端不再展示 gen/pid/cwd 等内部字段） ----------------
 let flashTimer = null;
 function flash(info, cls) {
   const el = $("flashNotice");
@@ -534,7 +533,7 @@ async function attach(name) {
   turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false;   // 重挂接重置等待指示（0829-2107-cvdn；间隙计时/收尾窗/红框在场同清，0c736g/ilznlp）
   pendingSends = {}; queueState = {steering: [], followUp: []};
   toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重挂接丢弃（bw333x）
-  curMsgCount = null; curCompacting = null; curGen = null; curRestarts = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
+  curMsgCount = null; curCompacting = null; curGen = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
   agentHost = null; agentWorkDir = null; agentSessionDir = null;  // 宿主可见性随重挂接重置（任务 bjhzvj；.agent 会话由 resolveAgentAndAttach 在 attach 后重填）
   curCtx = null;                                      // 上下文占用随重挂接重置（0830-1324-3qet）
   retryBoxEl = null; lastRenderedErrorMsg = null;       // 回合状态重置（0829-2131-pdop）
@@ -830,14 +829,6 @@ function handleEvent(o) {
     return;
   }
   if (t === "sessiond.error") { flash("sessiond: " + o.message, "err"); return; }
-  if (t === "sessiond.session_restarting") {
-    if (o.reload) {
-      // 进程级 reload：主动重启，立即重拉（无退避）；
-      // 后续 session_restarted 的 gen 变化触发现有基线自愈。
-      flash("Session reloading… (resume from jsonl right after kill)", "warn");
-    } else flash("Session process died, restarting in " + (o.delay || 0) + "s", "warn");
-    return;
-  }
   if (t === "sessiond.session_restarted") {
     flash("Session restarted", "warn");
     if (lastGen !== null && o.gen !== undefined && o.gen !== lastGen) {
@@ -846,8 +837,6 @@ function handleEvent(o) {
     } else if (o.gen !== undefined) lastGen = o.gen;
     return;
   }
-  if (t === "sessiond.session_disabled") { flash("Session disabled (crash loop)", "err");
-    turnActive = false; hideWaiting(); disarmGapTimer(); return; }
   if (t === "sessiond.session_dormant") { flash("Session dormant (no subscribers) — refresh or send a message to revive", "warn");
     turnActive = false; hideWaiting(); disarmGapTimer(); return; }
   if (t === "sessiond.dialog_resolved") {
@@ -1667,6 +1656,7 @@ function handleCmdResponse(o) {
       curThinkingLevel = o.data.thinkingLevel || curThinkingLevel;
       if (typeof o.data.messageCount === "number") curMsgCount = o.data.messageCount;  // inbox 增项：零额外请求自带
       curCompacting = !!o.data.isCompacting;
+      turnActive = !!o.data.isStreaming || curCompacting;
       refreshSlashNoticeIfVisible();
     }
     return;
@@ -1721,7 +1711,7 @@ function sendGetState() {
     .catch(() => {});                          // HTTP 失败静默（不闪 err）
   setTimeout(() => { getStateInFlight = false; }, 3000);  // 回执丢失时的兜底解锁（正常由 response 帧提前清）
 }
-// gen/restarts 经现有 op=status 只读查询（0830-1257-vwzb inbox 增项）：展示斜杠提示时
+// gen 经现有 op=status 只读查询（0830-1257-vwzb inbox 增项）：展示斜杠提示时
 // 顺带刷新；失败静默。
 let statusQueryInFlight = false;
 function sendStatusQuery() {
@@ -1730,7 +1720,6 @@ function sendStatusQuery() {
   api("status", {session: attached}).then(d => {
     if (d && d.ok) {
       curGen = (typeof d.gen === "number") ? d.gen : curGen;
-      curRestarts = (typeof d.restarts === "number") ? d.restarts : curRestarts;
       // 普通会话 host/workDir/sessionDir 回填（任务 bjhzvj）：.agent 会话仍以
       // op=agent 回执为准（resolveAgentAndAttach），此处不覆盖；三值整体替换——
       // null 显式清回 `?`（任务 8r0tww，评审捎带项：会话进程先跑后被空闲回收/停止时，
@@ -1759,7 +1748,7 @@ function sendCtxStats() {
 // 进程级 reload：直接经 op=reload 杀会话进程并从 session.jsonl resume 重拉（用户拍板
 // 去二次确认，任务 0830-1132-7yh5：/reload 直接执行，不再弹 window.confirm，与 /clear 同口径）。
 // （干净进程 = extension 全新加载）。重连由现有缺口/自愈机器承接：
-// 监督员广播 session_restarting(reload)/session_restarted(gen+1) → gen 变化 → 基线自愈。
+// 宿主广播 session_restarted(gen+1) → gen 变化 → 基线自愈。
 // socket 会话（agentd 管理，任务 dsuqbi）：op=reload 后端改道代理 control/restart
 //（保历史换代）；破坏性低不加二次确认（决策记录），成功后走 heal 重试环重挂接新代。
 async function doReload() {
@@ -1892,7 +1881,7 @@ function hideNotice() {
   $("slashNotice").classList.add("hidden");
 }
 // 斜杠提示 = 两行状态 + 命令表（任务 0830-1257-vwzb，多行口径见 inbox m2vt）：
-// 行 1 = model + thinking；行 2 = msgs/gen/restarts（isCompacting=true 时行尾追标）；
+// 行 1 = model + thinking；行 2 = msgs/gen（isCompacting=true 时行尾追标）；
 // SLASH_HELP 另起一行；任一值缺失显示 ?。.notice 自带 pre-wrap，\n 直接换行。
 // 上下文占用行（0830-1324-3qet）：数据源 = get_session_stats 的 contextUsage
 // {tokens, contextWindow, percent}（pi 权威值，含系统提示+工具开销，不做客户端估算）。
@@ -1911,8 +1900,7 @@ function slashStatusLine() {
   const l1 = "model: " + (curProvider || "?") + "/" + (curModelId || "?")
     + " \u00b7 thinking: " + (curThinkingLevel || "?");
   let l2 = "msgs: " + (curMsgCount == null ? "?" : curMsgCount)
-    + " \u00b7 gen: " + (curGen == null ? "?" : curGen)
-    + " \u00b7 restarts: " + (curRestarts == null ? "?" : curRestarts);
+    + " \u00b7 gen: " + (curGen == null ? "?" : curGen);
   if (curCompacting) l2 += " \u00b7 compacting\u2026";
   // 第 4 行（任务 8k7awi；bjhzvj 补齐普通会话）：.agent 会话数据源 = op=agent 回执；
   // 普通会话数据源 = op=status 附加字段（见 sendStatusQuery）
@@ -2435,7 +2423,7 @@ function backToBottom() {
 async function resolveAgentAndAttach() {
   try {
     const doc = await api("agent", {session: AGENT});
-    await attach(doc.session);   // attach 开头清屏，可见性信息须在其后落行；且 attach 会重置三变量（任务 bjhzvj）
+    await attach(AGENT);   // attach 开头清屏，可见性信息须在其后落行；且 attach 会重置三变量（任务 bjhzvj）
     // 保存宿主信息到模块级变量（任务 8k7awi），供斜杠提示条第 4 行展示；
     // .agent 会话以本回执为准，不被 sendStatusQuery 回填覆盖（!AGENT 门控）
     agentHost = doc.host; agentWorkDir = doc.cwd; agentSessionDir = doc.sessionDir;

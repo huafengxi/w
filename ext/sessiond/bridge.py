@@ -1,23 +1,4 @@
-#!/usr/bin/env python3
-"""bridge.py — web ↔ 按路径多会话桥接（任务 0829-1958-od0t；R1：路径路由）。
-
-web 进程内的常驻状态层：每会话路径一个 `Bridge`（持有事件环）+ 各自的
-`proc.Supervisor`（直接监督一个 `pi --mode rpc` 会话，进程内直连，无 unix
-socket）。首次访问某路径时创建并拉起会话进程，之后复用；不同路径（含不同
-目录的同名文件）互不干扰。本模块为同目录 `rpc/api.py`（命令/控制面）与
-`rpc/stream.py`（SSE 事件流）提供统一接口。
-
-事件 ID 游标与基线口径沿用（0829-1609-8dwt，原见 sessiond/PROTOCOL.md §6）：
-  - 实时流游标 = 桥接分配的不透明事件 ID `<ns>:<seq>`（环内稳定）。
-  - 完整历史基线 = 经 pi rpc `get_entries`（全量）；
-    `get_entries()` 发命令并等待配对响应（监督员单写者，id 原样往返）。
-    响应行照常入环但瘦身（entries 列表替换为条数），避免巨型 SSE 负载。
-
-鉴权不在这里做——由 w 服务的全局 BasicAuth（~/.auth/passwd）承担。
-命令拦截面沿用：`switch_session`/`set_session_name` 不透传（评审 S3）。
-会话路径校验与解析见 `proc.resolve_session_path`（站内任意 `.jsonl`，
-锁定 ~/m 内；注册表键 = 解析后绝对路径）。仅 python3 标准库。
-"""
+"""Per-session command channel, bounded event log and browser subscriptions."""
 import json
 import logging
 import os
@@ -27,15 +8,12 @@ import uuid
 from collections import deque
 
 from ext.sessiond import proc as _proc
+from ext.sessiond.declaration import resolve_agent
 
 log = logging.getLogger("sessiond-bridge")
 
 RING_MAX = int(os.environ.get("SESSIOND_BRIDGE_RING", "2000"))
 MAX_STREAMS_PER_BRIDGE = int(os.environ.get("SESSIOND_BRIDGE_MAXSTREAMS", "5"))
-# 去保活（任务 ja0vr7，设计 du44uj §1.2）：
-# PRESENCE_GRACE = 在场判定的活动宽限（attach 是一次性 POST，防「刚 attach 还没开流」误判）；
-# IDLE_TIMEOUT = 空闲回收阈值（无订阅 ∧ 空闲超阈 → 杀进程转懒态；秒，0=关，测试可调小）。
-PRESENCE_GRACE = float(os.environ.get("SESSIOND_PRESENCE_GRACE", "300"))
 IDLE_TIMEOUT = float(os.environ.get("SESSIOND_IDLE_TIMEOUT", "900"))
 IDLE_SCAN_INTERVAL = float(os.environ.get("SESSIOND_IDLE_SCAN", "60"))
 ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
@@ -60,7 +38,9 @@ class Bridge:
                  profile=None):
         # 站内路径（如 /foo/bar/x.jsonl）；解析/校验在 Supervisor 内。
         self._site_path = session_path
-        self.session = None      # 展示名，待监督员解析后回填
+        self.session = None
+        self.terminated = False
+        self.busy = False
         self.lock = threading.Lock()
         self.cond = threading.Condition(self.lock)
         self.ring = deque(maxlen=RING_MAX)   # (seq, eid, obj)
@@ -89,8 +69,6 @@ class Bridge:
         else:
             self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest,
                                         cwd=cwd, profile=profile)
-            # 去保活（任务 ja0vr7）：在场判定数据由桥接供给（崩溃无订阅不重拉/空闲回收）。
-            self.sup.presence_check = self.has_presence
         self.session = self.sup.name         # 展示名以监督员解析为准
 
     def note_activity(self):
@@ -98,14 +76,6 @@ class Bridge:
         与 reload/clear（rpc/api.py 补记）。在场判定与空闲回收共享。"""
         with self.lock:
             self.last_activity = time.monotonic()
-
-    def has_presence(self):
-        """在场判定（去保活，设计 du44uj §1.2.1）：① 当前 SSE 订阅数 > 0，或② 距
-        最近一次活动 < PRESENCE_GRACE（防「刚 attach 还没开流」窗口误判）。"""
-        with self.lock:
-            if self.subscribers > 0:
-                return True
-            return time.monotonic() - self.last_activity < PRESENCE_GRACE
 
     def _socket_lost(self):
         """透传连接断（任务收敛/被杀，任务 ybzvbn）：标记终结（iter_events 停流 →
@@ -137,13 +107,18 @@ class Bridge:
                     if isinstance(to, (int, float)) and to > 0:
                         self._dialog_deadline[obj.get("id")] = \
                             time.monotonic() + to / 1000.0
-            elif t == "sessiond.session_restarted":
+            elif t in ("sessiond.session_restarted", "sessiond.session_dormant"):
                 # 会话进程重启：pi 侧 dialog Promise 全部失效，清表并广播结算，
                 # 否则 attach 基线会向各端重建已死 dialog（0830-1104-eji4）。
                 with self.lock:
                     stale = list(self.pending_dialogs.keys())
                     self.pending_dialogs.clear()
                     self._dialog_deadline.clear()
+                    pending = list(self.pending.values())
+                    self.pending.clear()
+                for waiter in pending:
+                    waiter["resp"] = {"success": False, "error": "session generation ended"}
+                    waiter["event"].set()
                 if stale:
                     self._broadcast_dialog_resolved(stale, restarted=True)
             elif self._dialog_deadline:
@@ -151,6 +126,19 @@ class Bridge:
                 # 后必然有后续事件（工具结果/续写）流经这里，无需额外定时器。
                 with self.lock:
                     expired = self._sweep_expired_dialogs_locked()
+            if expired:
+                self._broadcast_dialog_resolved(expired, timeout=True)
+                expired = []
+            if t == "agent_start":
+                with self.lock:
+                    self.busy = True
+            elif t in ("agent_settled", "sessiond.session_dormant", "sessiond.session_restarted"):
+                with self.lock:
+                    self.busy = False
+            elif t == "response" and obj.get("command") == "get_state" and obj.get("success"):
+                data = obj.get("data") or {}
+                with self.lock:
+                    self.busy = bool(data.get("isStreaming") or data.get("isCompacting"))
             if t == "response" and isinstance(obj.get("id"), str):
                 waiter = None
                 with self.lock:
@@ -462,7 +450,7 @@ class Bridge:
                 if eid == since_eid:
                     return seq, False
             oldest = self.ring[0][0] if self.ring else self.seq + 1
-            return oldest, True
+            return oldest - 1, True
 
     def iter_events(self, start_seq):
         """流订阅生成器：先补发 start_seq 之后的缓冲，再实时跟随。锁外 yield。
@@ -475,6 +463,10 @@ class Bridge:
                 while True:
                     batch = [e for e in self.ring if e[0] > sent]
                     if batch:
+                        if batch[0][0] > sent + 1:
+                            seq, eid, _ = batch[0]
+                            batch = [(seq - 1, "%s:%d" % (self.ns, seq - 1),
+                                      {"type": "webgw.gap", "gap": True})] + batch
                         break
                     if getattr(self, "terminated", False):
                         return
@@ -493,31 +485,7 @@ class Bridge:
 
 
 _BRIDGES = {}                     # resolved path -> Bridge（按需多会话）
-_BRIDGES_LOCK = threading.Lock()
-
-# 会话显式拉起参数登记（任务 fw2ll1：.agent cwd/dir 拆分；任务 z293ql：加 profile）：
-# op=agent 解析成功后先登记「会话文件 → {cwd, profile}」，之后该会话路径懒建桥接时
-# 按登记把两个值显式传给 Supervisor（cwd 不再恒等于 dirname(session_file)；profile →
-# spawn env 的 DISPATCH_PROFILE，见 proc.Supervisor._spawn）。
-# web 重启后登记随进程消失——前端打开 .agent 页必先经
-# op=agent 解析再 attach，登记自然重建；.jsonl 直开无登记 → cwd 缺省 dirname。
-_SPAWN_OVERRIDES = {}             # resolved session_file -> {"cwd":…, "profile":…}
-_SPAWN_OVERRIDES_LOCK = threading.Lock()
-
-
-def set_session_cwd(session_path, cwd, profile=None):
-    """登记会话的显式拉起参数（任务 fw2ll1，调用方 = rpc/api.py op=agent）。
-    session_path 经会话路径校验，cwd 经 proc.resolve_cwd 校验；profile 由调用方
-    经 `proc.validate_profile` 白名单校验后传入（本函数⛔ 不重复一份判据）。
-    非法抛 ValueError（调用方回 400）。重复登记以最后一次为准；已存在桥接不受影响
-    （桥接生命周期内 cwd/profile 不变）。"""
-    key = _proc.resolve_session_path(session_path)
-    _SPAWN_OVERRIDES_LOCK.acquire()
-    try:
-        _SPAWN_OVERRIDES[key] = {"cwd": _proc.resolve_cwd(cwd), "profile": profile}
-    finally:
-        _SPAWN_OVERRIDES_LOCK.release()
-
+_BRIDGES_LOCK = threading.RLock()
 
 def drop_session(session_path):
     """删除面临时会话（任务 z293ql，调用方 = rpc/api.py op=delete_session）：
@@ -530,8 +498,6 @@ def drop_session(session_path):
         key = _proc.resolve_session_path(session_path)
     except ValueError as e:
         return {"found": False, "killed": False, "error": str(e)}
-    with _SPAWN_OVERRIDES_LOCK:
-        _SPAWN_OVERRIDES.pop(key, None)      # 声明者即将被删 ⇒ 拉起参数登记同批摘除
     with _BRIDGES_LOCK:
         b = _BRIDGES.pop(key, None)
     if b is None:
@@ -545,44 +511,71 @@ def drop_session(session_path):
                 "error": "socket-mode session: lifecycle owned by agentd runner; "
                          "not killed"}
     r = sup.shutdown("delete_session")
-    return {"found": True, "killed": True, "pid": r.get("pid"),
-            "state": r.get("state")}
+    if r.get("ok"):
+        with b.cond:
+            b.terminated = True
+            b.cond.notify_all()
+    else:
+        with _BRIDGES_LOCK:
+            _BRIDGES[key] = b
+    return dict(r, found=True, killed=bool(r.get("ok")))
 
 
-def get_bridge(session_path):
-    """按路径取桥接；首次访问创建桥接并拉起监督员。
-    注册表键 = 解析后的绝对路径（`/./x` 等变体归一）。
+def delete_cc_session(name):
+    """Serialize declaration removal with entry resolution and channel creation."""
+    _, jsonl_path, _ = _proc.session_files(name)
+    site = _proc.site_path_of(jsonl_path)
+    if site is None:
+        raise ValueError("session path escapes the site root")
+    with _BRIDGES_LOCK:
+        process = drop_session(site)
+        if process.get("error"):
+            return {"ok": False, "error": process["error"], "process": process}
+        if not process.get("found"):
+            stale = _proc.kill_hosts(jsonl_path)
+            if stale:
+                process.update(killed=True, staleHosts=stale)
+        doc = _proc.delete_cc_session(name)
+        return dict(doc, ok=True, process=process)
 
-    拉起权单点（去保活二期 ja0vr7，用户硬约束①②③）：
-    - agentd 登记会话（/agents/(task|bot)/<名>/session/session.jsonl）按 pid.json 判定
-      （_proc.agentd_route）：活 socket → SocketSupervisor 透传直播（只连接不 spawn）；
-      终态/缺席/暂停/跨机 → ValueError 拒绝 + 指引/等待提示，**永不 spawn**；
-    - 其余路径：仅当 _SPAWN_OVERRIDES 有登记（= 经 op=agent 解析的 .agent 声明者）才建桥拉起；
-      未登记的裸 jsonl 直开 → ValueError（裸 jsonl 拉起废除：.agent 是 web 唯一拉起入口）。
-    非法路径抛 ValueError（调用方回 400）。"""
-    key = _proc.resolve_session_path(session_path)
+
+def get_bridge(entry, store=None):
+    with _BRIDGES_LOCK:
+        return _get_bridge_locked(entry, store)
+
+
+def _get_bridge_locked(entry, store=None):
+    """Resolve the declaration on every request; share only the live event channel."""
+    declaration = None
+    if isinstance(entry, str) and entry.endswith(".agent"):
+        if store is None:
+            raise ValueError("agent declaration requires a store")
+        meta, body = resolve_agent(store, entry)
+        declaration = json.loads(body)
+        if not declaration.get("ok"):
+            raise ValueError(declaration.get("error", "invalid declaration"))
+        session = declaration["session"]
+    else:
+        session, error = _proc.agentd_entry(entry)
+        if error:
+            raise ValueError(error)
+        if session == entry:
+            raise ValueError("chat entry must be an .agent declaration or agentd spec.json")
+    key = _proc.resolve_session_path(session)
     with _BRIDGES_LOCK:
         b = _BRIDGES.get(key)
         if b is None:
-            sock_path = None
-            route = _proc.agentd_route(session_path)
+            route = _proc.agentd_route(session)
             if route is not None:
                 mode, payload = route
                 if mode == "reject":
                     raise ValueError(payload)
-                sock_path = payload["sock"]    # live 唯一放行态：只透传不 spawn（硬约束②）
-                b = Bridge(session_path, sock_path=sock_path,
+                b = Bridge(session, sock_path=payload["sock"],
                            participant_id=payload.get("participant_id"))
+            elif declaration is not None:
+                b = Bridge(session, cwd=declaration["cwd"], profile=declaration["profile"])
             else:
-                with _SPAWN_OVERRIDES_LOCK:
-                    ov = _SPAWN_OVERRIDES.get(key)
-                if ov is None:
-                    raise ValueError(
-                        "裸 jsonl 拉起已废除（任务 ja0vr7）：直开该路径不再拉起宿主；"
-                        "浏览器会话入口 = .agent 声明者（唯一），agentd 登记会话的拉起/"
-                        "复活归 agentd 监督（本路径经 socket 透传）")
-                b = Bridge(session_path, cwd=ov.get("cwd"),
-                           profile=ov.get("profile"))
+                raise ValueError("session is not registered with agentd")
             _BRIDGES[key] = b
             b.sup.ensure_started()
             _ensure_idle_reaper()
@@ -609,7 +602,7 @@ def _idle_scan():
         if isinstance(sup, _proc.SocketSupervisor):
             continue
         with b.lock:
-            if b.subscribers > 0:
+            if b.subscribers > 0 or getattr(b, "busy", False):
                 continue
             if now - b.last_activity < IDLE_TIMEOUT:
                 continue
@@ -636,7 +629,11 @@ def _idle_scan():
                 continue
         log.info("idle reap candidate: %s (no subscribers, idle >%.0fs)",
                  b.session, IDLE_TIMEOUT)
-        sup._idle_reap()
+        def eligible():
+            with b.lock:
+                return (not getattr(b, "busy", False) and b.subscribers == 0
+                        and time.monotonic() - b.last_activity >= IDLE_TIMEOUT)
+        sup._idle_reap(eligible=eligible)
 
 
 def _idle_reaper_loop():

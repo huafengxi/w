@@ -10,7 +10,7 @@
   ① dormant + 复活有延迟 ⇒ `send` **等就位**、命令落到 stdin（返回 None）；
   ② 复活永不就位（超时）⇒ 返回**错误串**（不静默丢：前端有 sysLine/队列面板标错可依据）；
   ③ 已在跑 ⇒ 直通、**不额外等待**（常规路径零开销，wait_ready 立即 True）；
-  ④ 熔断（disabled）⇒ 立即错误串，不空等满超时窗。
+  ④ 永久关闭（closed）⇒ 立即错误串，不空等满超时窗。
 
 自包含：夹具 = 自建 stub 桥接/监督员 + `B.Bridge.send.__get__(stub)` 借用**真实现**
 （⛔ 不是二次实现）；⛔ 不经 `get_bridge` ⇒ 不拉起真实会话进程、⛔ 不启动模块级 reaper
@@ -47,7 +47,7 @@ class StubSup:
     def __init__(self, revive_after=0.0, state="dormant"):
         self.state = state
         self.proc = None
-        self.disabled = state == "disabled"
+        self.closed = state == "closed"
         self.started = 0
         self.writes = []
         self.revive_after = revive_after
@@ -62,8 +62,8 @@ class StubSup:
 
     def _settle(self):
         """按 revive_after 翻态（模拟监督线程 spawn 完成的时刻）。
-        熔断（disabled）⇒ 监督循环已退出、不经 reload 不复活（同 proc.py 口径）。"""
-        if self.disabled or self.revive_after is None or self._t0 is None:
+        永久关闭（closed）⇒ 永久关闭、不能再次启动（同 proc.py 口径）。"""
+        if self.closed or self.revive_after is None or self._t0 is None:
             return
         if time.monotonic() - self._t0 >= self.revive_after:
             self.proc = object()
@@ -77,7 +77,7 @@ class StubSup:
                 self._settle()
                 if self.state == "running" and self.proc is not None:
                     return True
-                if self.disabled:
+                if self.closed:
                     return False
                 remain = deadline - time.monotonic()
                 if remain <= 0:
@@ -147,13 +147,13 @@ def main():
           err3 is None and len(b3.sup.writes) == 1 and dt3 < 0.5,
           "err=%r dt=%.3fs" % (err3, dt3))
 
-    # ④ 熔断（disabled）⇒ 立即错误串，不空等满窗
-    b4 = StubBridge(StubSup(state="disabled"))
+    # ④ 永久关闭（closed）⇒ 立即错误串，不空等满窗
+    b4 = StubBridge(StubSup(state="closed"))
     t0 = time.monotonic()
     err4 = b4.send({"type": "prompt", "message": "x", "id": "p4"})
     dt4 = time.monotonic() - t0
-    check("④ 熔断 ⇒ 立即错误串（不空等 25s 窗）",
-          isinstance(err4, str) and "state=disabled" in err4 and dt4 < 1.0,
+    check("④ 永久关闭 ⇒ 立即错误串（不空等 25s 窗）",
+          isinstance(err4, str) and "state=closed" in err4 and dt4 < 1.0,
           "err=%r dt=%.3fs" % (err4, dt4))
 
     failed = [n for n, ok, _d in RESULTS if not ok]

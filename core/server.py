@@ -7,8 +7,6 @@ log=info ./core/server.py 8080 [log_file]
 '''
 
 import sys, os, os.path
-import signal
-import subprocess
 import logging
 
 # repo root = dir containing the `core` package (.../w); put it on sys.path so
@@ -31,13 +29,6 @@ os.chdir(_web_path_)
 def help():
     print(__doc__)
 
-def list_process(pat):
-    for pid in subprocess.Popen(['pgrep', '-f', pat], stdout=subprocess.PIPE).communicate()[0].split(b'\n'):
-        if not pid: continue
-        yield int(pid)
-def kill_process(pat):
-    for p in list_process(pat):
-        if p != os.getpid(): os.kill(p, signal.SIGKILL)
 def set_path():
     bin_path = web_path('w/bin')
     if not os.path.exists(bin_path):
@@ -74,10 +65,9 @@ def main():
     log_file = sys.argv[2] if len(sys.argv) > 2 else ''
     set_path()
     logging.info('web_start: listen=%s dir=%s log=%s(%s) PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, os.getenv('PATH'), os.getenv('PYTHONPATH'))
-    kill_process('server.py +{}'.format(listen_addr))
 
     set_logging(log_file)
-    root = build_root_store('w/stores/fstab')
+    root = build_root_store('w/stores/fstab', required=('/',))
     handler = Handler(root).handle_req
     # 代理挂管线第一个业务位（主路由之前）：位于全局 BasicAuth 之内，
     # 未命中规则返回 None 落回既有管线（见 design.md「reverse proxy」）。

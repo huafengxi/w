@@ -1,36 +1,9 @@
 # -*- type=script -*-
-# proc.py — 按路径会话监督员（任务 0829-1958-od0t；R1 路径路由；R2 零文件）。
-#
-# web 进程内的守护线程按会话路径各监督一个 `pi --mode rpc` 子进程（stdin/stdout
-# 管道，进程内直连）。监督口径沿用单会话版（0829-1854-vkbv，原 sessiond
-# 0829-1327-8n06）：崩溃退避 2^n（上限 30s）、熔断（窗口内连续崩溃超限）、
-# 稳定期重置计数；会话进程 `start_new_session=True`（独立会话组，web 被整组杀
-# 时不连带杀会话）。
-#
-# URL 路径路由（用户拍板 inform p4th）：会话 = ~/m 下任意 `.jsonl` 路径，
-# `/foo/bar/x.jsonl?v=chat`、`/a/b/<name>.jsonl?v=chat` 均可；不同目录
-# 的同名文件 = 不同会话，可并存。路径校验锁定 ~/m 内（防穿越/逃逸）。
-# 会话工作目录（任务 fw2ll1 cwd/dir 拆分）：缺省 = 其 jsonl 所在目录（.jsonl 直开，
-# 用户拍板 inform cwd1）；.agent 会话由调用方（rpc/api.py op=agent）显式传入，
-# 可与会话文件所在目录不同（cwd 决定 pi 加载哪个工作区的 AGENTS/扩展）。
-#
-# 零文件（用户拍板 inform n0fx/p4id/s4fn）：除会话 jsonl 本身外不引入任何
-# 辅助文件——无账本、无进程 stderr 文件。
-#   - 子进程 stderr 继承 web 进程（并入 run/logs/web.log）。
-#   - 旧宿主识别 = environ 标记扫描 + 宿主身份交叉校验：spawn 注入
-#     `SESSIOND_SESSION_FILE=<jsonl 绝对路径>`；处置旧宿主时扫
-#     /proc/*/environ 精确匹配（用户 ask 拍板：pi 会 setproctitle 把 argv
-#     重写为裸 "pi"，cmdline 匹配不可行），且命中进程还须 comm=='pi'（改写后
-#     title）且 /proc/<pid>/exe 指向 node 二进制——仅凭 environ 标记会把带标记的
-#     旁观进程误杀（2026-08-31 scheduler 误杀事故；纵深防御任务 p0h6fk，口径经
-#     dispatcher inform p6fk/p6f2 两轮修正定稿）。命中即旧宿主（无 starttime 校验，
-#     s4fn）：等 stdin-EOF 自然退出，宽限后 SIGTERM→SIGKILL。
-# `dispatcher` 名允许（用户拍板 0829-1958-od0t）。
-#
-# web 重启行为（替代 fd handoff）：pi rpc 模式 stdin EOF 即优雅退出（会话持久体
-# 已 flush）→ web 死后会话自行退出；新 web 首次访问某会话时按 environ 标记扫
-# 出仍存的旧宿主，等其自然退出（宽限后杀之——防同一 jsonl 双宿主），随后从
-# 该 .jsonl resume 重拉。聊天历史不丢。仅 python3 标准库。
+"""Interactive process ownership, local session declarations and agentd routing.
+
+Interactive generations start on explicit requests. Task/bot generations belong
+exclusively to agentd and are accessed through its RPC socket.
+"""
 import grp
 import json
 import logging
@@ -91,22 +64,6 @@ def display_name(real_path):
     return os.path.basename(real_path)[:-len(".jsonl")]
 
 
-def declared_display_name(session_file):
-    """.agent 声明者指定的展示名（bot 布局第 4 期，任务 ocfidc，plan §4.10
-    显示名退路）：声明者带非空 `name` 字段且推导会话文件 == 目标 → 返回该名字；
-    否则 None（回落 display_name 的 basename 规则）。对外会话标识（如
-    `bot/dev-dispatcher`）由此带族前缀，与会话文件所在族目录口径一致；
-    pi --name 是显示名，不受 session id 字符约束。"""
-    for _name, _host, derived, spec in _scan_agent_declarations():
-        if derived != session_file:
-            continue
-        declared = spec.get("name")
-        if isinstance(declared, str) and declared.strip():
-            return declared.strip()
-        return None
-    return None
-
-
 def resolve_cwd(cwd):
     """显式 cwd 校验（任务 fw2ll1）：与会话路径同一根集（~/m + run 运行时区），
     realpath 前缀校验防穿越/符号链接逃逸；非法抛 ValueError（调用方回 400）。
@@ -120,10 +77,6 @@ def resolve_cwd(cwd):
     return real
 
 
-BACKOFF_MAX = 30.0          # 崩溃重启退避上限（秒）
-FAIL_LIMIT = 6              # 熔断：窗口内连续崩溃次数上限
-FAIL_WINDOW = 300.0         # 熔断窗口（秒）
-STABLE_RESET = 120.0        # 存活超过该秒数 → 重置崩溃计数
 LINE_LIMIT = 16 * 1024 * 1024  # 单行 JSONL 上限，超限丢弃该行（口径沿用）
 ORPHAN_GRACE = 15.0         # 等待旧宿主自然退出的宽限（秒）
 
@@ -164,47 +117,6 @@ def _claim_origin(path):
         log.error("claim origin failed for %s: %s", path, e)
 
 
-# ---- 跨宿主守卫（任务 8nherl，最小版）----
-# .agent 声明 host 的会话只能被声明机实体化（建桥接/拉起进程）。唯一守卫点 =
-# Supervisor.__init__（桥接创建即监督员创建，是所有会话进程在本机被拉起的必经处，
-# 见 bridge.get_bridge 单一建桥入口）。判定口径与扩展侧/replica-tag 同源：
-# 声明者扫描面 = assistant/** 递归（该目录已随 assistant 退役消失 ⇒ **现网恒零产出**，
-# 即 host_guard/declared_display_name 对任何会话都不生效；⛔ 有意不扩扫描面到
-# run/sessiond/，三条理由见 ARCHITECTURE.md §12.2 末行）。推导会话文件 =
-# <sessionDir realpath>/<agent名>.jsonl（sessionDir 缺省 = .agent 所在目录），
-# 与 rpc/api.py _resolve_agent 的推导口径一致。本机身份 = env/host-id 查表；
-# 缺失/未命中 = 配置错误，对命中声明者会话拒绝放行（不猜测），无声明者会话零波及。
-
-
-def _scan_agent_declarations():
-    """递归扫 assistant/**/*.agent，yield (agent名, host, 推导会话文件 realpath, spec)。
-    坏文件/缺 host 宽容跳过（守卫只拦可判定的声明者）。
-    ⚠ `assistant/` 已随退役消失 ⇒ 本函数现网恒零产出（`os.walk` 对不存在的根 = 空迭代）；
-    ⛔ 不把扫描面扩到 `run/sessiond/`（web 自建的指挥中心临时会话，任务 z293ql）：跨机访问
-    已被机器前缀挡住、`run/` 宿主本地 ⇒ 误开不会双写同一 jsonl，而扩扫描面 = 给每次建桥
-    加一次 `os.walk`（为小概率事件加常驻成本）。判定与理由的权威 = ARCHITECTURE.md §12.2。"""
-    for dirpath, _dirnames, filenames in os.walk(os.path.join(WS, "assistant")):
-        for fn in filenames:
-            if not fn.endswith(".agent"):
-                continue
-            try:
-                with open(os.path.join(dirpath, fn)) as f:
-                    spec = json.load(f)
-            except (OSError, ValueError):
-                continue
-            if not isinstance(spec, dict):
-                continue
-            host = spec.get("host")
-            if not isinstance(host, str) or not host.strip():
-                continue
-            name = fn[:-len(".agent")]
-            sd = spec.get("sessionDir")
-            base = (os.path.realpath(os.path.expanduser(sd.strip()))
-                    if isinstance(sd, str) and sd.strip() else dirpath)
-            yield name, host.strip(), os.path.realpath(
-                os.path.join(base, name + ".jsonl")), spec
-
-
 def _self_host():
     """本机规范名：env/host-id 查表（格式同 agentd/agentctl.py
     local_canonical_host：每行 `<hostname> <空白> <规范名>`，# 注释）。
@@ -220,26 +132,6 @@ def _self_host():
         if len(parts) > 1 and parts[0] == hn and not parts[0].startswith("#"):
             return parts[1]
     return None
-
-
-def host_guard(session_file):
-    """跨宿主守卫（唯一守卫点）：目标会话文件若命中某 .agent 声明者推导的会话文件，
-    且声明者 host ≠ 本机 → ValueError 拒绝（消息含声明机访问指引）；命中声明者但本机
-    身份不可得 → ValueError 配置错误；无声明者（普通会话）→ 放行，零影响。"""
-    for name, host, derived, _spec in _scan_agent_declarations():
-        if derived != session_file:
-            continue
-        me = _self_host()
-        if me is None:
-            raise ValueError(
-                "host guard: env/host-id missing or no entry for this hostname; "
-                "cannot determine local host, refusing to materialize session %r "
-                "(declared host=%s). Fix env/host-id." % (name, host))
-        if host != me:
-            raise ValueError(
-                "该会话声明者宿主=%s，请通过 %s 的服务访问（本机=%s）"
-                % (host, host, me))
-        return
 
 
 def pid_alive(pid):
@@ -310,38 +202,13 @@ def is_pi_host(pid):
 
 
 def find_hosts(session_file):
-    """零文件旧宿主识别（R2）：扫 /proc/*/environ，精确匹配
-    `SESSIOND_SESSION_FILE=<session_file>` 标记、且经 is_pi_host 交叉校验的进程
-    → pid 列表。带标记的旁观进程（comm != 'pi' 或 exe 非 node）一律不认宿主。"""
-    marker = ("%s=%s" % (HOST_MARKER, session_file)).encode("utf-8")
-    hosts = []
-    self_pid = os.getpid()
-    try:
-        entries = os.listdir("/proc")
-    except OSError:
-        return hosts
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        pid = int(entry)
-        if pid == self_pid:
-            continue
-        try:
-            with open("/proc/%s/environ" % entry, "rb") as f:
-                env = f.read()
-        except OSError:
-            continue
-        if marker in env.split(b"\x00") and is_pi_host(pid):
-            hosts.append(pid)
-    return hosts
+    return host_map([session_file]).get(session_file, [])
 
 
 def host_map(session_files):
     """一次 /proc 扫描出多枚会话文件的宿主 pid（列表页用，避免 N 次全扫）。
     口径逐字同 `find_hosts`：environ 精确匹配 `SESSIOND_SESSION_FILE=<file>` ∧
     `is_pi_host` 交叉校验（comm=='pi' ∧ exe 指向 node）；带标记的旁观进程不认宿主。
-    ⛔ 不把 `find_hosts` 改写成对本函数的调用：那会动到「防双宿主清场」
-    （`_clear_stale_proc`）这条既有链路的实现体，收益只是省十几行同口径代码。
     返回 {session_file: [pid, …]}（无宿主的键不出现）。"""
     files = [f for f in dict.fromkeys(session_files) if isinstance(f, str) and f]
     if not files:
@@ -903,355 +770,189 @@ def delete_cc_session(name):
 
 
 class Supervisor:
-    """按路径会话监督员：一个 `pi --mode rpc` 子进程 + 崩溃恢复。
-
-    session_path = 站内 URL 路径（如 `/foo/bar/x.jsonl`）或已解析绝对路径。
-    on_event(obj) 由监督线程回调（进程退出/重拉等生命周期帧 + pi 原始输出行），
-    调用方（bridge）负责入环/多播。
-    """
+    """Own one interactive process. Only explicit requests start a new generation."""
 
     def __init__(self, session_path, on_event, cwd=None, profile=None):
-        # 兼容站内路径（如 `/foo/bar/x.jsonl`）与已解析绝对路径传入。
-        if os.path.isabs(session_path) and session_path.endswith(".jsonl"):
-            rp = os.path.realpath(session_path)
-            roots = [WS_REAL, os.path.realpath(os.path.join(WS, "run"))]
-            if any(rp == r or rp.startswith(r + os.sep) for r in roots):
-                self.session_file = rp
-            else:
-                self.session_file = resolve_session_path(session_path)
-        else:
-            self.session_file = resolve_session_path(session_path)
-        self.name = (declared_display_name(self.session_file)
-                     or display_name(self.session_file))
-        host_guard(self.session_file)   # 跨宿主守卫唯一守卫点（任务 8nherl）
-        # cwd 由调用方显式传入（任务 fw2ll1：.agent cwd/dir 拆分，经 bridge 转交）；
-        # 缺省 = jsonl 所在目录（.jsonl 直开路径行为不变，cwd1）。
+        rp = os.path.realpath(session_path)
+        self.session_file = (rp if _within_roots(rp)
+                             else resolve_session_path(session_path))
+        self.name = display_name(self.session_file)
         self.cwd = resolve_cwd(cwd) if cwd else os.path.dirname(self.session_file)
-        # 人格输入（任务 z293ql，设计稿 §7.3）：.agent 声明者的 `profile` 字段经
-        # rpc/api.py 校验后传入（白名单 = `bots/profiles/` 里在场的名字），_spawn 在
-        # clean_env() 之后回注 DISPATCH_PROFILE（该 env 属剥除名单，⛔ 不得从父进程继承）。
-        # None ⇒ 不注 ⇒ 裸 pi 会话（既有 .agent/.jsonl 路径逐字不变）。
         self.profile = profile
         self.on_event = on_event
         self.proc = None
         self.pid = None
         self.gen = 0
-        self.restarts = 0
-        self.state = "idle"         # idle/starting/running/restarting/disabled/dormant
-        self.disabled = False       # 熔断标记（reload 解除）
-        self._reaping = False       # 空闲回收杀：退出不计崩溃、转懒态不重拉（去保活，任务 ja0vr7）
-        self._reloading = False     # 主动 reload：退出不计崩溃/不排退避
-        self._clearing = False      # 主动 clear（0829-2238-atnj）：重拉前先把 jsonl 截断到 0
-        self._clear_error = None    # clear 截断文件失败信息（由监督循环回填）
-        self._crash_ts = []
-        self._spawned_at = None
+        self.state = "idle"
+        self._closed = False
+        self._op_lock = threading.RLock()
         self._stdin_lock = threading.Lock()
         self._cond = threading.Condition()
-        self._started = False
         self._thread = None
-        # 在场判定钩子（去保活，任务 ja0vr7）：由 bridge 注入 has_presence；
-        # None = 保守按有在场（无桥接消费方时行为与旧版逐字一致）。
-        self.presence_check = None
-
-    # ---- 启动（幂等，首次调用拉起监督线程） ----
+        self._reader = None
 
     def ensure_started(self):
         with self._cond:
-            thread_alive = (self._thread is not None
-                            and self._thread.is_alive())
-            if self._started and thread_alive:
+            if self._closed or self.state in ("starting", "running", "stopping"):
                 return
-            if self._started:
-                # 监督循环已退出：熔断态（disabled）须经 reload 解锁，不在这里复活；
-                # 懒态（dormant，去保活转态）→ 重起监督循环即复活，语义回到懒拉起。
-                if self.disabled:
-                    return
-            self._started = True
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                name="supervisor-" + self.name, daemon=True)
+            self.state = "starting"
+            self._thread = threading.Thread(target=self._start,
+                                            name="session-" + self.name, daemon=True)
             self._thread.start()
 
-    def _has_presence(self):
-        """在场判定（去保活，任务 ja0vr7）：桥接提供数据（SSE 订阅数>0 ∨ 距最近一次
-        attach/cmd/reload/clear 活动 < PRESENCE_GRACE）。钩子缺失/异常 → 保守按有在场。"""
-        fn = self.presence_check
-        if fn is None:
-            return True
-        try:
-            return bool(fn())
-        except Exception:
-            return True
+    def _start(self):
+        with self._op_lock:
+            if self._closed:
+                return
+            if self.proc is not None and self.proc.poll() is None:
+                with self._cond:
+                    self.state = "running"
+                    self._cond.notify_all()
+                return
+            self._stop_locked()
+            self._start_locked()
 
-    def _go_dormant(self, reason):
-        """转懒态（去保活）：广播休眠帧、置 dormant、监督循环随后退出。
-        复活路径 = ensure_started（下次访问自然拉起）。"""
+    def _start_locked(self):
+        with self._cond:
+            self.state = "starting"
+        try:
+            self._clear_stale_proc()
+            if self._closed:
+                return {"ok": False, "error": "session closed"}
+            self._spawn()
+        except Exception as exc:
+            log.exception("session start failed: %s", self.session_file)
+            with self._cond:
+                self.state = "closed" if self._closed else "failed"
+                self._cond.notify_all()
+            self._broadcast({"type": "sessiond.error", "message": str(exc)})
+            return {"ok": False, "error": str(exc)}
+        proc = self.proc
+        reader = self._reader
+        threading.Thread(target=self._watch_process, args=(proc, reader),
+                         name="wait-" + self.name, daemon=True).start()
+        return {"ok": True, "gen": self.gen, "pid": self.pid}
+
+    def _watch_process(self, proc, reader):
+        rc = proc.wait()
+        if reader is not None:
+            reader.join()
+        with self._op_lock:
+            if self.proc is not proc:
+                return
+            for stream in (proc.stdin, proc.stdout):
+                if stream is not None:
+                    stream.close()
+            with self._cond:
+                self.proc = None
+                self.pid = None
+                self.state = "dormant"
+                self._cond.notify_all()
+            self._broadcast({"type": "sessiond.session_dormant",
+                             "session": self.name, "reason": "process exited (%s)" % rc})
+
+    def _stop_locked(self):
+        """Do not release process ownership until exit and stdout drainage complete."""
+        proc = self.proc
+        if proc is not None:
+            with self._cond:
+                self.state = "stopping"
+                self._cond.notify_all()
+            if proc.poll() is None:
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=3.0)
+            if self._reader is not None:
+                self._reader.join(timeout=3.0)
+                if self._reader.is_alive():
+                    raise TimeoutError("session stdout did not close")
+            for stream in (proc.stdin, proc.stdout):
+                if stream is not None:
+                    stream.close()
         with self._cond:
             self.proc = None
             self.pid = None
-            self.state = "dormant"
-        log.info("session dormant (%s): %s file=%s", reason, self.name,
-                 self.session_file)
-        self._broadcast({"type": "sessiond.session_dormant",
-                         "session": self.name, "reason": reason})
-
-    def _idle_reap(self):
-        """空闲回收执行体（去保活，任务 ja0vr7）：同 _kill_and_restart 的优雅杀但**不重拉**——
-        置 _reaping 标志后杀进程，监督循环观察到退出即转懒态（不计崩溃）。"""
-        with self._cond:
-            if self.state != "running":
-                return
-            self._reaping = True
-            p = self.proc
-        log.info("idle reap: killing %s (no subscribers, idle beyond timeout)",
-                 self.name)
-        if p is not None and p.poll() is None:
-            try:
-                p.terminate()
-            except OSError:
-                pass
-            try:
-                p.wait(timeout=3.0)
-            except subprocess.TimeoutExpired:
-                try:
-                    p.kill()
-                except OSError:
-                    pass
+            self.state = "closed" if self._closed else "dormant"
+            self._cond.notify_all()
 
     def shutdown(self, reason=""):
-        """永久停机（删除面临时会话用，任务 z293ql）：置 `_reaping`（退出不计崩溃、
-        监督循环转懒态后退出、⛔ 不重拉）+ 优雅杀（SIGTERM → 3s → SIGKILL，两档等待
-        都有上界）。与 `_idle_reap` 的区别 = 语义是「不再复活」，且调用方
-        （`bridge.drop_session`）已把桥接摘出注册表 ⇒ 后续访问经 .agent 重新解析。
-        未拉起（无进程）⇒ 直接转懒态，同样不复活。返回 {ok, pid, state}。"""
+        # Closing is permanent, including starts already queued behind an operation.
         with self._cond:
-            self._reaping = True
-            p = self.proc
-            pid_ = self.pid
-        if p is not None and p.poll() is None:
+            self._closed = True
+            self._cond.notify_all()
+        with self._op_lock:
+            pid = self.pid
             try:
-                p.terminate()
-            except OSError:
-                pass
-            try:
-                p.wait(timeout=3.0)
-            except subprocess.TimeoutExpired:
-                try:
-                    p.kill()
-                except OSError:
-                    pass
-                try:
-                    p.wait(timeout=3.0)
-                except subprocess.TimeoutExpired:
-                    log.error("shutdown: process %s survived SIGKILL window (%s)",
-                              pid_, self.session_file)
-        log.info("session shutdown (%s): %s file=%s", reason or "requested",
-                 self.name, self.session_file)
-        with self._cond:
-            return {"ok": True, "pid": pid_, "state": self.state}
+                self._stop_locked()
+            except (OSError, subprocess.TimeoutExpired, TimeoutError) as exc:
+                return {"ok": False, "pid": pid, "state": self.state, "error": str(exc)}
+            return {"ok": True, "pid": pid, "state": self.state}
 
-    # ---- 对外 ----
+    def _idle_reap(self, eligible=None):
+        with self._op_lock:
+            if self._closed or self.state != "running":
+                return
+            if eligible is not None and not eligible():
+                return
+            self._stop_locked()
+            self._broadcast({"type": "sessiond.session_dormant",
+                             "session": self.name, "reason": "idle"})
 
     def wait_ready(self, timeout=25.0):
-        """等待会话进程就位（state=running）。首次访问时监督线程刚拉起，
-        spawn 需毫秒~秒级（+ 旧宿主清场宽限）；基线路径等待而非快速失败。
-        上限取值（0830-0956-vk20 毛刺3）：清场旧宿主最坏 = ORPHAN_GRACE 15s
-        自然退出宽限 + SIGTERM 宽限 3s（+SIGKILL）+ spawn；原 10s 覆盖不住→
-        首个 attach 504，放宽到 25 = 15+3+7（余量）。"""
         deadline = time.monotonic() + timeout
         with self._cond:
             while self.state != "running" or self.proc is None:
-                if self.disabled:
+                if self._closed or self.state in ("failed", "dormant"):
                     return False
-                remain = deadline - time.monotonic()
-                if remain <= 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     return False
-                self._cond.wait(min(remain, 0.5))
-            return True
+                self._cond.wait(remaining)
+            return not self._closed
 
     def send(self, obj):
-        """向会话进程写一条命令（监督员是唯一写者 → 天然串行化）。"""
-        p = self.proc
-        if p is None or p.stdin is None:
-            return False
-        try:
-            with self._stdin_lock:
-                p.stdin.write(json.dumps(obj, ensure_ascii=False).encode("utf-8")
-                              + b"\n")
-                p.stdin.flush()
-            return True
-        except (OSError, ValueError):
-            return False
-
-    def _kill_and_restart(self, extra_flags, timeout):
-        """杀当前会话进程（SIGTERM 宽限→SIGKILL，经自有 Popen 句柄，无 pid
-        复用风险；不计崩溃/不排退避）并等监督循环重拉；返回 {ok, gen, pid}。
-        extra_flags 在杀前随锁置位（如 _reloading/_clearing），监督循环据此决定
-        重拉前是否截断 jsonl。reload/clear 共用。"""
-        with self._cond:
-            p = self.proc
-            gen0 = self.gen               # 先记世代：重拉极快，杀后读会读到新值导致永等
-            self._reloading = True
-            for k in extra_flags:
-                setattr(self, k, True)
-            self.disabled = False           # 熔断也经 reload 解除（口径沿用）
-            self._crash_ts = []
-            loop_alive = self._thread is not None and self._thread.is_alive()
-        if not loop_alive:
-            # 监督循环已退出（熔断态）：重起循环负责重拉
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                name="supervisor-" + self.name, daemon=True)
-            self._thread.start()
-        if p is not None and p.poll() is None:
+        with self._op_lock:
+            proc = self.proc
+            if self._closed or proc is None or proc.stdin is None:
+                return False
             try:
-                p.terminate()
-            except OSError:
-                pass
+                with self._stdin_lock:
+                    proc.stdin.write(json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
+                    proc.stdin.flush()
+                return True
+            except (OSError, ValueError):
+                return False
+
+    def _restart(self, clear=False):
+        with self._op_lock:
+            if self._closed:
+                return {"ok": False, "error": "session closed"}
             try:
-                p.wait(timeout=3.0)
-            except subprocess.TimeoutExpired:
-                try:
-                    p.kill()
-                except OSError:
-                    pass
-        # 等监督循环完成重拉（gen 变化即新进程就位）
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with self._cond:
-                if self.gen != gen0 and self.state == "running":
-                    return {"ok": True, "gen": self.gen, "pid": self.pid,
-                            "clear_error": self._clear_error}
-            time.sleep(0.2)
-        return {"ok": False, "error": "restart timed out waiting for respawn"}
+                self._stop_locked()
+                if clear:
+                    with open(self.session_file, "a") as stream:
+                        stream.truncate(0)
+                    _claim_origin(self.session_file)
+            except (OSError, subprocess.TimeoutExpired, TimeoutError) as exc:
+                return {"ok": False, "error": str(exc)}
+            return self._start_locked()
 
-    def reload(self, timeout=20.0):
-        """进程级 reload：优雅停（同 _kill_and_restart）→ 监督循环立即从该
-        .jsonl resume 重拉（不排退避，不计崩溃）。"""
-        return self._kill_and_restart((), timeout)
+    def reload(self):
+        return self._restart()
 
-    def clear(self, timeout=20.0):
-        """/clear（0829-2238-atnj；4l3de8 翻案改截断）：保留会话路径、清空全部内容。
-        顺序 = ① 杀当前会话进程（同 reload 口径）→ ② 把该会话 jsonl **截断到 0**
-        （不存在则创建空文件）并去 replica 标记（监督循环内、旧进程死透后、重拉前执行，
-        同线程无竞态，防旧进程把内存历史回写）→ ③ 立即重拉（pi≥0.84.1 对已存在的空文件走
-        _setSessionFile size==0 分支：newSession + _rewriteFile('w') + flushed=true，
-        不碰 openSync(wx)，安全）。翻案：旧口径「必须删除而非截断（pdop EEXIST）」是旧版
-        pi 的踩坑，已失效——删除在跨机同步树下有复活竞态：agents-sync 不开 --delete，
-        远端旧副本会被 pull 秒级拉回（带 replica 组）→ pi 判新会话首写 wx 撞 EEXIST
-        （2026-08-31 mac-dispatcher 事故实证）。截断 + 去标记后本机升格原件，push 收敛
-        远端 replica，无竞态。environ 标记 SESSIOND_SESSION_FILE 不变（路径不变）。
-        返回 {ok, gen, pid}。"""
-        with self._cond:
-            self._clear_error = None
-        r = self._kill_and_restart(("_clearing",), timeout)
-        if r.get("ok") and r.get("clear_error"):
-            with self._cond:
-                self._clear_error = None
-            return {"ok": False,
-                    "error": "session respawned but jsonl truncate failed: %s"
-                             % r["clear_error"]}
-        if r.get("ok"):
-            return {"ok": True, "gen": r["gen"], "pid": r["pid"]}
-        return r
+    def clear(self):
+        return self._restart(clear=True)
 
     def status_doc(self):
         with self._cond:
-            return {"session": self.name, "state": self.state,
-                    "pid": self.pid, "gen": self.gen,
-                    "restarts": self.restarts, "disabled": self.disabled,
-                    "session_file": self.session_file, "cwd": self.cwd}
-
-    # ---- 监督主循环 ----
-
-    def _run_loop(self):
-        self._clear_stale_proc()        # 首次拉起：清场旧宿主（防双宿主）
-        while True:
-            self._apply_clear()         # clear：重拉前先把 jsonl 截断到 0（旧进程已死透）
-            try:
-                self._spawn()
-            except Exception:
-                log.exception("spawn failed")
-                if not self._has_presence():   # 去保活：无人看时不空转重拉，转懒态
-                    self._go_dormant("spawn failed, no presence")
-                    return
-                self._broadcast({"type": "sessiond.session_restarting",
-                                 "session": self.name,
-                                 "delay": BACKOFF_MAX})
-                time.sleep(BACKOFF_MAX)
-                continue
-            rc = self.proc.wait()
-            with self._cond:
-                reloading = self._reloading
-                self._reloading = False
-                reaping = self._reaping
-                self._reaping = False
-                self.proc = None
-                self.pid = None
-                self.state = "restarting"
-            log.warning("pi process gone rc=%s gen=%d session=%s file=%s",
-                        rc, self.gen, self.name, self.session_file)
-            if reloading:
-                continue                # 主动 reload：立即重拉（无退避）
-            if reaping:
-                self._go_dormant("idle-reaped")   # 空闲回收：转懒态不重拉
-                return
-            if not self._has_presence():
-                # 去保活核心（du44uj §1.2.2）：崩溃时无在场订阅 → 不重拉转懒态
-                #（浏览器重开经 ensure_started 复活）；有在场 → 下方退避重拉/熔断照旧。
-                self._go_dormant("crashed without subscribers")
-                return
-            now = time.monotonic()
-            self._crash_ts = [t for t in self._crash_ts
-                              if now - t <= FAIL_WINDOW]
-            self._crash_ts.append(now)
-            self.restarts += 1
-            if len(self._crash_ts) > FAIL_LIMIT:
-                with self._cond:
-                    self.disabled = True
-                    self.state = "disabled"
-                log.error("circuit breaker: %d crashes in %.0fs window (%s)",
-                          len(self._crash_ts), FAIL_WINDOW, self.name)
-                self._broadcast({"type": "sessiond.session_disabled",
-                                 "session": self.name})
-                return                  # 熔断：停监督（经 reload 重启恢复）
-            delay = min(BACKOFF_MAX, 2.0 ** max(0, len(self._crash_ts) - 1))
-            self._broadcast({"type": "sessiond.session_restarting",
-                             "session": self.name, "delay": delay})
-            log.info("respawn in %.1fs (resume from %s)", delay,
-                     self.session_file)
-            time.sleep(delay)
-
-    def _apply_clear(self):
-        """clear 落地（0829-2238-atnj；4l3de8 翻案改截断）：监督循环内、_spawn 之前
-        执行——此刻旧进程必然已死透（proc.wait() 已返回或崩溃退避刚结束），截断 jsonl
-        与重拉同线程，无竞态。落地 = 「确保文件存在、size==0、非 replica」：不存在 →
-        创建空文件；存在 → truncate(0)；随后 _claim_origin 去 replica 标记升格本机原件。
-        翻案：旧口径「必须删除而非截断（pi 懒落盘 openSync(wx) 撞 EEXIST，pdop 踩坑）」
-        针对旧版 pi，已失效——pi≥0.84.1 对已存在空文件走 _setSessionFile size==0 分支
-        （newSession + _rewriteFile(openSync 'w') + flushed=true），不碰 wx。而删除在跨机
-        同步树下有复活竞态：agents-sync 不开 --delete，pull 会把远端旧副本秒级拉回 →
-        pi 判新会话首写 wx 撞复活的旧文件 EEXIST（2026-08-31 mac-dispatcher 事故实证）。
-        截断 + 升格原件后，本机写入随 push 收敛远端，无竞态。"""
-        with self._cond:
-            if not self._clearing:
-                return
-            self._clearing = False
-        try:
-            if os.path.exists(self.session_file):
-                with open(self.session_file, "r+") as f:
-                    f.truncate(0)
-                log.info("clear: truncated session file %s to 0 before respawn",
-                         self.session_file)
-            else:
-                open(self.session_file, "a").close()
-                log.info("clear: created empty session file %s before respawn",
-                         self.session_file)
-            _claim_origin(self.session_file)
-        except OSError as e:
-            log.error("clear: failed to truncate %s: %s", self.session_file, e)
-            with self._cond:
-                self._clear_error = str(e)
+            return {"session": self.name, "state": self.state, "pid": self.pid,
+                    "gen": self.gen, "session_file": self.session_file, "cwd": self.cwd}
 
     def _clear_stale_proc(self):
         """防双宿主清场（R2 零文件）：按 environ 标记 + is_pi_host 交叉校验扫出同一 jsonl 的旧宿主
@@ -1301,7 +1002,7 @@ class Supervisor:
         白名单 gate）而不再成立 ⇒ 本对齐**现在保的是项目 `AGENTS.md` 与项目级扩展的
         加载一致性**，⛔ 不再是 agentd 工具的加载前提。
         拉起前把首帧 cwd 改写为 self.cwd（其余行不动，
-        临时文件+rename 原子落盘）。调用时机 = _run_loop 内、旧宿主已清场、本线程独占，
+        临时文件+rename 原子落盘）。调用时机 = 串行启动操作内、旧宿主已清场、本线程独占，
         无并发写者。.jsonl 直开（缺省 cwd=dirname）首帧本就等于 dirname，无行为变化。"""
         try:
             with open(self.session_file, "rb") as f:
@@ -1339,17 +1040,13 @@ class Supervisor:
 
     def _spawn(self):
         os.makedirs(self.cwd, exist_ok=True)
+        os.makedirs(os.path.dirname(self.session_file), exist_ok=True)
         # 接管 replica 文件（任务 4l3de8）：不经 clear 直接托管的会话文件可能是被远端
         # pull 复活的副本（组=replica，如 2026-08-31 mac-dispatcher 事故现场）——宿主是
         # 单写者，拉起前升格本机原件，否则活文件会被远端旧副本覆盖、本机写入也不进 push。
         if os.path.exists(self.session_file):
             _claim_origin(self.session_file)
             self._sync_header_cwd()   # 首帧 cwd 对齐（任务 53yjuc）
-        # 稳定期重置（上轮存活超 STABLE_RESET → 崩溃计数清零）
-        if (self._spawned_at and time.monotonic() - self._spawned_at
-                > STABLE_RESET):
-            self._crash_ts = []
-            self.restarts = 0
         with self._cond:
             self.state = "starting"
         env = clean_env()
@@ -1371,19 +1068,20 @@ class Supervisor:
         self.pid = self.proc.pid
         with self._cond:
             self.gen += 1
-            self.state = "running"
-        self._spawned_at = time.monotonic()
         log.info("spawned gen=%d pid=%d cwd=%s session=%s",
                  self.gen, self.pid, self.cwd, self.session_file)
         # stdout 读取线程（逐行 → on_event）
-        threading.Thread(target=self._read_stdout, daemon=True,
-                         name="reader-" + self.name).start()
+        self._reader = threading.Thread(target=self._read_stdout, args=(self.proc,),
+                                        daemon=True, name="reader-" + self.name)
+        self._reader.start()
         self._broadcast({"type": "sessiond.session_restarted",
                          "session": self.name, "gen": self.gen,
                          "pid": self.pid})
+        with self._cond:
+            self.state = "running"
+            self._cond.notify_all()
 
-    def _read_stdout(self):
-        proc = self.proc
+    def _read_stdout(self, proc):
         try:
             for raw in iter(lambda: proc.stdout.readline(), b""):
                 if len(raw) > LINE_LIMIT:
@@ -1445,8 +1143,6 @@ class SocketSupervisor:
         self.on_event = on_event
         self.on_lost = None          # 断连回调（桥接注入：摘注册表 + 终结标记）
         self.gen = 1                 # 单世代（无重拉概念）
-        self.restarts = 0
-        self.disabled = False
         self.state = "idle"          # idle/starting/running/ended
         self._cond = threading.Condition()
         self._started = False
@@ -1469,7 +1165,7 @@ class SocketSupervisor:
         deadline = time.monotonic() + timeout
         with self._cond:
             while self.state not in ("running",):
-                if self.state in ("ended", "disabled"):
+                if self.state == "ended":
                     return False
                 remain = deadline - time.monotonic()
                 if remain <= 0:
@@ -1494,8 +1190,7 @@ class SocketSupervisor:
     def status_doc(self):
         with self._cond:
             return {"session": self.name, "state": self.state,
-                    "pid": None, "gen": self.gen, "restarts": self.restarts,
-                    "disabled": self.disabled, "session_file": self.session_file,
+                    "pid": None, "gen": self.gen, "session_file": self.session_file,
                     "cwd": self.cwd, "mode": "socket", "sock": self.sock_path}
 
     # ---- 无杀权：生命周期属 agentd runner（reload/clear 由 rpc/api.py 改道代理
@@ -1599,7 +1294,7 @@ class SocketSupervisor:
 #   sock 在场但进程身份消失（封装已退出未落终态） → 拒绝并等待（等终态落盘/自动拉起）
 #   进程活但无 sock（旧形态运行中）              → 拒绝（双宿主风险，协议 §11.12）
 #   status=paused                                → 拒绝并提示 control restart
-# 跨机：spec.host ≠ 本机规范名 → 拒绝 + 指引（同 host_guard 口径）。
+# 跨机：spec.host ≠ 本机规范名 → 拒绝 + 指引。
 # 注：路径命中但目录下无 spec.json（如测试/临时目录）时仍按登记会话口径三态判定，
 # 不回落裸 jsonl 懒拉起（裸 jsonl 废除，.agent 才是唯一拉起入口）。
 
@@ -1659,7 +1354,7 @@ def agentd_route(session_path):
         spec = None
     spec_absent = spec is None or not isinstance(spec, dict)
     spec = spec if isinstance(spec, dict) else {}
-    # 跨机守卫（同 host_guard 口径：指引用户去宿主机的 8080）
+    # 跨机守卫（指引用户去宿主机的服务）
     host = spec.get("host")
     if isinstance(host, str) and host.strip():
         me = _self_host()

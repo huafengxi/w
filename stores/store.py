@@ -88,7 +88,7 @@ def file_find_all(pat, path):
     with open(path) as f:
         return re.findall(pat, f.read())
 
-def build_root_store(fstab):
+def build_root_store(fstab, required=()):
     logging.info('build_root_store %s', fstab)
     def parse_cmd_args(args):
         return [i for i in args if not re.match(r'^\w+=', i)], dict(i.split('=', 1) for i in args if re.match(r'^\w+=', i))
@@ -101,7 +101,12 @@ def build_root_store(fstab):
         try:
             mstore.append((mpoint, do_mount(mpoint, type, arg)))
         except Exception as e:
-            logging.warning('mount skipped: %s %s %s: %r', mpoint, type, arg, e)
+            if mpoint in required:
+                raise StoreException('root mount failed: %s' % e) from e
+            logging.warning('mount skipped: %s %s: %s', mpoint, type, e)
+    missing = set(required) - {prefix for prefix, _ in mstore}
+    if missing:
+        raise StoreException('missing required mounts: %s' % ', '.join(sorted(missing)))
     logging.info(mstore)
     return RootStore(mstore)
 

@@ -518,11 +518,9 @@ def case10_agent_profile(ws, outside):
     doc = json.loads(body)
     assert meta["http_status"] == "200 OK", (meta, doc)
     assert doc["ok"] and doc["profile"] == "command-center", doc
-    key = _proc.resolve_session_path(doc["session"])
-    with _b._SPAWN_OVERRIDES_LOCK:
-        ov = dict(_b._SPAWN_OVERRIDES[key])
-    assert ov["profile"] == "command-center" and ov["cwd"] == os.path.realpath(ws), ov
-    print("case10 OK: 正控 .agent 带 profile=command-center → 200 + 登记拉起参数 %s" % ov)
+    assert doc["cwd"] == os.path.realpath(ws), doc
+    assert not hasattr(_b, "_SPAWN_OVERRIDES")
+    print("case10 OK: .agent profile/cwd 解析正确，零内存启动登记")
 
     # 反控：form: task / form: resident / 缺 form / 清单不在场 / 形态非法 → 400
     for extra, label in (({"profile": "executor"}, "form: task"),
@@ -545,10 +543,7 @@ def case10_agent_profile(ws, outside):
     meta, body = _api._resolve_agent(store, p3)
     doc = json.loads(body)
     assert meta["http_status"] == "200 OK" and doc["profile"] is None, (meta, doc)
-    key = _proc.resolve_session_path(doc["session"])
-    with _b._SPAWN_OVERRIDES_LOCK:
-        assert _b._SPAWN_OVERRIDES[key]["profile"] is None
-    print("case10 OK: 存量 .agent（无 profile 字段）→ 200 且 profile=None（行为逐字不变）")
+    print("case10 OK: 无 profile 字段 → 200 且 profile=None")
     for n in ("t-ok", "t-bad", "t-legacy"):
         os.unlink(os.path.join(d, n + ".agent"))
 
@@ -656,7 +651,6 @@ def case12_drop_session(ws, outside):
         b = _b.Bridge(site, cwd=ws, profile="command-center")
         with _b._BRIDGES_LOCK:
             _b._BRIDGES[key] = b
-        _b.set_session_cwd(site, ws, "command-center")
         b.sup.ensure_started()
         assert b.sup.wait_ready(timeout=15), "假进程未就位"
         assert holder["env"].get("DISPATCH_PROFILE") == "command-center", holder["env"]
@@ -666,10 +660,9 @@ def case12_drop_session(ws, outside):
         assert holder["proc"].killed is False, "已优雅退出 ⇒ ⛔ 不应再 SIGKILL"
         with _b._BRIDGES_LOCK:
             assert key not in _b._BRIDGES, "桥接未摘除"
-        with _b._SPAWN_OVERRIDES_LOCK:
-            assert key not in _b._SPAWN_OVERRIDES, "拉起参数登记未摘除"
+        assert b.terminated, "删除后事件流须终结"
         print("case12 OK: 命中桥接 ⇒ shutdown 杀进程（terminated=True、未走 SIGKILL）"
-              "+ 桥接与拉起登记都摘除（返回 %s）" % r)
+              "+ 桥接摘除且流终结（返回 %s）" % r)
         # 再删一次 ⇒ 幂等（已摘除）
         r2 = _b.drop_session(site)
         assert r2 == {"found": False, "killed": False}, r2

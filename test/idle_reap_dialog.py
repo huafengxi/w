@@ -54,8 +54,9 @@ class StubSup:
         self.name = "stub"
         self.reaped = 0
 
-    def _idle_reap(self):
-        self.reaped += 1
+    def _idle_reap(self, eligible=None):
+        if eligible is None or eligible():
+            self.reaped += 1
 
 
 class StubBridge:

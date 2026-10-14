@@ -2,6 +2,12 @@ import logging
 import os
 import sys
 import time
+import threading
+from core.stream import ClosingIterator
+
+HTTP_THREADS = 30
+SSE_LIMIT = 20
+_SSE_SLOTS = threading.BoundedSemaphore(SSE_LIMIT)
 import urllib.parse
 
 # DEBUG 面的 secret 脱敏（任务 4ob5de 项 4）：`REQ:`/`echo req:` 两行过去直打原始
@@ -46,6 +52,15 @@ def make_wsgi_app(handlers):
                           redact_env_for_log(env), repr(redact_query_string(query)))
         query_args = {k: v[-1] for k, v in urllib.parse.parse_qs(query).items()}
         meta, content = try_these([echo_handler] + handlers + [err_handler], env, path, query_args, post)
+        if (meta.get('type') or '').startswith('text/event-stream'):
+            if _SSE_SLOTS.acquire(blocking=False):
+                content = ClosingIterator(content, _SSE_SLOTS.release)
+            else:
+                close = getattr(content, 'close', None)
+                if close is not None:
+                    close()
+                meta = dict(type='text/plain', http_status='503 Service Unavailable')
+                content = 'Too many event streams; close a chat tab and retry.'
         logging.info("RESP: %s meta=%s", path, meta)
         if not meta.get('type'):
             meta['type'] = ''
@@ -127,10 +142,8 @@ def run_use_wsgiserver(app, host, port, daemon):
             cert, keyfile = None, None
     timeout = get_socket_timeout()
     logging.info("run use wsgiserver: socket timeout: %s", timeout)
-    server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout, numthreads=30)
+    server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout, numthreads=HTTP_THREADS)
     fork_as_daemon(daemon)
-    # sessiond resident 钩子已退役（去保活二期，任务 ja0vr7）：常驻/自愈语义统一归
-    # agentd，sessiond 只保留懒拉起 + 在场监督（详见 w/ext/sessiond/ARCHITECTURE.md）。
     server.start()
 
 def read_credential():
