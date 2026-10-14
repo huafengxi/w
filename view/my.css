@@ -7,7 +7,7 @@ body {
     padding-right: 10px;
 }
 
-h1,h2,h3,h4,h5 {};
+h1,h2,h3,h4,h5 {}
 th { background: #f3f5f7; color: #222; }
 th, td {
     vertical-align: top;
