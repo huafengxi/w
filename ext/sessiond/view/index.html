@@ -456,7 +456,11 @@ async function api(op, extra) {
     headers: {"Content-Type": "application/x-www-form-urlencoded"},
     body: body.toString()});
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || ("" + r.status));
+  if (!r.ok) {
+    const err = new Error(j.error || ("" + r.status));
+    err.status = r.status;
+    throw err;
+  }
   return j;
 }
 
@@ -585,7 +589,7 @@ function renderBranchSliced(branch, doc) {
     // 重建悬空 dialog（0830-0956-vk20 bug2）：extension_ui_request 不在 entries 里，
     // 离线/刷新期间触发的 ask_user 仅凭事件环收不到（续流游标在其后）——后端随基线
     // 下发权威快照，逐个重建（showDialog 同 id 幂等，不会叠框）。
-    for (const d of doc.pendingDialogs || []) showDialog(d);
+    syncPendingDialogs(doc.pendingDialogs || []);
     // 队列快照基线直出（任务 0830-1457-a57d）：刷新后不等下一次 queue_update 事件，
     // 基线带权威队列态直接落地渲染（环内最近一次 queue_update）。
     if (doc.queue) {
@@ -731,6 +735,7 @@ function stopStream() {
 
 function openStream() {
   if (!attached) return;
+  stopStream();                            // 开流入口保证单实例，不遗留无主的旧 controller
   streamAlive = true;
   streamCtrl = new AbortController();
   const my = streamCtrl;                  // 每流身份：本流的 AbortController（任务 0830-1533-56xk）。
@@ -749,7 +754,7 @@ function openStream() {
       const dec = new TextDecoder("utf-8");
       let buf = "";
       const pump = () => reader.read().then(r => {
-        if (my.signal.aborted) return;    // 本流已死（被新流顶替/停止），停止泵送（0830-1533-56xk）
+        if (my.signal.aborted || streamCtrl !== my) return; // 只允许当前流消费事件
         if (r.done) { throw new Error("stream ended"); }
         buf += dec.decode(r.value, {stream: true});
         buf = drainFrames(buf);
@@ -769,13 +774,13 @@ function openStream() {
 // 错过 sessiond.dialog_resolved 导致 ask_user dialog 永久残留。回前台即重连：since=当前游标回放安全，
 // 补发错过的事件；环已淘汰则服务端发 webgw.gap 走既有自愈。
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && attached) { stopStream(); openStream(); }
+  if (!document.hidden && attached && !healBusy && batchDepth === 0) openStream();
 });
 
 // 静默 watchdog（任务 0830-1452-svok）：服务端每 15s 发 keep-alive ping，前台可见却 40s
 // 收不到任何帧判定流已死 → 强制重连（阈值 = 15s ping 周期的 2 倍余量；兜底其他原因的僵尸流）。
 setInterval(() => {
-  if (attached && streamAlive && !document.hidden && lastStreamAt
+  if (attached && streamAlive && !healBusy && batchDepth === 0 && !document.hidden && lastStreamAt
       && Date.now() - lastStreamAt > 40000) {
     sysLine("stream silent >40s → reconnecting", "warn");
     stopStream(); openStream();
@@ -1513,10 +1518,13 @@ async function replyDialog(fields) {
     await api("cmd", {session: attached, cmd: JSON.stringify(cmd)});
     closeDialog(id, "answered");
   } catch (e) {
-    // 0830-1104-eji4：服务端报错（如 'no pending dialog'）= 对端已结算，
-    // 本地关框才是正确语义；原来只在 try 内关框 → 非应答端 Cancel 永久卡死。
-    sysLine("Dialog reply failed: " + e.message + " — closing locally (already settled)", "err");
-    closeDialog(id, "settled");
+    // 仅明确的已结算拒绝才关框；断网/5xx 不证明送达，保留输入供用户重试。
+    if (e.status === 403 && /^no pending dialog with id\b/.test(e.message)) {
+      sysLine("Dialog already settled: " + e.message, "warn");
+      closeDialog(id, "settled");
+    } else {
+      sysLine("Dialog reply failed: " + e.message + " — answer retained, please retry", "err");
+    }
   }
 }
 function castId(id) { const o = pendingDialogs[id]; return o ? o.id : id; }
@@ -1536,6 +1544,18 @@ function closeDialog(id, note) {
     // 收起态下队首更替（超时/被代答）→ 药丸继续反映新队首，不弹回大盒子。
     if (wasCollapsed) collapseDialog();
   }
+}
+// 基线快照是权威集合：移除离线期间已结算的请求，仍有效的当前输入/收起态不重置。
+function syncPendingDialogs(requests) {
+  const next = {};
+  for (const o of requests) next[o.id] = o;
+  const current = $("dialogBox").dataset.did;
+  if (dialogShowing() && Object.prototype.hasOwnProperty.call(next, current)) {
+    pendingDialogs = next;
+    return;
+  }
+  clearPendingDialogs();
+  for (const o of requests) showDialog(o);
 }
 function clearPendingDialogs() {
   pendingDialogs = {};
@@ -1675,12 +1695,13 @@ function handleCmdResponse(o) {
   const err = o.error || o.message || "rejected";
   // 兜底竞态（0830-1029-urgg）：prompt 直发被 "already processing" 拒绝 = 空闲判定与
   // agent 启动同瞬相撞 → 不标 rejected / 不闪 err，自动转 follow_up 重发入队。
-  // images 无法从 pending 恢复，仅重发文本（极端情况可接受）。
+  // pending 保留完整命令负载，自动重发同时携带图片，不能静默退化为纯文本。
   if (p.mode !== "queue" && /already processing/i.test(err)) {
     delete pendingSends[o.id];
     const nid = uid();
+    const retry = Object.assign({}, p.cmd || {message: p.text}, {type: "follow_up", id: nid});
     addPendingSend(nid, p.text, "queue");
-    sendTracked({type: "follow_up", message: p.text, id: nid});
+    sendTracked(retry);
     flash("Agent busy → queued as follow-up", "warn");
     return;
   }
@@ -1691,6 +1712,8 @@ function handleCmdResponse(o) {
 
 // 带发送跟踪的上行：HTTP 层失败时同步标错队列面板条目（sendCmd 的加强版）
 async function sendTracked(cmd) {
+  const pending = pendingSends[cmd.id];
+  if (pending) pending.cmd = cmd;                // 保留图片等完整负载直到送达/自动重发
   if (!attached) { sysLine("Not attached to a session", "err"); return; }
   try { await api("cmd", {session: attached, cmd: JSON.stringify(cmd)}); }
   catch (e) {
