@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Isolated lifecycle, declaration, event-gap and stream-budget regressions.
 
-Run: ~/miniconda3/bin/python3 w/test/session_lifecycle.py
+Run: python3 test/session_lifecycle.py
 All subprocesses and workspace files live in a self-created temporary directory.
 """
 import io
@@ -18,6 +18,7 @@ from collections import deque
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import sandbox
 from ext.sessiond import proc as P, bridge as B
 from ext.sessiond.rpc import api, stream
 from core import wsgi
@@ -28,7 +29,7 @@ from stores.dir_store import DirStore
 
 class LifecycleTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='session-lifecycle-')
+        self.temp = sandbox.TempDir(prefix='session-lifecycle-')
         self.root = Path(self.temp.name).resolve()
         self.patchers = [patch.object(P, 'WS', str(self.root)),
                          patch.object(P, 'WS_REAL', str(self.root)),
@@ -161,6 +162,7 @@ for line in sys.stdin:
         declaration = self.root / 'chat.agent'
         declaration.write_text(json.dumps({'host': 'test', 'cwd': str(self.root)}))
         channel = B.get_bridge('/chat.agent', store=store)
+        channel.sup.ensure_started()
         self.assertTrue(channel.sup.wait_ready(2))
         self.assertEqual(channel.sup.cwd, str(self.root))
         self.assertEqual(B.get_bridge('/chat.agent', store=store), channel)

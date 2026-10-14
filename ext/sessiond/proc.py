@@ -23,7 +23,8 @@ import uuid
 
 log = logging.getLogger("sessiond-proc")
 
-WS = os.path.expanduser("~/m")
+from core.config import workspace, path as config_path
+WS = workspace()
 WS_REAL = os.path.realpath(WS)
 
 # 子进程 environ 标记（零文件旧宿主识别，R2）
@@ -42,8 +43,8 @@ PROBE_EXT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "probe.ts"
 def resolve_session_path(path):
     """会话路径校验与解析（路径安全红线）：
     - 必须 `/` 开头的站内路径、`.jsonl` 后缀；
-    - normpath 折叠 `..`/`.` 后与 ~/m 拼接，再 realpath 前缀校验（双保险，
-      防符号链接逃逸；白名单根 = ~/m + run 运行时区）；
+    - normpath 折叠 `..`/`.` 后与 workspace 拼接，再 realpath 前缀校验（双保险，
+      防符号链接逃逸；白名单根 = workspace + run 运行时区）；
     返回解析后的绝对路径；非法抛 ValueError（调用方回 400）。"""
     if not isinstance(path, str) or "\x00" in path:
         raise ValueError("invalid session path %r" % (path,))
@@ -65,7 +66,7 @@ def display_name(real_path):
 
 
 def resolve_cwd(cwd):
-    """显式 cwd 校验（任务 fw2ll1）：与会话路径同一根集（~/m + run 运行时区），
+    """显式 cwd 校验（任务 fw2ll1）：与会话路径同一根集（workspace + run 运行时区），
     realpath 前缀校验防穿越/符号链接逃逸；非法抛 ValueError（调用方回 400）。
     返回解析后的绝对路径（目录可以尚不存在，_spawn 时 makedirs）。"""
     if not isinstance(cwd, str) or not cwd.strip() or "\x00" in cwd:
@@ -84,7 +85,7 @@ ORPHAN_GRACE = 15.0         # 等待旧宿主自然退出的宽限（秒）
 # 实测案例：任务环境 PI_SESSION_FILE 漏进会话进程）。名单单一事实源 =
 # agentd/envscrub.py（任务 fsmkvy 收敛：原本处独立拷贝漂移，改与服务执行层/runner
 # 同源共享；keep 空集、不剥第三方 API key 族——会话进程用钥走自身配置路径）。
-sys.path.insert(0, os.path.join(WS, "agentd"))
+sys.path.insert(0, config_path('W_AGENTD_DIR', required=True))
 import envscrub  # noqa: E402
 
 
@@ -122,9 +123,9 @@ def _self_host():
     local_canonical_host：每行 `<hostname> <空白> <规范名>`，# 注释）。
     文件缺失/不可读/本机 hostname 未命中 → None（调用方报配置错误，不猜测）。"""
     try:
-        with open(os.path.join(WS, "env", "host-id")) as f:
+        with open(config_path('W_HOST_ID_FILE', required=True)) as f:
             lines = f.read().splitlines()
-    except OSError:
+    except (OSError, ValueError):
         return None
     hn = socket.gethostname()
     for line in lines:
@@ -334,7 +335,7 @@ def site_path_of(real_path):
 
 def list_projects():
     """**服务端枚举**可选项目目录（cwd 白名单；设计稿 §8⑧ 的「甲」档、用户拍板）：
-    `~/m` 自身 + 顶层含 `.git` 的子目录。返回 [(相对 WS 的路径, realpath)]，相对路径
+    workspace 自身 + 顶层含 `.git` 的子目录。返回 [(相对 WS 的路径, realpath)]，相对路径
     `"."` = WS 自身（居首），其余按名字排序。只扫一层（`os.scandir` + 每项一次 `.git`
     存在性判断）⇒ 零递归成本；⛔ 无静态清单可漂（新子仓 clone 到顶层即自动出现）。
     realpath 逃出根集的项**不入白名单**（防顶层符号链接把清单变成逃逸口）。"""
@@ -381,7 +382,7 @@ def resolve_project_cwd(raw):
     allowed = {r for _rel, r in list_projects()}
     if real not in allowed:
         raise ValueError("cwd not in the server-side project whitelist: %r "
-                         "(resolved %s; whitelist = ~/m + top-level git repos)"
+                         "(resolved %s; whitelist = workspace + top-level git repos)"
                          % (raw, real))
     return resolve_cwd(real)      # 既有根集 + realpath 前缀校验（纵深防御第二道）
 
@@ -661,15 +662,15 @@ def _mtime(path):
 
 
 def _project_label(cwd):
-    """分组键（列表页按项目分组）：cwd 相对 WS 的路径；WS 自身 → `~/m`；
+    """分组键（列表页按项目分组）：cwd 相对 WS 的路径；WS 自身 → workspace 绝对路径；
     WS 外（手写的 .agent）→ realpath 原样，⛔ 不猜。"""
     if not isinstance(cwd, str) or not cwd:
         return "(unknown)"
     real = os.path.realpath(cwd)
     if real == WS_REAL:
-        return "~/m"
+        return WS
     if real.startswith(WS_REAL + os.sep):
-        return "~/m/" + os.path.relpath(real, WS_REAL).replace(os.sep, "/")
+        return WS.rstrip(os.sep) + '/' + os.path.relpath(real, WS_REAL).replace(os.sep, "/")
     return real
 
 
@@ -809,7 +810,7 @@ class Supervisor:
                     self.state = "running"
                     self._cond.notify_all()
                 return
-            self._stop_locked()
+            self._stop_locked(starting=True)
             self._start_locked()
 
     def _start_locked(self):
@@ -851,7 +852,7 @@ class Supervisor:
             self._broadcast({"type": "sessiond.session_dormant",
                              "session": self.name, "reason": "process exited (%s)" % rc})
 
-    def _stop_locked(self):
+    def _stop_locked(self, starting=False):
         """Do not release process ownership until exit and stdout drainage complete."""
         proc = self.proc
         if proc is not None:
@@ -878,7 +879,7 @@ class Supervisor:
         with self._cond:
             self.proc = None
             self.pid = None
-            self.state = "closed" if self._closed else "dormant"
+            self.state = "closed" if self._closed else ("starting" if starting else "dormant")
             self._cond.notify_all()
 
     def shutdown(self, reason=""):
@@ -1100,7 +1101,7 @@ class Supervisor:
 # 任务会话 socket 监督（任务 ybzvbn，票 hegipc，plan v3 B 路线）
 #
 # rpc 封装形态的任务（命令含 pi-wrap/pi-rpc-wrap.py）由封装脚本拉起并持有，
-# 经 ~/m/run/agentd/<taskId>.sock 透传 pi rpc 原生字节流。SocketSupervisor =
+# 经 workspace/run/agentd/<taskId>.sock 透传 pi rpc 原生字节流。SocketSupervisor =
 # 「连接而非 spawn」的监督者：生命周期所有权在 agentd runner，本类**无杀权**
 # （kill/reload/clear 一律拒绝），不与 Supervisor 共享生命周期机制（崩溃重拉/
 # 旧宿主识别/代际/首帧 cwd 改写），仅共享 bridge 的 ingest/事件环。

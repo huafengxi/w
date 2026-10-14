@@ -1,139 +1,42 @@
-# document edit server
+# 文档编辑服务器
 
-This is a document edit server. see [design.md](design.md).
-once deployed, you can creat file with special extensions for different purpose.
-
-> **shell 路由**：GET 已映射视图的扩展名路径（如 `.md`）即使文件不存在也返 200 + HTML 外壳（内容真实性由客户端取内容时才见分晓）；其余不存在路径返 404（`w/view/404.html`）。页面内容里的链接必须写绝对路径，相对链接会被当作页面路径吃掉；`.md` 链接无需 `?v=text/md` 后缀（服务端按扩展名推断视图），仅 `.py` 等非 md 文件渲 md 视图时才带 `?v=...`；md 视图链接带 `_v=inline`（如 `?_v=inline`）表示渲染后默认在页内 iframe 就地展开（点击收起/再展开，可多个同开；`_v=` 是客户端私有参数命名空间——下划线前缀约定，服务端不消费，构造内嵌 iframe 前剥离）。
-
-> **运维要点**：8080 basic auth 凭证 = `~/.auth/passwd`（`env/pi-web.auth` 是 8192 的）；`w/stores/cmd_store.py` 不得删。
+本仓只住 HTTP 文档服务机制、通用协议、示例和隔离测试。真实配置、凭据落点、机器清单和运维脚本由调用方维护；改变部署值不需要本仓 diff。实现结构见 [design.md](design.md)。
 
 ## start service
 
-```
-cd $webroot # change to your webroot
-git clone git@github.com:huafengxi/w.git w
-log=debug ~/miniconda3/bin/python3 w/core/server.py 8080
-```
+依赖：`WSGIserver`、`wsgi-basic-auth`、`WebOb`、`chardet`；Python >=3.13 还需要 `legacy-cgi`。WebDAV 挂载需要 `webdav4`。启动前可用所选解释器执行 `-c 'import cgi, wsgiserver, wsgi_basic_auth, webob, chardet'` 自检。
 
-> **解释器 = `~/miniconda3`**：与工作区通则一致（`AGENTS.md`「运行环境」：Python 一律 `~/miniconda3`；本机具体版本以现场 `~/miniconda3/bin/python3 -V` 读数为准，不在本文档写死）。依赖清单（5 枚，装在 conda，不用 `--user`；包名形态与 `bootstrap/SETUP.md` §3.1「依赖包」表的 web 行逐项一致）：`WSGIserver`（提供 `wsgiserver`）、`wsgi-basic-auth`（提供 `wsgi_basic_auth`，Requires `webob`）、`chardet`（提供 `chardet`）、`WebOb`（提供 `webob`）、`legacy-cgi`（提供 `cgi`，分档依赖，见下）。`legacy-cgi` 是可判形态的分档，不是无条件必需：按本机 `~/miniconda3/bin/python3 -V` 判——`<3.13` 由 stdlib 提供 `cgi`、不需装；`>=3.13`（`cgi` 已从标准库移除）必须装 `legacy-cgi`，因为 `core/handler.py:parse_post` 用 `cgi`（`cgi.parse_header` / `cgi.parse_multipart` 解 multipart 上传），且 `webob/compat.py` 有模块级 `from cgi import parse_header` ⇒ 在 `>=3.13` 的机器上 `legacy-cgi` 必须与 `WebOb` 同装（缺它连 `import webob` 都炸）。服务启动必须成功挂载根目录；依赖加载或必需挂载失败直接报错退出。可选挂载失败告警并跳过。重启前自检（5 模块）：`~/miniconda3/bin/python3 -c 'import cgi, wsgiserver, wsgi_basic_auth, webob, chardet'`（无输出 = OK）。服务定义形态：`services/profiles/web.json` 的 `cmd: ["~/miniconda3/bin/python3", w/core/server.py, 0.0.0.0:8080, run/logs/web.log]` 走绝对解释器路径（`serviced/serviced.py:_expand` 对 cmd 逐项 `os.path.expanduser` ⇒ `~` 可用、各机 home 路径不同也可用）；`match: ['^\S*python3? w/core/server\.py 0\.0\.0\.0:8080']` 仍锚定行首、但放行解释器路径前缀：web 的 online 判定走 `status: {http: …}`（不经 match），而 `serviced.py stop web` 的杀进程目标集 = `match` + `stop_match` 对真实 cmdline 的 `re.search` 命中 ⇒ 换解释器后不同批改 match 会 stop 不掉旧进程（而 status 仍报 online，零信号）。
+调用方设定配置后执行 `python core/server.py HOST:PORT [LOG_FILE]`。有日志文件时服务 fork 为后台进程；生命周期管理由调用方负责。相对挂载参数、日志路径相对 workspace；扩展资源采用 workspace 中的 `/w/` 站内挂载，见 `examples/fstab`。
 
-> **传输层现值 = HTTP（不上 HTTPS）**：四机的 `~/.auth/` 只有 `passwd`、无证书文件 ⇒ 8080 一律以 HTTP 运行，BasicAuth 凭证与页面内容在公司内网明文传输（知情接受；排查结论 = 工作区内无任何 HTTPS 消费方：dash 入口 / `ext/proxy/routes.json` 的 upstream / rsh 转发面全为 http 或 unix socket）。`core/wsgi.py` 的 cert/keyfile 分支已在场、只缺文件 ⇒ 真要上 TLS 不必改代码，但那是四机证书分发 + 续期运维面的立项决定（裁定与重议触发 = `lore/library/agentfw/facts/not-doing.md`）。
+| 环境变量 | 接口 |
+|---|---|
+| `W_WORKSPACE` | 必填，已存在的绝对工作区目录；服务 cwd 与 sessiond 安全根 |
+| `W_FSTAB` | 必填，绝对挂载配置路径；根挂载必需，其余失败告警跳过 |
+| `W_AUTH_FILE` | 必填，绝对凭据文件路径，非空 `user:password`；缺失或格式错误拒启 |
+| `W_TLS_CERT` / `W_TLS_KEY` | 均未设置时 HTTP；设置时必须同时指向存在的文件，否则拒启；`nossl=1` 显式禁用 TLS |
+| `W_PROXY_ROUTES` | 可选，绝对路由文件；未设置关闭代理；指定但不可读或非法时抛配置错误，启动拒启，热加载请求失败 |
+| `W_HOST_ID_FILE` | 本机 hostname 到调用方规范名的映射文件，每行两列；代理缺映射使用 hostname，sessiond 缺映射拒绝打开受宿主约束的会话 |
+| `RSH_FWD_DIR` | 路由使用 `${RSH_FWD_DIR}` 时必填绝对 socket 目录 |
+| `W_AGENTD_DIR` | 使用 sessiond 时必填，提供 `envscrub` 模块的绝对目录；身份洗刷由该模块负责 |
+| `W_ORG_LOAD_PATH` | 可选，以路径分隔符连接的 Emacs 包目录 |
+| `W_ORG_AUTHOR` / `W_ORG_EMAIL` / `W_REVEAL_ROOT` | 可选，org 导出元数据和 reveal 资源 URL |
 
-> **日志与 secret**：`log=debug` 起服务时，请求面的 `REQ:`/`echo req:` 行走与 `RESOLVE:` 同一套脱敏（`core/handler.py` 的 secret 键名族 + 内容型键名长度摘要）：nonce/token/password/cookie/Authorization 与写类 RPC 正文（`store_content`/`text`/`file`/`input`）只留长度摘要，明文不落 `run/logs/web.log`。
+BasicAuth 包裹所有业务请求（含代理）。DEBUG 日志复用 handler 的 secret 脱敏。sessiond 接受站内路径并保留 realpath 根校验：workspace 与其 run 目录是会话白名单，项目 cwd 还须属于顶层 git 项目；软链逃逸拒绝。探针继承 `W_WORKSPACE` 并在 workspace/run 下写侧车。
 
-The server is split into a feature-free `core/` plus per-feature `ext/<feature>/`
-extensions. vmap, mime, bash rc, and `PATH` bin dirs are picked up by convention
-from `ext/<name>/{vmap,mime,sh.rc}.frag` and `ext/<name>/bin/` (composed by
-`w/vmap`, `w/mime`, `ext/shell/sh.rc`, and `core/server.py:set_path`).
+## shell 路由
+
+GET 已映射扩展名的路径（如 `.md`）即使文件不存在也返回 HTML 外壳，内容真实性由客户端读内容时检查；其它不存在路径返回 404。页面链接使用绝对站内路径；`.md` 无需 `?v=text/md`。`?_v=inline` 在 markdown 中点击链接时就地展开 iframe（客户端参数，服务端不消费）。
+
+## 扩展与视图
+
+feature-free `core/` 加 `ext/<feature>/`：mime、vmap、shell rc 和 bin 按目录约定组成，无需注册。常用视图：`?v=read`、`?v=head`、`?v=code`、目录 `?v=dir`，上传/写入/移动由 fileops 扩展提供；org、媒体、表格、shell 示例在 `demo/`。原始文件不存在时视图外壳不代表内容存在。
+
+## iframe show many doc
+
+`.itab` / `.iframe` 的 `@dynamic <站内路径>` 行在加载时 fetch 一次，把端点返回的 `名字 URL [k=v …]` 行原位展开。失败展开零行，超时上界 10s，不轮询、不递归。fetch 自动保留页面代理前缀，保证经代理打开时仍请求原机器。示例：`demo/dyn.itab`、`demo/dyn-rows.py`。
 
 ## Tests
 
-`test/` 下每枚都是自包含的（自带临时夹具、⛔ 不写生产树、⛔ 不改现网配置）。下表的跑法与
-期望尾行取自各文件的头注/docstring（核法 = `grep -n 'RESULT\|Expect\|Run:' test/<文件>`；
-改判据同批改本表）；尾行里的计数是现场实跑值 ⇒ 一律写 `<N>`、⛔ 不写死字面数（源码里那些
-位置是 `%d` 格式串 ⇒ 写死一个数就会在加减 check 时把本表变红）。⚠ 一枚例外 =
-`proxy_test.sh`：⛔ 不得在承载流量的机器上跑。
+从仓根执行 `python test/smoke.py`、`python test/proxy_unix_test.py`、`bash test/proxy_test.sh`、`node test/chat_frontend.cjs`。代理测试自建临时配置/上游和隔离 WSGI 实例，不覆盖部署配置。
 
-| 文件 | 跑法 | 期望尾行 | 覆盖面 |
-|---|---|---|---|
-| `smoke.py` | `cd ~/m && python3 w/test/smoke.py`（可用 `webroot=`/`fstab=` 环境覆写；头注逐字 `Usage: cd <webroot> && fstab=<path> python3 w/test/smoke.py`） | `--- smoke done ---`，且逐行以 `OK` 起（出现 `ERR` 行即红） | 请求管线的 in-process 冒烟（无 socket/fork）：md 视图 / `?v=read` / `?v=head` / 目录视图 |
-| `resolve_agent_edge.py` | `cd ~/m/w && python3 test/resolve_agent_edge.py` | `ALL PASS` | `_resolve_agent` 的软链逃逸边界三例（run 区 sessionDir 缺省 / 根集逃逸 400 / 软链逃出根集 400） |
-| `session_ops_edge.py` | `cd ~/m/w && python3 test/session_ops_edge.py` | `ALL PASS` | 指挥中心临时会话（`run/sessiond/*.agent`）的 12 组正反控：项目枚举、cwd 由 profile 清单声明（声明值仍过白名单双保险；写错 = 拒建、⛔ 不回落）、profile 白名单（只放行 `form: interactive`）与可选集枚举、`.agent` 字段集（⛔ 无 `command`）、标题两级回落、rename、删除面 realpath/root 断言、op 层的服务端恒定字段 400（rename/delete 只接 `session`/`title`/`confirm`；新建面不经 op）、`_spawn` 的 `DISPATCH_PROFILE` 回注、`bridge.drop_session` 的永久关闭、事件流终结与零建桥 |
-| `chat_frontend.cjs` | `node w/test/chat_frontend.cjs` | `ALL PASS` | 隔离执行真实聊天脚本：自愈/分片渲染期间的前台重连、SSE 单实例、dialog 权威快照与应答失败重试、带图消息自动排队重发 |
-| `session_lifecycle.py` | `~/miniconda3/bin/python3 w/test/session_lifecycle.py` | unittest `OK` | 显式启动与退出、启动期间删除、reload/clear、失败停止、声明直开、非法请求零启动、dialog 结算、流中缺口、SSE 预算与根挂载 |
-| `test_regress_multipart_dir_read.py` | `python3 w/test/test_regress_multipart_dir_read.py` | `--- <N> checks, 0 failed ---`（N = 现场实跑值；判红只看 `0 failed`） | 两枚回归：multipart POST 的 boundary bytes/str 归一（`core/handler.py:parse_post`）；Cmd store 的目录读（`stores/cmd_store.py`） |
-| `proxy_unix_test.py` | `python3 w/test/proxy_unix_test.py [--proxy PATH] [--keep]` | `RESULT: PASS (<N>/<N> passed)`，exit code 0（N = 现场实跑值；判红看 `PASS` 与 exit code） | 代理的 `unix://` 上游 / SSE 流式透传 / `${RSH_FWD_DIR}` 展开；第 7 项钉 `ext/proxy/routes.json` 的 prefix·upstream·timeout（期望值 = 该文件的 `UNIX_ROUTES`/`HTTP_ROUTES` 两个常量 ⇒ 改 routes 同批改常量） |
-| `proxy_test.sh` | `bash w/test/proxy_test.sh`，前置 = 8080 已启动且不是承载流量的实例（隔离实例 + 专用 routes 副本）。⛔ 不在现网 8080 上跑：它把 `ext/proxy/routes.json`（每请求按 mtime 热加载）临时换成 demo 规则、退出才从 `.bak` 恢复 ⇒ 测试期间现网机器前缀路由短暂消失；而路由文件路径由 `ext/proxy/proxy.py` 的 `_routes_file` 按自身 realpath 定死、无可重定向变量 ⇒ 无法在不碰现网文件的前提下验证热加载 | ⛔ 本表不写死期望尾行（按上一条纪律它不在承载流量的机器上跑 ⇒ 无从实跑取证）；路由面的可复跑覆盖 = 上一行 `proxy_unix_test.py` 的第 7 项 | 端到端代理（前缀路由/剥离/上游透传） |
-| `dash-shot.sh` | 在装了 playwright(chromium) 的机器上 `bash w/test/dash-shot.sh`（头注：nv1；产物落 `/tmp/dash-shots/`，只读 ⛔ 不写 `~/m`） | 无断言尾行：产物 = 逐页截图（`PLAYWRIGHT_IMPORT_FAIL`/`LAUNCH_FAIL` 即环境不具备） | 浏览器侧渲染取证（CSS/布局/iframe/widget 表格）——纯服务端断言照不到的那一面 |
-| `proxy_upstream.py` | ⛔ 不是测试，是 `proxy_test.sh` 用的临时上游：`python3 test/proxy_upstream.py [port\|/abs/unix.sock]`（缺省 18099） | — | echo 请求方法/路径/头/体为 JSON；`/custom` 返 201 + 自定义头 |
-
-## config ssl/basic auth
-
-```
-echo 'user:passwd' > ~/.auth/passwd
-cp cert.pem privkey.pem  ~/.auth/
-```
-
-## download optional deps for extend features
-
-```
-cd $webroot
-git clone git@github.com:huafengxi/tsql.git tsql # query text using sql
-git clone git@github.com:huafengxi/bin-mirror.git deps2 # revealjs
-```
-
-## iframe show many doc
-- [/w/demo/list.iframe?v=iframe](/w/demo/list.iframe?v=iframe)
-- `/w/demo/dyn.itab` — `@dynamic` 指令行：一行 `@dynamic <站内路径>` 换成该端点吐出的若干行
-  （`名字 URL [k=v …]`，一行一枚），就地 splice（指令行的位置即展开位置）。通用增强：
-  任何 `.itab`/`.iframe` 页可用；端点最小形态见 [/w/demo/dyn-rows.py?v=read](/w/demo/dyn-rows.py?v=read)。
-  语义 = 加载快照（frame 加载时 fetch 一次，⛔ 无轮询/无自动刷新）；端点失败 ⇒
-  即刻展开零行，超时上界 10s ⇒ 期间整表（含静态行）延迟渲染；返回行里的 `@dynamic`
-  不递归展开。fetch 目标带代理前缀
-  （`/dev/`、`/nv1/` 一类，由浏览器 pathname 与服务端注入的 `src` 求差得出）⇒ 经代理打开时
-  打到对的机器。生产用例 = `dash/dash.itab` 末行的活跃会话 tab（数据源 `ext/sessiond/rpc/api.py`
-  的 `op=session_tabs`，机制 = `ext/sessiond/ARCHITECTURE.md` §12.3）。
-
-## .org file
-
-- [/w/demo/a.org](/w/demo/a.org), ctrl-alt-e to edit, ctrl-alt-s to save and refresh.
-- [?v=org2md](?v=org2md) convert org to markdown
-- [?v=org2reveal](?v=org2reveal) for presentation, need place revealjs in `/deps` dir.
-
-## shell
-
-- [/w/demo/host.stat](/w/demo/host.stat) call remote shell script, [/w/demo/host.stat?v=read](/w/demo/host.stat?v=read) for raw file.
-- [/w/demo/interp.py?cmd=hello](/w/demo/interp.py?cmd=hello) call remote function `interp()` defined in python file.
-- [/w/demo/interp.py?v=q](/w/demo/interp.py?v=q) interactive `interp()` defined in python file.
-- [/w/demo/demo.ish](/w/demo/demo.ish) ctrl+click to execute cmd.
-- [/w/demo/cmd-demo.md](/w/demo/cmd-demo.md) markdown `${...}` inline cmd widget: default raw server-side shell, output streams into the page (syntax & semantics: ext/markdown/README.md).
-
-## table
-
-- [/w/demo/a.tab](/w/demo/a.tab) query sql, return html snippet.
-- [/w/demo/a.db](/w/demo/a.db) query sqlite3 db file, return html snippet.
-- [/w/demo/a.tab?v=tab/curl](/w/demo/a.tab?v=tab/curl) query sql, return multi-column text.
-
-## chart
-
-- [/w/demo/rand-ts.sh?v=ts](/w/demo/rand-ts.sh?v=ts) time series graph, [/w/demo/rand-ts.sh?v=read](/w/demo/rand-ts.sh?v=read) for raw file.
-- [/w/demo/profile.data?v=flame](/w/demo/profile.data?v=flame) flame graph.
-
-## upload/edit file
-
-- [/w/demo/a.jpg?v=fops](/w/demo/a.jpg?v=fops) interactive upload local file.
-- [/w/demo/a.org?v=upload&file=abc](/w/demo/a.org?v=upload&file=abc) upload simple file.
-- [/w/demo/a.txt?v=append&text=hello](/w/demo/a.txt?v=append&text=hello) append text
-- [/w/demo/a.org?v=code](/w/demo/a.org?v=code), ctrl-alt-s to save file
-
-## directory view
-
-- [/w/?v=dir](/w/?v=dir) expand sub directory.
-- [/w/?v=dir2](/w/?v=dir2) expand sub directory.
-- [/w/?v=tar](/w/?v=tar)  download directory as tar
-- [/w/?v=sitemap](/w/?v=sitemap) download file list as xml
-
-## encrypt in js
-
-- [/w/demo/a.enc?v=enc](/w/demo/a.enc?v=enc) view encrypt file
-- [/w/demo/a.tips?v=code](/w/demo/a.tips?v=code) store decrypt tips
-- mount an encrypted directory via `fstab` with `Enc` type, e.g. `/nvr Enc nvr`,
-  the on-disk file/dir names and content are obfuscated by `ext/encrypt/enc_store.py`.
-
-## audio/img/video view
-
-- [/w/demo/?v=expo](/w/demo/?v=expo) list as audio/img/video/text etc.
-- [/w/demo/?v=album](/w/demo/?v=album) find `.meta` dir, list `.meta/cover.jpg`
-- [/w/demo/a.plist?v=plist](/w/demo/a.plist?v=plist) play list edit.
-- [/w/demo/a.mp4?v=video](/w/demo/a.mp4?v=video) play single video file.
-- shared playback state is broadcast on TCP port 23554 via `servers/timestamp-server.py`
-  (launch separately); media views post state through `ext/media/view/state_reporter.js`.
-
-## javascript API
-
-- [/w/demo/a.org?v=head](/w/demo/a.org?v=head)
-- [/w/demo/a.org?v=read](/w/demo/a.org?v=read)
-- [/w/demo/?v=find](/w/demo/?v=find) supports `t=video` / `t=audio` filters.
-- [/w/demo/a.org?v=del](/w/demo/a.org?v=del)
-- [/w/demo/a.org?v=write](/w/demo/a.org?v=write)
-- [/w/demo/a.org?v=mv&dest=/w/demo/b.org](/w/demo/a.org?v=mv&dest=/w/demo/b.org) rename within one store.
+sessiond 测试（`resolve_agent_edge.py`、`session_ops_edge.py`、`session_lifecycle.py`、`dormant_send_revive.py`）由调用方设置 `W_AGENTD_DIR` 提供身份洗刷依赖，工作区由 test/sandbox.py 创建，不使用真实 workspace。其余回归在 `test/test_*.py`；测试只读仓内机制资源，写入自建临时树。现场部署断言及截图入口归调用方运维仓。

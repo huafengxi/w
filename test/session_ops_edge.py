@@ -3,7 +3,7 @@
 
 任务 z293ql（设计稿 §4.2）：新建面开放给客户端 ⇒ 攻击面比单一指挥中心大一档。
 本套件钉住四件收口 + 删除纪律：
-  ① 项目清单**服务端枚举**（~/m 自身 + 顶层含 .git 的子目录；⛔ 无静态清单）；
+  ① 项目清单**服务端枚举**（workspace 自身 + 顶层含 .git 的子目录；⛔ 无静态清单）；
   ② **cwd 由 profile 清单声明**（客户端结构上控不到），声明值仍经**成员校验 +
      既有逃逸校验**双保险（正控 ≥1 / 反控 ≥5；清单写错 = 拒建、⛔ 不回落）；
   ③ profile 白名单（形态 + 清单在场 + **只放行 form: interactive**）、可选集枚举、
@@ -15,9 +15,9 @@
      三要素证据 + 删后复核；rename 的标题校验与 override 落点（.agent 的 title 字段）。
 
 自包含：夹具一律落 tempfile.mkdtemp()（monkeypatch proc.WS/WS_REAL/_self_host），
-不触网、不打现网 8080、不写 ~/m；清理前做 realpath 前缀断言（只删自建临时根）。
+不触网、不打现网 8080、不写生产 workspace；清理前做 realpath 前缀断言（只删自建临时根）。
 
-运行：cd ~/m/w && python3 test/session_ops_edge.py
+运行：python3 test/session_ops_edge.py
 Expect: ALL PASS, exit code 0（任一断言失败 → AssertionError + 非 0 退出码）
 """
 import json
@@ -29,6 +29,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import sandbox
 from ext.sessiond import proc as _proc          # noqa: E402
 from ext.sessiond.rpc import api as _api        # noqa: E402
 
@@ -59,7 +60,7 @@ def _write_json(path, doc):
 
 
 def _mkws(base):
-    """造一枚假 ~/m：两枚项目（w = .git 目录、lore = .git 文件）、一枚非项目目录（env）、
+    """造一枚假 workspace：两枚项目（w = .git 目录、lore = .git 文件）、一枚非项目目录（env）、
     运行时区（run/sessiond）、profile 清单族（interactive 四枚：缺 cwd ∨ cwd=w ∨ cwd=env
     ∨ cwd=/etc；另有 task/resident/缺 form 三枚做反控）、
     一枚逃出根集的符号链接（evil → base/outside）。"""
@@ -118,7 +119,7 @@ def case1_enumeration(ws, outside):
 # ---------------------------------------------------------------- ② cwd 正反控
 
 def case2_cwd_controls(ws, outside):
-    # 正控（≥1 例）：~/m 内合法项目通过
+    # 正控（≥1 例）：workspace 内合法项目通过
     got = _proc.resolve_project_cwd("w")
     assert got == os.path.realpath(os.path.join(ws, "w")), got
     assert _proc.resolve_project_cwd(".") == os.path.realpath(ws)
@@ -130,12 +131,12 @@ def case2_cwd_controls(ws, outside):
     rejects = [
         ("../escape", "相对逃逸（.. 段）"),
         ("../../etc", "多级相对逃逸"),
-        ("/etc", "~/m 外的绝对路径"),
-        (os.path.join(outside, "run", "sessiond"), "~/m/run 外的 run 路径（绝对）"),
+        ("/etc", "workspace 外的绝对路径"),
+        (os.path.join(outside, "run", "sessiond"), "workspace/run 外的 run 路径（绝对）"),
         ("run/sessiond", "根集内但非项目（运行时区）"),
         ("env", "根集内但非项目（凭据面）"),
         ("evil", "符号链接逃逸（→ 根集外）"),
-        ("~/m/w", "~ 形态（不是站内相对路径）"),
+        ("~/example/project", "~ 形态（不是站内相对路径）"),
         ("", "空串"),
         ("w\x00x", "NUL 字节"),
     ]
@@ -314,18 +315,18 @@ def case5_title(ws, outside):
 # ---------------------------------------------------------------- ⑥ 列表与分组
 
 def case6_list(ws, outside, created):
-    second = _proc.create_cc_session()               # 第二枚：cwd = ~/m 自身（清单未声明）
+    second = _proc.create_cc_session()               # 第二枚：cwd = workspace 自身（清单未声明）
     rows = _proc.list_cc_sessions()
     by_name = {r["name"]: r for r in rows}
     assert created["name"] in by_name and second["name"] in by_name, sorted(by_name)
     r1 = by_name[created["name"]]
-    assert r1["project"] == "~/m/w", r1["project"]
-    assert by_name[second["name"]]["project"] == "~/m", by_name[second["name"]]
+    assert r1["project"] == ws + "/w", r1["project"]
+    assert by_name[second["name"]]["project"] == ws, by_name[second["name"]]
     assert r1["state"] in ("running", "dormant") and isinstance(r1["pids"], list)
     assert r1["agent_site"] == "/run/sessiond/%s.agent" % created["name"]
     assert r1["session_site"] == "/run/sessiond/%s.jsonl" % created["name"]
     groups = sorted({r["project"] for r in rows})
-    assert groups == ["~/m", "~/m/w"], groups
+    assert groups == [ws, ws + "/w"], groups
     # rename 的 override 生效 + titleSource 标记
     _proc.rename_cc_session(created["name"], "我的工作会话")
     rows = {r["name"]: r for r in _proc.list_cc_sessions()}
@@ -617,8 +618,15 @@ def case12_drop_session(ws, outside):
         def __init__(self):
             self.pid = 424243
             self.stdin = _io.BytesIO()
-            self.stdout = _io.BytesIO(b"")
             self._ev = _th.Event()
+            event = self._ev
+            class BlockingStdout:
+                def readline(self):
+                    event.wait(20)
+                    return b''
+                def close(self):
+                    event.set()
+            self.stdout = BlockingStdout()
             self.terminated = False
             self.killed = False
 
@@ -698,15 +706,15 @@ def main():
     finally:
         _proc.WS, _proc.WS_REAL, _proc._self_host = saved
         # 清理面 root 身份断言（全局红线「删除类操作」）：只删本函数自建的临时根，
-        # 且它不得等于/包含生产根（~/m）；不满足 ⇒ 打印拒绝并**不删**（⛔ ignore_errors）。
+        # 且它必须落在自建 sandbox 内；不满足 ⇒ 打印拒绝并**不删**（⛔ ignore_errors）。
         real = os.path.realpath(base)
-        prod = os.path.realpath(os.path.expanduser("~/m"))
+        prod = os.path.realpath(sandbox.WS)
         if not real.startswith(tempfile.gettempdir() + os.sep) \
                 or real == prod or prod.startswith(real + os.sep) \
                 or real == os.path.realpath(os.path.expanduser("~")):
             print("SKIP cleanup: %r is not a self-created temp dir" % real)
         else:
-            shutil.rmtree(real)
+            sandbox.remove(real)
 
 
 if __name__ == "__main__":

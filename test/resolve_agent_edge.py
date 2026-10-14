@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """_resolve_agent 软链逃逸 edge 用例（任务 kqhweh，ticket.gwj1xr ②）。
 
-评审 afxgmt 复现场景：.agent 位于 ~/m/run（软链 → /data/…/run）且 sessionDir 缺省/
-经软链时，sess_dir 的 realpath 逃出 ~/m 字面，旧代码 `relpath(sess_dir, WS)` 产出
+评审 afxgmt 复现场景：.agent 位于 workspace/run（软链指向外部运行时区）且 sessionDir 缺省/
+经软链时，sess_dir 的 realpath 逃出 workspace 字面，旧代码 `relpath(sess_dir, WS)` 产出
 `../../…` 畸形站内路径且未被拦截。修复后：run 运行时区经 run 软链锚定还原为 /run/… 站内
 路径；两锚定都逃逸 → 400。
 
-运行：cd ~/m/w && python3 test/resolve_agent_edge.py
+运行：python3 test/resolve_agent_edge.py
 """
 import json
 import os
@@ -16,6 +16,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import sandbox
 from ext.sessiond.rpc import api           # noqa: E402
 from ext.sessiond import proc as _proc     # noqa: E402
 
@@ -48,12 +49,12 @@ def case1_run_zone_default_sessiondir():
         assert ".." not in doc["session"], doc["session"]
         print("case1 OK: run 区 sessionDir 缺省 → 站内路径 %s" % doc["session"])
     finally:
-        shutil.rmtree(os.path.join(_proc.WS, "run/temp", d), ignore_errors=True)
+        sandbox.remove(os.path.join(_proc.WS, "run/temp", d))
 
 
 def case2_root_escape_400():
-    """sessionDir realpath 逃出根集（~/m + run 区）→ 400（既有红线）。"""
-    docs = {"/x/a.agent": {"host": "nv1", "sessionDir": "~/m/../tmp/kqhweh-escape"}}
+    """sessionDir realpath 逃出根集（workspace + run 区）→ 400（既有红线）。"""
+    docs = {"/x/a.agent": {"host": "nv1", "sessionDir": os.path.join(sandbox.BASE, 'outside-workspace')}}
     status, doc = call(docs, "/x/a.agent")
     assert status.startswith("400"), "expect 400, got %s: %s" % (status, doc)
     assert "escapes workspace" in doc["error"], doc
@@ -78,7 +79,7 @@ def case3_symlink_ws_escape_400():
         print("case3 OK: 软链逃出根集 → 400 (%s)" % doc["error"])
     finally:
         _proc.WS, _proc.WS_REAL = saved
-        shutil.rmtree(base, ignore_errors=True)
+        sandbox.remove(base)
 
 
 if __name__ == "__main__":

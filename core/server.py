@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8-unix -*-
 '''
-# echo 'user:passwd' > ~/.auth/passwd
-# ssl: ~/.auth/fullchain.pem ~/.auth/privkey.pem
+# Configuration: see README.md (W_WORKSPACE, W_FSTAB, W_AUTH_FILE).
 log=info ./core/server.py 8080 [log_file]
 '''
 
@@ -16,12 +15,8 @@ _repo_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-def locate_web_path(path):
-    p = os.path.realpath(path)
-    while p != '/' and not os.path.exists(os.path.join(p, 'index.md')):
-        p = os.path.dirname(p)
-    return p
-_web_path_ = locate_web_path(_repo_root)
+from core.config import workspace, path as config_path
+_web_path_ = workspace()
 def web_path(name):
     return os.path.realpath(os.path.join(_web_path_, name))
 os.chdir(_web_path_)
@@ -30,9 +25,7 @@ def help():
     print(__doc__)
 
 def set_path():
-    bin_path = web_path('w/bin')
-    if not os.path.exists(bin_path):
-        bin_path = os.path.expanduser('~/m/w/bin')
+    bin_path = os.path.join(_repo_root, 'bin')
     bin_dirs = [bin_path]
     ext_dir = os.path.join(_repo_root, 'ext')
     if os.path.isdir(ext_dir):
@@ -67,7 +60,9 @@ def main():
     logging.info('web_start: listen=%s dir=%s log=%s(%s) PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, os.getenv('PATH'), os.getenv('PYTHONPATH'))
 
     set_logging(log_file)
-    root = build_root_store('w/stores/fstab', required=('/',))
+    root = build_root_store(config_path('W_FSTAB', required=True), required=('/',))
+    from ext.proxy.proxy import load_routes
+    load_routes()  # validate supplied proxy configuration before listening
     handler = Handler(root).handle_req
     # 代理挂管线第一个业务位（主路由之前）：位于全局 BasicAuth 之内，
     # 未命中规则返回 None 落回既有管线（见 design.md「reverse proxy」）。

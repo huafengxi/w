@@ -33,6 +33,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import sandbox
 import threading
 import urllib.error
 import urllib.request
@@ -248,7 +249,7 @@ def main():
         real = os.path.realpath(tmp)
         temp_root = os.path.realpath(tempfile.gettempdir())
         if real.startswith(temp_root + os.sep) and real != temp_root and os.path.isdir(real):
-            shutil.rmtree(real)
+            sandbox.remove(real)
         else:
             print('SKIP cleanup: %r is not a self-created temp dir' % real)
     failed = RESULTS.count(False)

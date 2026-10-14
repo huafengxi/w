@@ -5,10 +5,10 @@ reverse-proxy.py HOST:PORT [LOG_FILE]
 
 Reverse proxy that forwards all requests to a backend server.
 Handles HTTP, SSE streaming, and WebSocket upgrades.
-Adds BasicAuth (via ~/.auth/passwd) + SSL via core.wsgi.
+Adds BasicAuth (W_AUTH_FILE) + caller-configured TLS via core.wsgi.
 
 Env vars:
-  REVERSE_PROXY_BACKEND  backend URL (default: http://127.0.0.1:8192)
+  REVERSE_PROXY_BACKEND  required backend URL
   log                    log level: debug/info/warning/error (default: info)
   nossl                  set to 1 to disable SSL
   timeout                socket timeout in seconds (default: 300)
@@ -45,13 +45,9 @@ BUFSIZE = 8192
 
 
 def _read_credentials():
-    """Read BasicAuth credentials from ~/.auth/passwd."""
-    path = os.path.expanduser('~/.auth/passwd')
-    try:
-        with open(path) as f:
-            return f.read().strip()
-    except IOError:
-        return ''
+    """Read caller-injected BasicAuth credentials."""
+    from core.wsgi import read_credential
+    return read_credential()
 
 
 def _check_auth(headers):
@@ -302,7 +298,7 @@ def main():
 
     listen_addr = sys.argv[1]
     log_file = sys.argv[2] if len(sys.argv) > 2 else ''
-    backend_url = os.getenv('REVERSE_PROXY_BACKEND', 'http://127.0.0.1:8192')
+    backend_url = os.environ['REVERSE_PROXY_BACKEND']
     timeout = int(os.getenv('timeout', '300'))
 
     parsed = urllib.parse.urlparse(backend_url)

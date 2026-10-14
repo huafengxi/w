@@ -26,9 +26,7 @@ Covers:
      all frames
   6. http:// TCP upstream unchanged (forward, log label `scheme://netloc`,
      Host=netloc, SSE)
-  7. the shipped `routes.json` parses with the real proxy code and keeps the
-     agreed shape (`/mac/` + `/nv2/` = unix socket under rshd's fwd dir,
-     `/dev/` + `/nv1/` = http)
+  7. private injected routes support hot reload and reject malformed config.
 """
 import argparse
 import importlib.util
@@ -48,12 +46,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROXY_DEFAULT = os.path.join(os.path.dirname(HERE), "ext", "proxy",
                              "proxy.py")
 BODY = b"plain-body-unix-test"
-# routes.json 里走 rsh 反向转发的前缀 -> (socket 路径后缀, timeout, local_on)。
-# 任务 4ob5de：/nv2/ 由 TCP 改 unix（dev->nv2:8080 被公司网络策略拦截），两条都用
-# `${RSH_FWD_DIR}` token 写法（配置文件不再硬编码 dev 的绝对 home 路径）。
-UNIX_ROUTES = {"/mac/": ("/run/rsh-fwd/mac.sock", 65.0, ["mac"]),
-               "/nv2/": ("/run/rsh-fwd/nv2.sock", 65.0, ["nv2"])}
-HTTP_ROUTES = {"/dev/": ["dev"], "/nv1/": ["nv1"]}
+# All upstreams below are synthetic fixtures.
+import sandbox
 FWD_DIR_TOKEN = "${RSH_FWD_DIR}"
 
 results = []          # (name, True/False)
@@ -228,29 +222,30 @@ def fwd_dir_token_checks(proxy, base):
 
 
 def shipped_routes_check(proxy):
-    """7. the repo's routes.json still parses into the agreed shape."""
-    name = ("7. shipped routes.json: /mac/ + /nv2/ = unix (rsh fwd dir), "
-            "/dev/ + /nv1/ = http")
-    path = getattr(proxy, "_routes_file", None)
-    if not path or not os.path.exists(path):
-        skip(name, "no routes.json at %s (proxy disabled there)" % path)
-        return
-    real = proxy.load_routes()
-    by_prefix = dict((r["prefix"], r) for r in real)
-    ok = set(by_prefix) == set(UNIX_ROUTES) | set(HTTP_ROUTES)
-    for prefix, (suffix, timeout, local_on) in UNIX_ROUTES.items():
-        r = by_prefix.get(prefix)
-        ok = ok and bool(r) and r["upstream"].scheme == "unix" \
-            and r["upstream"].path.endswith(suffix) \
-            and r["timeout"] == timeout and r["local_on"] == local_on \
-            and FWD_DIR_TOKEN not in r["upstream"].path
-    for prefix, local_on in HTTP_ROUTES.items():
-        r = by_prefix.get(prefix)
-        ok = ok and bool(r) and r["upstream"].scheme == "http" \
-            and r["upstream"].netloc and r["local_on"] == local_on
-    check(name, ok,
-          str([(r["prefix"], proxy.upstream_label(r["upstream"]))
-               for r in real]))
+    """7. Injected configuration and hot reload, in a private fixture."""
+    path = os.path.join(sandbox.BASE, 'routes.json')
+    saved = proxy._routes_file
+    proxy._routes_file = path
+    try:
+        with open(path, 'w') as f:
+            json.dump([{'prefix': '/fixture/', 'upstream': 'http://127.0.0.1:9'}], f)
+        proxy._cache.update(mtime=None, loaded_key=None, routes=[])
+        check('7a. injected routes', proxy.load_routes()[0]['prefix'] == '/fixture/')
+        with open(path, 'w') as f:
+            f.write('[]')
+        os.utime(path, (time.time() + 2, time.time() + 2))
+        check('7b. hot reload to empty', proxy.load_routes() == [])
+        with open(path, 'w') as f:
+            f.write('{invalid')
+        os.utime(path, (time.time() + 4, time.time() + 4))
+        try:
+            proxy.load_routes()
+            check('7c. invalid explicit config rejected', False)
+        except ValueError:
+            check('7c. invalid explicit config rejected', True)
+    finally:
+        proxy._routes_file = saved
+        proxy._cache.update(mtime=None, loaded_key=None, routes=[])
 
 
 def main():
@@ -387,7 +382,7 @@ def main():
         if args.keep:
             print("sandbox kept at %s" % base)
         else:
-            shutil.rmtree(base, ignore_errors=True)
+            sandbox.remove(base)
     return report()
 
 

@@ -1,13 +1,15 @@
 #!/usr/bin/env -S emacs --script
 (setq debug-on-error t)
-; see https://www.emacswiki.org/emacs/LoadPath
-(let ((default-directory  "~/.emacs.d/elpa/develop"))
-  (normal-top-level-add-subdirs-to-load-path))
+(dolist (dir (split-string (or (getenv "W_ORG_LOAD_PATH") "") path-separator t))
+  (add-to-list 'load-path (expand-file-name dir))
+  (let ((default-directory (file-name-as-directory (expand-file-name dir))))
+    (when (file-directory-p default-directory)
+      (normal-top-level-add-subdirs-to-load-path))))
 
 (require 'ox-re-reveal)
-(setq user-full-name "yuanqi.xhf")
-(setq user-mail-address "yuanqi.xhf@oceanbase.com")
-(setq org-re-reveal-root "/w/deps2/reveal-js")
+(setq user-full-name (or (getenv "W_ORG_AUTHOR") ""))
+(setq user-mail-address (or (getenv "W_ORG_EMAIL") ""))
+(setq org-re-reveal-root (or (getenv "W_REVEAL_ROOT") "/reveal-js"))
 (setq org-re-reveal-title-slide "<h1>%t</h1>
 <h2>%a</h2>
 <h2>%e</h2>")

@@ -325,7 +325,7 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 
 <script>
 "use strict";
-// URL 路径驱动会话（任务 0829-1958-od0t；R1：~/m 下任意 .jsonl 路径）：
+// URL 路径驱动会话（任务 0829-1958-od0t；R1：workspace 下任意 .jsonl 路径）：
 // 会话 = 页面 URL 路径指向的 .jsonl（如 /assistant/foo.jsonl、/a/b/x.jsonl），
 // 持久体即该文件，由 web 进程内按路径监督员直接监督（崩溃自动重启，
 // 从该 jsonl resume）。不同目录的同名文件 = 不同会话。
@@ -338,7 +338,7 @@ const PREFIX = window.__PREFIX__ || "";
 const PAGEPATH = PREFIX ? location.pathname.slice(PREFIX.length) : location.pathname;
 const API = PREFIX + "/sessiond/rpc/api.py";
 const STREAM = PREFIX + "/sessiond/rpc/stream.py";
-// 会话路径解析：站内任意 /…*.jsonl（后端另有 ~/m 锁定校验）；agentd 族另支持
+// 会话路径解析：站内任意 /…*.jsonl（后端另有 workspace 锁定校验）；agentd 族另支持
 // spec.json 声明者入口（任务 60grqq，用户拍板入口唯一化）：/agents/(task|bot)/<名>/spec.json
 // 服务端归一为会话产物路径（_proc.agentd_entry），产物路径直开被拒（400 + 指引）。
 function parseSessionFromUrl() {

@@ -4,6 +4,7 @@ import sys
 import time
 import threading
 from core.stream import ClosingIterator
+from core.config import path as config_path
 
 HTTP_THREADS = 30
 SSE_LIMIT = 20
@@ -34,7 +35,7 @@ def make_wsgi_app(handlers):
             return dict(type='text/plain'), '%s %s\n'%(path, query)
     def err_handler(env, path, query, post):
         logging.debug("HANDLE_404: %s", path)
-        return dict(type='text/html', http_status='404 Not Found'), open("w/view/404.html").read()
+        return dict(type='text/html', http_status='404 Not Found'), open(os.path.join(os.path.dirname(__file__), '..', 'view', '404.html')).read()
     def try_these(handlers, env, path, query, post):
         for f in handlers:
             ret = f(env, path, query, post)
@@ -85,7 +86,7 @@ def make_wsgi_app(handlers):
         except Exception as e:
             logging.warning('PATH_INFO decode failed: %r %s', pi, e)
         # local_on 重写：命中本机规范名的代理前缀剥掉改本地直读（见 ext/proxy），
-        # 让 itab/链接可以固定带 /dev//mac/ 等前缀、四机任意入口同址可达。
+        # 让 itab/链接可以固定带调用方定义的机器前缀。
         # 无前缀路径不强制跳转（用户 2026-09-01 拍板，撤销 se6t32 的 302）；
         # 需要统一地址的带前缀链接由使用方自行控制。
         try:
@@ -128,18 +129,13 @@ def run_use_wsgiserver(app, host, port, daemon):
     if not host: host ='0.0.0.0'
     patch_wsgiserver_nonascii_uri()
     from wsgiserver import WSGIServer
-    cert, keyfile = os.path.expanduser('~/.auth/fullchain.pem'), os.path.expanduser('~/.auth/privkey.pem')
+    cert, keyfile = config_path('W_TLS_CERT'), config_path('W_TLS_KEY')
     if os.getenv('nossl') == '1':
         cert, keyfile = None, None
         logging.warning('nossl mode: run with danger')
-    else:
-        # cert 与 key 分别独立检查、分别报告（旧写法 "%s/%s"%(cert,keyfile) 把两条绝对
-        # 路径拼成一个串，告警不准确也无从判断缺哪个，票 0cd59y）。降级行为不变：
-        # 任一文件缺失 → certfile/keyfile 置 None，以 HTTP 运行。
-        missing = [p for p in (cert, keyfile) if not os.path.exists(p)]
-        if missing:
-            logging.warning("ssl file not exists: %s: run with danger", ', '.join(missing))
-            cert, keyfile = None, None
+    elif cert or keyfile:
+        if not cert or not keyfile or not all(os.path.isfile(p) for p in (cert, keyfile)):
+            raise ValueError('W_TLS_CERT and W_TLS_KEY must both name existing files')
     timeout = get_socket_timeout()
     logging.info("run use wsgiserver: socket timeout: %s", timeout)
     server = WSGIServer(app, host, port, certfile=cert, keyfile=keyfile, timeout=timeout, numthreads=HTTP_THREADS)
@@ -147,14 +143,14 @@ def run_use_wsgiserver(app, host, port, daemon):
     server.start()
 
 def read_credential():
-    path = os.path.expanduser('~/.auth/passwd')
-    try:
-        with open(path) as f:
-            return f.read()
-    except IOError:
-        return ''
-os.environ.update(WSGI_AUTH_CREDENTIALS=read_credential().strip())
+    path = config_path('W_AUTH_FILE', required=True)
+    with open(path) as f:
+        value = f.read().strip()
+    if not value or ':' not in value:
+        raise ValueError('W_AUTH_FILE must contain nonempty user:password credentials')
+    return value
 from wsgi_basic_auth import BasicAuth
 def run_wsgi(app, host, port, daemon=False):
+    os.environ['WSGI_AUTH_CREDENTIALS'] = read_credential()
     app = BasicAuth(app)
     run_use_wsgiserver(app, host, port, daemon)

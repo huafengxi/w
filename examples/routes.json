@@ -1,0 +1,1 @@
+{"routes": [{"prefix": "/node/", "upstream": "http://127.0.0.1:9000", "strip_prefix": true, "timeout": 65, "local_on": ["node"]}]}

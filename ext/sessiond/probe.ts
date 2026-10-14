@@ -7,7 +7,7 @@
  * 本扩展不注册任何工具，工具名冲突面为零）。
  *
  * 行为：`/sessiond-inspect <nonce>` 把该会话当前的系统提示词全文 + 工具清单
- * 转储为侧车文件 ~/m/run/sessiond-inspect/<nonce>.json（临时文件+rename 原子
+ * 转储为侧车文件 workspace/run/sessiond-inspect/<nonce>.json（临时文件+rename 原子
  * 落盘），由 sessiond 后端 op=inspect 编排（发命令→等回执→读文件→HTTP 返回，
  * 见 ext/sessiond/bridge.py:inspect）。不走 pi 事件流/jsonl，零会话污染。
  *
@@ -20,11 +20,12 @@
 
 export default function sessiondProbe(pi: any) {
 	const fs = require("fs");
-	const os = require("os");
 	const path = require("path");
 
-	// 侧车目录：~/m/run 为宿主本地运行时区（不入 git）。
-	const DUMP_DIR = path.join(os.homedir(), "m", "run", "sessiond-inspect");
+	// 侧车目录使用调用方工作区的运行时区。
+	const workspace = process.env.W_WORKSPACE;
+	if (!workspace || !path.isAbsolute(workspace)) throw new Error('W_WORKSPACE is required');
+	const DUMP_DIR = path.join(workspace, "run", "sessiond-inspect");
 
 	function atomicWriteJson(file: string, doc: any) {
 		fs.mkdirSync(DUMP_DIR, { recursive: true });

@@ -1,7 +1,8 @@
 # -*- type=script -*-
 import os, json, time, glob
 
-AGENTS_DIR = '/home/yuanqi.xhf/m/agents'
+import os
+AGENTS_DIR = os.environ['DEMO_AGENTS_DIR']
 
 def interp(store, **kw):
     now = time.strftime('%Y-%m-%d %H:%M:%S')

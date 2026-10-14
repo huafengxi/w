@@ -1,16 +1,13 @@
 # reverse proxy handler (0831-0937-sh7l)
 #
-# 路由规则声明在 ext/proxy/routes.json（与本文件同目录），格式见 README.md /
-# design.md「reverse proxy」小节。规则按最长前缀匹配；文件缺失/为空/解析失败
-# 均视为代理功能关闭（不影响既有管线），解析失败会记一条 warning。
+# 路由文件由 W_PROXY_ROUTES 注入，格式见 README.md。
+# 最长前缀匹配；未注入/为空时关闭代理，显式配置错误抛异常。
 #
 # 规则文件按 mtime 热加载：每个请求检查 stat，变更才重读，无需重启服务。
 #
 # 转发语义（纯标准库 http.client 实现，不引三方依赖）：
 # - upstream 支持 http(s)://host[:port] 与 unix:///abs/path.sock（后者经 AF_UNIX
-#   连本机 socket，任务 lzful1：/mac/ 走 rshd 的反向转发 unix 监听，不再是 TCP 端口）；
-#   unix 路径里的 `${RSH_FWD_DIR}` token 按 rshd 的 FWD_DIR 约定展开（任务 4ob5de：
-#   配置文件不再硬编码 dev 的绝对 home 路径，见下 rsh_fwd_dir()）；
+#   连本机 socket）；unix 路径里的 `${RSH_FWD_DIR}` token 需要调用方注入；
 # - 保留原方法与请求体；透传请求头（剔除 hop-by-hop），补 X-Forwarded-For /
 #   X-Forwarded-Proto，Host 改写为上游（unix 上游无 netloc → localhost）；
 # - 上游响应的 status/头/体原样回传（同样剔除 hop-by-hop）；
@@ -18,7 +15,7 @@
 #   Content-Length 时，按块生成器透传（不设 content_len → wsgi 层走 chunked），
 #   SSE/长连接不被憋住；其余响应保持一次性读完中转（原语义零回归）；
 # - timeout 为 socket 级每操作超时：对流式连接即空闲超时（每次 recv 独立计时），
-#   SSE 类长连接路由应配大于上游 keep-alive 周期的值（如 /mac/ 65s > 15s ping）；
+#   SSE 类长连接路由应配大于上游 keep-alive 周期的值；
 # - 上游不可达/超时 → 502 Bad Gateway；上游返回什么就透传什么。
 #
 # 插入点：本 handler 挂在管线第一个业务位（echo 调试器之后、主路由之前），
@@ -38,23 +35,20 @@ HOP_BY_HOP = frozenset([
     'te', 'trailers', 'transfer-encoding', 'upgrade',
 ])
 
-_routes_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'routes.json')
+_routes_file = os.environ.get('W_PROXY_ROUTES')
 # mtime 缓存：{'mtime': float|None, 'routes': list}
 _cache = {'mtime': None, 'routes': [], 'loaded_key': None}
 
-# ---- rsh 反向转发入站 socket 目录（任务 4ob5de 项 3）----
-# 单一事实源 = rsh/rshd.py 的 FWD_DIR 约定：`RSH_FWD_DIR` 环境变量 >
-# `<REPO_ROOT>/run/rsh-fwd`（REPO_ROOT 按自身文件位置推导）。这里按同一口径推导，
-# routes.json 用 `unix:///${RSH_FWD_DIR}/<worker>.sock` 引用 —— 不再把 dev 的绝对
-# home 路径写进这份被追踪且四机同步的配置（home 或 --fwd-dir 约定任一变动即分叉）。
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.realpath(__file__)))))
+# ---- 调用方的反向转发 socket 目录 ----
 RSH_FWD_DIR_TOKEN = '${RSH_FWD_DIR}'
 
 
 def rsh_fwd_dir():
-    """rshd 的转发入站目录（与 rsh/rshd.py:FWD_DIR_DEFAULT 同口径，可被 RSH_FWD_DIR 覆盖）。"""
-    return os.environ.get('RSH_FWD_DIR') or os.path.join(_REPO_ROOT, 'run', 'rsh-fwd')
+    """调用方显式注入的转发入站目录。"""
+    value = os.environ.get('RSH_FWD_DIR')
+    if not value or not os.path.isabs(value):
+        raise ValueError('RSH_FWD_DIR must be an absolute directory for token expansion')
+    return value
 
 
 def _expand_unix_path(path):
@@ -104,9 +98,8 @@ def _parse_rules(obj):
 
 
 # ---- 本机规范名（local_on 判定）----
-# 身份映射 = ~/m/env/host-id（<hostname> <规范名>，全机共用入库文件）；
-# 未命中/文件缺失 → 回退 hostname 本身（与 host_info 工具同口径）。
-_host_id_file = os.path.expanduser('~/m/env/host-id')
+# 身份映射 = W_HOST_ID_FILE（<hostname> <规范名>）；未命中使用 hostname。
+_host_id_file = os.environ.get('W_HOST_ID_FILE')
 _self_host_cache = {'key': None, 'name': None}
 
 
@@ -117,6 +110,8 @@ def self_host():
         return _self_host_cache['name']
     name = hn
     try:
+        if not _host_id_file:
+            return name
         with open(_host_id_file) as f:
             for line in f:
                 line = line.strip()
@@ -150,14 +145,12 @@ def rewrite_local(path):
 
 
 def load_routes():
-    """按 mtime 缓存读取规则文件。缺失/空/解析失败 → 返回 []（代理关闭）。"""
-    try:
-        st = os.stat(_routes_file)
-    except OSError:
-        if _cache['routes']:
-            logging.warning('proxy: routes file %s gone, proxy disabled', _routes_file)
-        _cache.update(mtime=None, routes=[], loaded_key=None)
+    """按 mtime 缓存配置；未注入/空时返回 []，显式配置错误抛异常。"""
+    if not _routes_file:
         return []
+    if not os.path.isabs(_routes_file):
+        raise ValueError('W_PROXY_ROUTES must be an absolute path')
+    st = os.stat(_routes_file)
     if st.st_mtime == _cache['mtime']:
         return _cache['routes']
     key = (st.st_mtime, st.st_size)
@@ -169,8 +162,7 @@ def load_routes():
             text = f.read()
         routes = _parse_rules(json.loads(text)) if text.strip() else []
     except Exception as e:
-        logging.warning('proxy: routes file %s invalid (%s), proxy disabled', _routes_file, e)
-        routes = []
+        raise ValueError('invalid proxy configuration %s: %s' % (_routes_file, e)) from e
     else:
         logging.info('proxy: (re)loaded %d route(s) from %s', len(routes), _routes_file)
     _cache.update(mtime=st.st_mtime, routes=routes, loaded_key=key)

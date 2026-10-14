@@ -1,7 +1,0 @@
-/w      Dir     w
-/nvr  Enc nvr
-/ARJ  Enc ARJ
-/dav  WebDav dav.env
-/report    Cmd w/ext/report/bin/lookup.py templates
-/sessiond	Dir	w/ext/sessiond
-/	Dir	.

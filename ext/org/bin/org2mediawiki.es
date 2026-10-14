@@ -1,7 +1,6 @@
-#!/usr/bin/emacs --script
-(add-to-list 'load-path "/home/yuanqi.xhf/.emacs.d/local/org/lisp/")
-(add-to-list 'load-path "/home/yuanqi.xhf/.emacs.d/local/org/contrib/lisp/")
-(add-to-list 'load-path "/home/yuanqi.xhf/.emacs.d/pkgs/")
+#!/usr/bin/env -S emacs --script
+(dolist (dir (split-string (or (getenv "W_ORG_LOAD_PATH") "") path-separator t))
+  (add-to-list 'load-path (expand-file-name dir)))
 (require 'ox-mediawiki)
 ;; (princ load-path)
 ;; (find-file (nth 3 command-line-args))

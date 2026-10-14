@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sending to an exited session waits for explicit restart before writing stdin.
 
-Run: ~/miniconda3/bin/python3 w/test/dormant_send_revive.py
+Run: python3 test/dormant_send_revive.py
 Isolated stubs; no production process or file is touched.
 """
 import os
@@ -11,6 +11,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import sandbox
 from ext.sessiond import bridge as B          # noqa: E402
 
 RESULTS = []

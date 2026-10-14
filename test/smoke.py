@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 # In-process smoke harness: exercises the request pipeline without sockets/fork.
-# Usage: cd <webroot> && fstab=<path> python3 w/test/smoke.py
+# Usage: python test/smoke.py (private workspace, read-only repo mount)
 import os, sys, io, logging, urllib.parse
 logging.basicConfig(level=getattr(logging, os.getenv('log', 'WARNING').upper(), logging.WARNING),
                     format="%(levelname)s %(message)s")
-WEBROOT = os.getenv('webroot', '/home/yuanqi.xhf/m')
+import sandbox
+WEBROOT = sandbox.WS
 os.chdir(WEBROOT)
-if 'w' not in sys.path:
-    sys.path.insert(0, 'w')
+sys.path.insert(0, os.path.realpath('w'))
 from stores.store import build_root_store
 import core.handler as handler
 
-root = build_root_store(os.getenv('fstab', 'w/stores/fstab'))
+fstab = os.path.join(WEBROOT, 'fstab')
+with open(fstab, 'w') as f:
+    f.write('/ Dir .\n/w Dir w\n')
+root = build_root_store(fstab, required=('/',))
 h = handler.Handler(root)
 
 def req(path, qs=''):
@@ -26,6 +29,7 @@ def req(path, qs=''):
             path, qs, (meta or {}).get('type'), (meta or {}).get('content_len'), c))
     except Exception as e:
         print('ERR  %-24s %-10s %r' % (path, qs, e))
+        raise
 
 if __name__ == '__main__':
     req('/w/README.md')

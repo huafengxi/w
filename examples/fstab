@@ -1,0 +1,3 @@
+# Relative arguments are resolved from W_WORKSPACE.
+/w Dir w
+/ Dir .

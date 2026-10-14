@@ -23,8 +23,9 @@
      function changeExt(path, ext) { return path.substr(0, path.lastIndexOf(".")) + ext; }
      function initApp(){
          var url = window.location.pathname;
-         var github_url = "https://huafengxi.github.io/";
-         $("github_link").href = github_url + changeExt(url, '.html');
+         var published_url = new URLSearchParams(location.search).get('published_url');
+         if (published_url) $("github_link").href = published_url + changeExt(url, '.html');
+         else $("github_link").hidden = true;
          if (inIframe()){
              hide($('head-bar'));
          }

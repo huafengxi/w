@@ -18,9 +18,10 @@ ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
 COMMANDS_TIMEOUT = 10.0     # get_commands 往返超时（秒，任务 a16jpj）
 INSPECT_TIMEOUT = 15.0      # 探针转储往返超时（秒，任务 s0f1la）
 
-# 探针侧车目录（任务 s0f1la）：与 probe.ts 同口径 = ~/m/run/sessiond-inspect
+# 探针侧车目录：与 probe.ts 共用调用方 workspace/run/sessiond-inspect
 # （宿主本地运行时区，不入 git；文件即用即删）。
-INSPECT_DIR = os.path.join(os.path.expanduser("~/m"), "run",
+from core.config import workspace
+INSPECT_DIR = os.path.join(workspace(), "run",
                            "sessiond-inspect")
 
 # 会话面命令拦截（评审 0829-1327-7ca3 S3）：这些命令会改绑 session_file/会话名，

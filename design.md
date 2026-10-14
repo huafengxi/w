@@ -5,7 +5,7 @@
 `view_path` 可以看作是打开 `src_path` 的方式。
 
 整个server由与业务无关的 `core/` 加上按约定加载的 `ext/<feature>/` 组成，
-`stores/` 提供 store 实现，配置文件 (`vmap`, `mime`, `stores/fstab`) 是声明式的
+`stores/` 提供 store 实现，配置文件 (`vmap`, `mime`, 调用方的 fstab) 是声明式的
 真理来源，代码去适配它们。
 
 ## file and store
@@ -97,7 +97,7 @@ script 分布在 `core/rpc/` (核心只读 rpc，如 `core_read.py`) 与
 
 ## RootStore和fstab
 
-`stores/fstab` 把不同类型的 store 挂载到 root store。fstab 是单个声明式文件
+`W_FSTAB` 指向的配置把不同类型的 store 挂载到 root store。fstab 是单个声明式文件
 (没有 fstab.frag)，每行 `挂载点 类型 参数...`。目前 `stores/` 下提供的
 store 实现：
 
@@ -138,7 +138,7 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 
 ## reverse proxy
 
-路径前缀 → 上游的反向代理，规则声明在 **`ext/proxy/routes.json`**（本节是权威口径）。
+路径前缀 → 上游的反向代理，规则文件由 **`W_PROXY_ROUTES`** 注入（字段协议 = `ext/proxy/README.md`）。
 规则文件按 mtime 热加载（每请求检查 stat，变更才重读），改规则不用重启服务。
 实现：`ext/proxy/proxy.py`（纯标准库 `http.client`，零三方依赖）。
 
@@ -147,25 +147,21 @@ store 类按命名约定自动加载：`build_root_store` 解析出 fstab 里的
 ```json
 {"routes": [{"prefix": "/proxy/demo", "upstream": "http://127.0.0.1:18099",
              "strip_prefix": false, "timeout": 10,
-             "local_on": ["dev"]}]}
+             "local_on": ["node"]}]}
 ```
 
 - `prefix`：以 `/` 开头的路径前缀；多条规则取**最长前缀**匹配（朴素
   `startswith` 语义，不强制路径段边界）。
 - `upstream`：`http(s)://host[:port]`，或 `unix:///绝对路径.sock`（任务 lzful1：经
   AF_UNIX 连**本机** socket，纯标准库 `http.client` 子类；只认 host 位为空的
-  `unix:///abs/path` 形态，其余写法解析报错 → 代理整体关闭）。unix 上游用于 rsh
-  反向端口转发的 hub 侧监听（`~/m/rsh/rshd.py` 的 `run/rsh-fwd/<worker>.sock`，
-  节点 0600/目录 0700），路径须与 rshd 的 `--fwd-dir`/`RSH_FWD_DIR` 约定一致——
-  写法用 `unix:///${RSH_FWD_DIR}/<worker>.sock`，token 由 `proxy.py` 按该约定展开
-  （`RSH_FWD_DIR` 环境变量 > `<REPO_ROOT>/run/rsh-fwd`，单一事实源 = rshd），故这份
-  四机同步的配置里不写任何机器的绝对 home 路径（任务 4ob5de）；
+  `unix:///abs/path` 形态，其余写法解析报配置错误）。socket 路径由调用方提供；
+  `unix:///${RSH_FWD_DIR}/<worker>.sock` 的 token 需要显式绝对目录变量；
   `strip_prefix` 缺省 false；`timeout` 缺省 10 秒。
-- `local_on`：可选，规范名列表（规范名 = `~/m/env/host-id` 映射，未命中回退 hostname）。
+- `local_on`：可选，规范名列表（`W_HOST_ID_FILE` 映射，未命中使用 hostname）。
   本机命中时该前缀**不走代理**：wsgi 层在进管线前剥前缀改本地直读
   （`core/wsgi.py` 调 `rewrite_local`），本机服务自己的前缀不必绕自己一跳——
-  让 itab/链接可固定带 `/dev//mac//nv1/` 前缀、四机任意入口同址可达。
-- 文件缺失/为空/解析失败 = 代理功能整体关闭（不影响既有管线）；解析失败记 warning。
+  让 itab/链接可以固定带调用方机器前缀。
+- 未注入路由文件关闭代理；显式文件不可读或非法抛配置错误；空文件关闭代理。
 
 **插入点与安全**：`proxy_handler` 挂在管线第一个业务位（`core/server.py`，
 echo 调试器之后、主路由 `Handler.handle_req` 之前），位于 `BasicAuth` 包裹之内——
