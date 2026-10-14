@@ -356,10 +356,8 @@ def interp(store, op='', session='', cmd='', **kw):
     if op == 'reload':
         if isinstance(b.sup, _proc.SocketSupervisor):
             # socket 会话：代理 control/restart（保历史换代，任务 dsuqbi）
-            b.note_activity()
             return _agentd_control_proxy(
                 b, "restart", "user /reload via socket session")
-        b.note_activity()   # 去保活：主动操作计在场/空闲时钟（任务 ja0vr7）
         r = b.sup.reload()
         if not r.get("ok"):
             return _j({"ok": False,
@@ -371,12 +369,10 @@ def interp(store, op='', session='', cmd='', **kw):
         if isinstance(b.sup, _proc.SocketSupervisor):
             # socket 会话：代理 control/clear（弃历史换代：杀进程→备份→截断→空白新代，
             # 任务 dsuqbi）；跨机参与者维持拒绝（建桥咽喉 + 代理内纵深校验）。
-            b.note_activity()
             return _agentd_control_proxy(
                 b, "clear", "user /clear via socket session")
         # 保留会话路径、清空全部内容：杀会话进程→截断 jsonl 到 0 + 去 replica 标记→立即重拉（顺序在
         # Supervisor.clear 内保证：先杀透再删，防旧进程把内存历史回写）。
-        b.note_activity()   # 去保活：主动操作计在场/空闲时钟（任务 ja0vr7）
         r = b.sup.clear()
         if not r.get("ok"):
             return _j({"ok": False,

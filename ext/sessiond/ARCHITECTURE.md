@@ -24,7 +24,7 @@ HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接�
 
 启动前清场同文件的残留 web 宿主，保留 environ 标记与进程身份交叉校验。环境清洗单点为调用方的 `agentd/envscrub.py`；声明者的 profile 在清洗后显式注入。
 
-空闲扫描只回收无订阅、无进行中回合、无待答 dialog，且活动时间与历史文件 mtime 均已老化的交互会话。取得进程操作锁后重新检查活动条件。agentd 进程的生命周期由 agentd 管理。
+浏览器关闭或断开只释放订阅，交互进程由 web 继续持有。重新打开连接原进程；原进程已退出时，明确访问从历史启动新代。进程停止由删除会话、reload/clear、进程自身退出或 web 宿主结束触发。agentd 进程的生命周期由 agentd 管理。
 
 ## 3. 桥接与请求
 
@@ -110,7 +110,7 @@ reload/clear 写入该参与方 control 请求并等待回执；进程操作由 
 
 ### 11.3 运行状态
 
-agent_start 标记进行中，agent_settled 标记回合结束；get_state 校准运行状态。回合进行中禁止空闲回收。
+浏览器使用 agent_start、agent_settled 与 get_state 渲染回合状态。
 
 ### 11.4 Dialog
 

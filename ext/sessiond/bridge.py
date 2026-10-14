@@ -14,8 +14,6 @@ log = logging.getLogger("sessiond-bridge")
 
 RING_MAX = int(os.environ.get("SESSIOND_BRIDGE_RING", "2000"))
 MAX_STREAMS_PER_BRIDGE = int(os.environ.get("SESSIOND_BRIDGE_MAXSTREAMS", "5"))
-IDLE_TIMEOUT = float(os.environ.get("SESSIOND_IDLE_TIMEOUT", "900"))
-IDLE_SCAN_INTERVAL = float(os.environ.get("SESSIOND_IDLE_SCAN", "60"))
 ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
 COMMANDS_TIMEOUT = 10.0     # get_commands 往返超时（秒，任务 a16jpj）
 INSPECT_TIMEOUT = 15.0      # 探针转储往返超时（秒，任务 s0f1la）
@@ -40,7 +38,6 @@ class Bridge:
         self._site_path = session_path
         self.session = None
         self.terminated = False
-        self.busy = False
         self.lock = threading.Lock()
         self.cond = threading.Condition(self.lock)
         self.ring = deque(maxlen=RING_MAX)   # (seq, eid, obj)
@@ -56,7 +53,6 @@ class Bridge:
         # 桥接不清理会让 attach 基线向新 tab 重建已死 dialog → 按 deadline 清理）
         self._dialog_deadline = {}
         self.subscribers = 0                 # 当前 SSE 流订阅数
-        self.last_activity = time.monotonic()  # 最近一次活动（在场判定/空闲回收，去保活）
         # 监督员选择（任务 ybzvbn，票 hegipc）：sock_path 在场 = rpc 封装形态任务，
         # SocketSupervisor 连接透传 socket（无杀权、不重拉）；否则普通 Supervisor spawn。
         if sock_path:
@@ -70,12 +66,6 @@ class Bridge:
             self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest,
                                         cwd=cwd, profile=profile)
         self.session = self.sup.name         # 展示名以监督员解析为准
-
-    def note_activity(self):
-        """记录会话活动时刻（去保活）：调用点 = attach 基线/上行命令/commands/inspect（本模块）
-        与 reload/clear（rpc/api.py 补记）。在场判定与空闲回收共享。"""
-        with self.lock:
-            self.last_activity = time.monotonic()
 
     def _socket_lost(self):
         """透传连接断（任务收敛/被杀，任务 ybzvbn）：标记终结（iter_events 停流 →
@@ -129,16 +119,6 @@ class Bridge:
             if expired:
                 self._broadcast_dialog_resolved(expired, timeout=True)
                 expired = []
-            if t == "agent_start":
-                with self.lock:
-                    self.busy = True
-            elif t in ("agent_settled", "sessiond.session_dormant", "sessiond.session_restarted"):
-                with self.lock:
-                    self.busy = False
-            elif t == "response" and obj.get("command") == "get_state" and obj.get("success"):
-                data = obj.get("data") or {}
-                with self.lock:
-                    self.busy = bool(data.get("isStreaming") or data.get("isCompacting"))
             if t == "response" and isinstance(obj.get("id"), str):
                 waiter = None
                 with self.lock:
@@ -213,17 +193,9 @@ class Bridge:
 
     def send(self, cmd_obj):
         """向会话发一条命令。返回错误串或 None。"""
-        self.note_activity()
-        self.sup.ensure_started()   # 懒态复活：去保活后崩溃转懒态的会话经此拉起（幂等）
+        self.sup.ensure_started()   # Explicit access restarts an exited generation.
         if not self.sup.wait_ready():
-            # 懒态复活是**异步**的（监督线程 spawn，最坏含旧宿主清场宽限 15s+3s），
-            # 不等就位就写 stdin ⇒ proc 仍是 None ⇒ 复活后的第一条命令被丢。一手代价
-            # （2026-10-13 现网实录，会话 lofk 于 00:16 idle-reaped 转 dormant）：
-            #   09:37:41,789 op=cmd {"type":"prompt",...} → ,796 RESP 403（7ms）
-            #   09:37:41,811 spawned gen=15 —— 复活落在拒绝**之后**，用户那条 prompt
-            #   凭空消失（前端输入框已清空，只留一行 sysLine err）。
-            # 口径与 get_entries/get_commands/inspect 一致（都 ensure_started + wait_ready）；
-            # 已在跑 ⇒ wait_ready 立即返回 True，常规路径零额外开销。
+            # Startup is asynchronous; wait before sending the first command.
             return ("session process not ready in time (state=%s)"
                     % self.sup.state)
         t = cmd_obj.get("type")
@@ -299,7 +271,6 @@ class Bridge:
         返回 {"ok": True, "resp": <pi response>, "watermark": <响应行 eid>,
         "gen": <会话进程世代>}；失败返回 {"ok": False, "error": ...}。
         """
-        self.note_activity()
         self.sup.ensure_started()
         if not self.sup.wait_ready():
             return {"ok": False,
@@ -337,7 +308,6 @@ class Bridge:
         skill）；仅列出注册了斜杠命令的 extension（只注册工具/事件钩子的不出现）。
         成功 {"ok": True, "commands": [...]}；失败 {"ok": False, "error": ...}。
         """
-        self.note_activity()
         self.sup.ensure_started()
         if not self.sup.wait_ready():
             return {"ok": False,
@@ -385,7 +355,6 @@ class Bridge:
         成功 {"ok": True, "doc": <转储文档>}；失败 {"ok": False, "error": ...}。
         转储文档内 ok:False = 探针 handler 内部异常（带 error 字段）。
         """
-        self.note_activity()
         self.sup.ensure_started()
         if not self.sup.wait_ready():
             return {"ok": False,
@@ -578,85 +547,4 @@ def _get_bridge_locked(entry, store=None):
                 raise ValueError("session is not registered with agentd")
             _BRIDGES[key] = b
             b.sup.ensure_started()
-            _ensure_idle_reaper()
         return b
-
-
-# ----------------------------------------------------------------
-# 空闲回收扫描器（去保活，任务 ja0vr7，设计 du44uj §1.2.3）
-#
-# web 进程级单守护线程：周期扫 _BRIDGES，对「运行中 ∧ 无订阅 ∧ 空闲超阈」的普通会话
-# 优雅杀进程转懒态（重开复活）；否则开过一次的会话活到 web 重启 = 变相保活。
-# 排除 SocketSupervisor（socket 模式生命周期属 agentd，断连自有终结路径）。
-# 双条件防误杀：距最近活动 > IDLE_TIMEOUT（含无上行 cmd）∧ jsonl mtime 老化 > IDLE_TIMEOUT
-#（防杀进行中的回合）。
-
-def _idle_scan():
-    if IDLE_TIMEOUT <= 0:
-        return
-    now = time.monotonic()
-    with _BRIDGES_LOCK:
-        items = list(_BRIDGES.items())
-    for _key, b in items:
-        sup = b.sup
-        if isinstance(sup, _proc.SocketSupervisor):
-            continue
-        with b.lock:
-            if b.subscribers > 0 or getattr(b, "busy", False):
-                continue
-            if now - b.last_activity < IDLE_TIMEOUT:
-                continue
-        # 阻塞在未答 dialog 的会话 = **在等用户**，⛔ 不是空闲（上面三条空闲判据它全中：
-        # 用户关了 tab ⇒ 无订阅；等答题 ⇒ 无上行活动；不写盘 ⇒ jsonl mtime 老化）。
-        # 杀它 = 不可逆地销毁问题：pi 侧 dialog Promise 随进程死，respawn 广播的
-        # `sessiond.session_restarted` 清空 pending_dialogs（0830-1104-eji4 的正确语义：
-        # 重放已死 dialog 会让应答无处可去）⇒ 重挂接的基线再也带不出它，jsonl 只留
-        # 一个没有 toolResult 的 toolCall，agent 侧结算成「无答复」。
-        # 代价（已裁接受）：pi 只在请求自带 `timeout` 时自动结算（pi docs/rpc.md「Extension
-        # UI Protocol」）⇒ 无 timeout 的 dialog 会让该进程活到答题 ∨ 会话被删（个人单用户面，
-        # ⛔ 不为此加 TTL 常量）。
-        if b.pending_dialog_list():      # 自带超时清扫 + 结算广播；⛔ 不得持 b.lock 调（非重入锁）
-            continue
-        try:
-            # 会话仍在干活（近阈值内有写入）→ 不回收；文件尚不存在（pi 懒落盘，
-            # 无任何写入）也算空闲——否则从未写过盘的会话永不被回收。
-            if time.time() - os.path.getmtime(sup.session_file) < IDLE_TIMEOUT:
-                continue
-        except OSError:
-            pass
-        with sup._cond:
-            if sup.state != "running" or sup.proc is None:
-                continue
-        log.info("idle reap candidate: %s (no subscribers, idle >%.0fs)",
-                 b.session, IDLE_TIMEOUT)
-        def eligible():
-            with b.lock:
-                return (not getattr(b, "busy", False) and b.subscribers == 0
-                        and time.monotonic() - b.last_activity >= IDLE_TIMEOUT)
-        sup._idle_reap(eligible=eligible)
-
-
-def _idle_reaper_loop():
-    while True:
-        time.sleep(IDLE_SCAN_INTERVAL)
-        try:
-            _idle_scan()
-        except Exception:
-            log.exception("idle scan failed")
-
-
-_REAPER_LOCK = threading.Lock()
-_REAPER_STARTED = False
-
-
-def _ensure_idle_reaper():
-    """幂等启动空闲回收扫描线程（首个桥接建立时拉起）。"""
-    global _REAPER_STARTED
-    with _REAPER_LOCK:
-        if _REAPER_STARTED or IDLE_TIMEOUT <= 0:
-            return
-        _REAPER_STARTED = True
-    threading.Thread(target=_idle_reaper_loop, name="sessiond-idle-reaper",
-                     daemon=True).start()
-    log.info("idle reaper started (timeout=%.0fs scan=%.0fs)",
-             IDLE_TIMEOUT, IDLE_SCAN_INTERVAL)

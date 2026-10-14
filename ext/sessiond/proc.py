@@ -894,16 +894,6 @@ class Supervisor:
                 return {"ok": False, "pid": pid, "state": self.state, "error": str(exc)}
             return {"ok": True, "pid": pid, "state": self.state}
 
-    def _idle_reap(self, eligible=None):
-        with self._op_lock:
-            if self._closed or self.state != "running":
-                return
-            if eligible is not None and not eligible():
-                return
-            self._stop_locked()
-            self._broadcast({"type": "sessiond.session_dormant",
-                             "session": self.name, "reason": "idle"})
-
     def wait_ready(self, timeout=25.0):
         deadline = time.monotonic() + timeout
         with self._cond:

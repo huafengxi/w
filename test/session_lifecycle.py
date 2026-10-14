@@ -33,7 +33,6 @@ class LifecycleTests(unittest.TestCase):
         self.patchers = [patch.object(P, 'WS', str(self.root)),
                          patch.object(P, 'WS_REAL', str(self.root)),
                          patch.object(P, 'find_hosts', return_value=[]),
-                         patch.object(B, '_ensure_idle_reaper'),
                          patch.object(B, '_BRIDGES', {})]
         for patcher in self.patchers:
             patcher.start()
@@ -226,20 +225,6 @@ for line in sys.stdin:
         self.assertTrue(gap)
         self.assertEqual(seq, b.ring[0][0] - 1)
 
-    def test_active_turn_prevents_idle_reap(self):
-        b = self.channel()
-        b._ingest({'type': 'agent_start'})
-        b.last_activity = time.monotonic() - 100
-        b.sup.proc = object()
-        b.sup.state = 'running'
-        with patch.object(B, '_BRIDGES', {'test': b}), patch.object(B, 'IDLE_TIMEOUT', 1), \
-                patch.object(b.sup, '_idle_reap') as reap:
-            B._idle_scan()
-            reap.assert_not_called()
-        b.sup.proc = None
-        b._ingest({'type': 'agent_settled'})
-        self.assertFalse(b.busy)
-
     def test_stream_closed_before_iteration_releases_subscriber(self):
         b = self.channel()
         with patch.object(B, 'get_bridge', return_value=b):
@@ -248,6 +233,27 @@ for line in sys.stdin:
         iterator.close()
         iterator.close()
         self.assertEqual(b.subscribers, 0)
+
+    def test_disconnect_keeps_process_and_reconnect_reuses_generation(self):
+        store = RootStore([('/', DirStore(str(self.root)))])
+        (self.root / 'chat.agent').write_text(json.dumps({'host': 'test', 'cwd': str(self.root)}))
+        b = B.get_bridge('/chat.agent', store=store)
+        try:
+            self.assertTrue(b.sup.wait_ready(2))
+            generation, process = b.sup.gen, b.sup.proc
+            _, events = stream.interp(store, session='/chat.agent')
+            next(events)
+            events.close()
+            self.assertEqual(b.subscribers, 0)
+            self.assertIsNone(process.poll())
+            connected = B.get_bridge('/chat.agent', store=store)
+            baseline = connected.get_entries(timeout=2)
+            self.assertTrue(baseline['resp']['success'])
+            self.assertIs(connected.sup.proc, process)
+            self.assertEqual(connected.sup.gen, generation)
+            self.assertEqual(len(self.processes), 1)
+        finally:
+            self.assertTrue(B.drop_session('/chat.jsonl')['killed'])
 
     def test_shared_stream_limit_including_proxy_handlers(self):
         slots = threading.BoundedSemaphore(1)

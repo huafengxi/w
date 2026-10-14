@@ -1,23 +1,8 @@
 #!/usr/bin/env python3
-"""dormant_send_revive.py — 懒态（dormant）会话的**上行首条命令**必须等复活就位再写。
+"""Sending to an exited session waits for explicit restart before writing stdin.
 
-钉住的不变量（一手代价 = 2026-10-13 现网实录，web.log）：
-  会话 lofk 于 00:16:31 被 `_idle_scan` 回收转 dormant；09:37:41,789 用户在聊天窗敲下第一条
-  消息 → `op=cmd {"type":"prompt"}` → ,796 **RESP 403**（7ms）→ ,811 才 `spawned gen=15`。
-  即：`Bridge.send` 只 `ensure_started()`（异步起监督线程）就立刻写 stdin，此刻 `proc is None`
-  ⇒ 命令被丢，前端输入框已清空（只留一行 sysLine err）⇒ 用户视角「第一条消息凭空消失」。
-
-  ① dormant + 复活有延迟 ⇒ `send` **等就位**、命令落到 stdin（返回 None）；
-  ② 复活永不就位（超时）⇒ 返回**错误串**（不静默丢：前端有 sysLine/队列面板标错可依据）；
-  ③ 已在跑 ⇒ 直通、**不额外等待**（常规路径零开销，wait_ready 立即 True）；
-  ④ 永久关闭（closed）⇒ 立即错误串，不空等满超时窗。
-
-自包含：夹具 = 自建 stub 桥接/监督员 + `B.Bridge.send.__get__(stub)` 借用**真实现**
-（⛔ 不是二次实现）；⛔ 不经 `get_bridge` ⇒ 不拉起真实会话进程、⛔ 不启动模块级 reaper
-线程、⛔ 不写 ~/m/run、⛔ 不打现网 8080。
-
-运行：cd ~/m/w && python3 test/dormant_send_revive.py
-Expect: ALL PASS, exit code 0（任一断言失败 → 非 0 退出码）
+Run: ~/miniconda3/bin/python3 w/test/dormant_send_revive.py
+Isolated stubs; no production process or file is touched.
 """
 import os
 import sys
@@ -99,14 +84,12 @@ class StubBridge:
         self.lock = threading.Lock()
         self.cond = threading.Condition(self.lock)
         self.subscribers = 0
-        self.last_activity = time.monotonic()
         self.ring = []
         self.sup = sup
         self.pending_dialogs = {}
         self._dialog_deadline = {}
         self._seq = 0
         self.send = B.Bridge.send.__get__(self)
-        self.note_activity = B.Bridge.note_activity.__get__(self)
 
     def _append(self, obj):
         with self.lock:
