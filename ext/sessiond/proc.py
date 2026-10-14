@@ -292,8 +292,7 @@ def pi_binary():
 # 进程面（杀 Supervisor）归 `bridge.drop_session`；本层只管文件系统面与校验。
 
 SESSIONS_SUBDIR = ("run", "sessiond")   # 宿主本地运行时区（⛔ 不入 git / 不同步）
-CC_PROFILE = "command-center"           # `create_cc_session` 的缺省 profile（客户端可指名，
-                                        # 但只放行 form: interactive 的清单 = validate_profile）
+CC_PROFILE = os.environ.get('W_SESSION_PROFILE')  # caller-owned default; validated as interactive
 PROFILE_CWD_DEFAULT = "."               # 清单未声明 `cwd` 时的缺省（= 工作区根）
 SESSION_NAME_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SESSION_NAME_ALPHABET = string.ascii_lowercase + string.digits
@@ -987,11 +986,7 @@ class Supervisor:
         dist/core/session-manager.js open()；项目级扩展发现只查 <cwd>/.pi 无向上回溯：
         dist/core/package-manager.js projectBaseDir）——首帧 cwd 与宿主拉起 cwd 不一致时
         （典型：文件由旧代码在子目录创建、.agent 后改显式 cwd）项目资源整个不加载。
-        **dated 归因**：当初的一手事故（2026-09-01 dev-dispatcher：agentd 扩展不加载 →
-        receiver/dispatch 工具全无）已随 agentd 扩展迁进**全局装载面**
-        `pi-core/agent/extensions/agentd/`（自动发现、cwd 无关；工具可用性改由 profile
-        白名单 gate）而不再成立 ⇒ 本对齐**现在保的是项目 `AGENTS.md` 与项目级扩展的
-        加载一致性**，⛔ 不再是 agentd 工具的加载前提。
+        本对齐保持项目 `AGENTS.md` 与项目级扩展的加载一致性。
         拉起前把首帧 cwd 改写为 self.cwd（其余行不动，
         临时文件+rename 原子落盘）。调用时机 = 串行启动操作内、旧宿主已清场、本线程独占，
         无并发写者。.jsonl 直开（缺省 cwd=dirname）首帧本就等于 dirname，无行为变化。"""
@@ -1033,7 +1028,7 @@ class Supervisor:
         os.makedirs(self.cwd, exist_ok=True)
         os.makedirs(os.path.dirname(self.session_file), exist_ok=True)
         # 接管 replica 文件（任务 4l3de8）：不经 clear 直接托管的会话文件可能是被远端
-        # pull 复活的副本（组=replica，如 2026-08-31 mac-dispatcher 事故现场）——宿主是
+        # pull 复活的副本（组=replica）——宿主是
         # 单写者，拉起前升格本机原件，否则活文件会被远端旧副本覆盖、本机写入也不进 push。
         if os.path.exists(self.session_file):
             _claim_origin(self.session_file)

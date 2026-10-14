@@ -3,7 +3,7 @@
 dav-server.py PORT [LOG_FILE]
 
 Standalone WebDAV server exposing the RootStore from w/fstab.
-Auth + SSL come from wsgi.run_wsgi (BasicAuth, ~/.auth/*).
+Auth + TLS come from wsgi.run_wsgi (W_AUTH_FILE, W_TLS_CERT/W_TLS_KEY).
 
   log=info ./dav-server.py 8081
   nossl=1 log=debug ./dav-server.py 8081

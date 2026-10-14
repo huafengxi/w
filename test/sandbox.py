@@ -12,6 +12,7 @@ WS = os.path.join(BASE, 'workspace')
 os.makedirs(WS)
 os.symlink(str(Path(__file__).resolve().parents[1]), os.path.join(WS, 'w'))
 os.environ['W_WORKSPACE'] = WS
+os.environ['W_SESSION_PROFILE'] = 'command-center'  # synthetic test manifest name
 # Caller supplies the read-only agentd dependency (envscrub and safe_delete).
 if os.environ.get('W_AGENTD_DIR'):
     sys.path.insert(0, os.environ['W_AGENTD_DIR'])

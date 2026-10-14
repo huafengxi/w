@@ -17,6 +17,7 @@
 | `W_PROXY_ROUTES` | 可选，绝对路由文件；未设置关闭代理；指定但不可读或非法时抛配置错误，启动拒启，热加载请求失败 |
 | `W_HOST_ID_FILE` | 本机 hostname 到调用方规范名的映射文件，每行两列；代理缺映射使用 hostname，sessiond 缺映射拒绝打开受宿主约束的会话 |
 | `RSH_FWD_DIR` | 路由使用 `${RSH_FWD_DIR}` 时必填绝对 socket 目录 |
+| `W_SESSION_PROFILE` | 调用方的缺省交互 profile 名；未设置时新建须显式传 profile，仍验证 manifest 的 interactive 白名单 |
 | `W_AGENTD_DIR` | 使用 sessiond 时必填，提供 `envscrub` 模块的绝对目录；身份洗刷由该模块负责 |
 | `W_ORG_LOAD_PATH` | 可选，以路径分隔符连接的 Emacs 包目录 |
 | `W_ORG_AUTHOR` / `W_ORG_EMAIL` / `W_REVEAL_ROOT` | 可选，org 导出元数据和 reveal 资源 URL |
