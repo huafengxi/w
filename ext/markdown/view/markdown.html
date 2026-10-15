@@ -23,6 +23,20 @@
       .iframe-preview iframe { display: block; height: 4em; max-height: 80vh; }
     </style>
     <script type="application/javascript">
+      // src is a server-side store path; pathname may additionally carry a proxy
+      // route. Keep that route on the RPC URL, never in the shell's file path.
+      var cmdSource = (function () {
+         try {
+            var args = $ARGS_JSON;
+            if (args && typeof args.src === 'string' && args.src) return args.src;
+         } catch (e) {} // Unsubstituted/static view: retain direct-open behavior.
+         return window.location.pathname;
+      })();
+      var cmdPrefix = (function () {
+         var p = window.location.pathname, s = cmdSource;
+         return (p.length > s.length && p.slice(p.length - s.length) === s)
+            ? p.slice(0, p.length - s.length) : '';
+      })();
       function toggle_editor() { toggleVisible($('editor')); }
       function dirname(path) { return path.match(/.*\//);  }
       function getTitle(content) {
@@ -76,7 +90,7 @@
          function run(done){
             outText = ''; logText = ''; buf = '';
             result.innerHTML = ''; log.textContent = ''; hide(log); // stays collapsed; on_done shows it only if stderr arrived
-            rpc_stream('/w/ext/shell/rpc/sh.py', {v: 'script', src: getUrl(), cmd: w.cmd, stream: 2},
+            rpc_stream(cmdPrefix + '/w/ext/shell/rpc/sh.py', {v: 'script', src: cmdSource, cmd: w.cmd, stream: 2},
                function(text){
                   buf += text; var i;
                   while ((i = buf.indexOf('\n')) >= 0) {
