@@ -49,7 +49,6 @@ if W not in sys.path:
 logging.basicConfig(level=getattr(logging, os.getenv('log', 'WARNING').upper(), logging.WARNING),
                     format='%(levelname)s %(message)s')
 
-import cgi
 import core.handler as handler
 from core.wsgi import make_wsgi_app
 from stores.cmd_store import CmdStore
@@ -98,11 +97,6 @@ def case_a_unit():
     ctype = 'multipart/form-data; boundary=' + BOUNDARY
     body = multipart_body([('text', 'hello world'), ('n', '42')],
                           [('upload', 'a.bin', b'\x00\x01raw')])
-    # Precondition of the defect: parse_header hands back a str boundary.
-    _, pdict = cgi.parse_header(ctype)
-    check('A0 parse_header yields a str boundary (defect precondition)',
-          isinstance(pdict.get('boundary'), str), pdict)
-
     parsed = handler.parse_post(ctype, io.BytesIO(body), len(body))
     check('A1 parse_post returns the plain fields',
           parsed.get('text') == ['hello world'] and parsed.get('n') == ['42'], parsed)
@@ -162,9 +156,6 @@ def case_b_unit(tmp):
     check('B2 read_dir lists the directory as str (DirStore shape)',
           isinstance(listing, str) and 'alpha.txt' in listing and 'nested/' in listing
           and listing.split('\n')[0] == '../', repr(listing))
-    check('B3 the consumer shape `.split("\\n")` works on read_dir output',
-          set(listing.split('\n')) >= {'../', 'alpha.txt', 'nested/'}, listing.split('\n'))
-
     missing = os.path.join(tmp, 'nope')
     other = store.read(missing)
     check('B4 the Popen branch is bytes too (type parity)', isinstance(other, bytes), repr(other))

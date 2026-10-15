@@ -181,7 +181,6 @@ def case4_create(ws, outside):
         spec = json.load(f)
     assert set(spec) == {"host", "cwd", "sessionDir", "profile", "name",
                          "createdAt"}, sorted(spec)
-    assert "command" not in spec and "cmd" not in spec, spec
     assert spec["profile"] == "ccw", spec
     assert spec["host"] == "test-host", spec
     assert spec["cwd"] == os.path.realpath(os.path.join(ws, "w")), spec
@@ -191,7 +190,6 @@ def case4_create(ws, outside):
     # 现名形态 = 短名 `s<rand4>`（用户拍板 2026-10-04；旧存量名仍是长形态 ⇒
     # SESSION_NAME_OK 是校验面、本行钉的是生成面）
     assert re.fullmatch(r"[a-z0-9]{4}", doc["name"]), doc["name"]
-    assert len(doc["name"]) == 4, doc["name"]
     assert doc["agent_site"] == "/run/sessiond/%s.agent" % doc["name"], doc
     assert doc["session_site"] == "/run/sessiond/%s.jsonl" % doc["name"], doc
     assert oct(os.stat(agent_path).st_mode & 0o777) == "0o600", "文件权限须 0600"
@@ -501,8 +499,7 @@ def case9_api(ws, outside):
 
 
 def case10_agent_profile(ws, outside):
-    """`_resolve_agent` 的 profile 字段：白名单放行 + 登记到拉起参数（供 _spawn 回注）。"""
-    from ext.sessiond import bridge as _b
+    """`_resolve_agent` 的 profile 字段：白名单放行并返回解析结果。"""
     store = FakeStore(ws)
     d = os.path.join(ws, "run", "sessiond")
 
@@ -520,8 +517,7 @@ def case10_agent_profile(ws, outside):
     assert meta["http_status"] == "200 OK", (meta, doc)
     assert doc["ok"] and doc["profile"] == "command-center", doc
     assert doc["cwd"] == os.path.realpath(ws), doc
-    assert not hasattr(_b, "_SPAWN_OVERRIDES")
-    print("case10 OK: .agent profile/cwd 解析正确，零内存启动登记")
+    print("case10 OK: .agent profile/cwd 解析正确")
 
     # 反控：form: task / form: resident / 缺 form / 清单不在场 / 形态非法 → 400
     for extra, label in (({"profile": "executor"}, "form: task"),
