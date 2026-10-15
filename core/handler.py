@@ -79,7 +79,10 @@ def run_script(store, path, args):
         response_part_file=response_part_file, build_dict=build_dict,
         run_script=run_script,
     )
-    exec(compile(store.read(path), path[1:], mode='exec'), ns)
+    rpath = (store.head(path) or {}).get('rpath')
+    if rpath:
+        ns['__file__'] = rpath
+    exec(compile(store.read(path), rpath or path, mode='exec'), ns)
     output = ns['interp'](store, **args)
     if type(output) != tuple:
         return dict(type='text/plain'), output

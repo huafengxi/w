@@ -92,6 +92,8 @@ script 分布在 `core/rpc/` (核心只读 rpc，如 `core_read.py`) 与
 `ext/media/rpc/album_rpc.py` 里 `from ext.media.album import AlbumDB`)，
 没有额外的注册步骤。
 
+本地文件脚本的 `__file__` 取 store 元数据 `rpath`，编译诊断使用同一路径；无本地映射的 store 使用虚拟路径作诊断，不注入 `__file__`。脚本按自身位置访问相邻文件，不依赖服务 cwd；标准库依赖可显式导入。
+
 `interp` 的返回值应该是 `(meta, content_iterator)` 的 tuple，也可以只是一个
 字符串，字符串会按 `text/plain` 处理。
 
