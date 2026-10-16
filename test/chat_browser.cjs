@@ -47,8 +47,26 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await page.locator('#promptInput').inputValue(),draft);
   await page.evaluate(()=>handleEvent({type:'agent_settled'}));
   assert.equal(await page.locator('#chatStatus').getAttribute('aria-label'),'已成功完成');
-  await page.locator('#chatStatus').tap({force:true}).catch(()=>page.locator('#chatStatus').click());
-  assert.equal(await page.locator('#flashNotice').textContent(),'已成功完成');
+  await page.evaluate(()=>{
+   window.sentPrompts=[];
+   api=async(op,x)=>{if(op==='cmd')window.sentPrompts.push(JSON.parse(x.cmd));return {ok:true};};
+  });
+  await page.locator('#promptInput').fill('click to send');
+  await page.locator('#chatStatus').click();
+  assert.equal(await page.locator('#promptInput').inputValue(),'');
+  assert.deepEqual(await page.evaluate(()=>window.sentPrompts.map(c=>[c.type,c.message])),[['prompt','click to send']]);
+  assert.equal(await page.locator('#chatStatus').getAttribute('data-state'),'busy');
+  await page.locator('#promptInput').fill('click while busy');
+  await page.locator('#chatStatus').click();
+  assert.deepEqual(await page.evaluate(()=>window.sentPrompts.map(c=>[c.type,c.message])),
+   [['prompt','click to send'],['follow_up','click while busy']]);
+  await page.locator('#chatStatus').click();
+  assert.equal(await page.evaluate(()=>window.sentPrompts.length),2,'empty click does not send');
+  await page.evaluate(()=>{pendingImages=[{b64:'aW1hZ2U=',mime:'image/png'}];renderAttachBar();});
+  await page.locator('#chatStatus').click();
+  assert.deepEqual(await page.evaluate(()=>window.sentPrompts[2].images),
+   [{type:'image',data:'aW1hZ2U=',mimeType:'image/png'}]);
+  assert.equal(await page.evaluate(()=>pendingImages.length),0);
   await page.locator('#promptInput').fill('single line');
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const before=await page.locator('#chatStatus').boundingBox();
@@ -63,6 +81,6 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await page.locator('#promptInput').evaluate(e=>parseFloat(getComputedStyle(e).paddingRight)),44);
   if(process.env.CHAT_SCREENSHOT) await page.screenshot({path:process.env.CHAT_SCREENSHOT});
   assert.deepEqual(errors,[]);
-  console.log('ALL PASS: Chromium mobile layout, batch recall, edit/cancel/busy, terminal icon and tap explanation');
+  console.log('ALL PASS: Chromium mobile layout, batch recall, edit/cancel/busy, terminal icon and click-to-send prompt/queue/images/empty');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
