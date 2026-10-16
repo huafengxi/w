@@ -22,8 +22,15 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await page.getByRole('button',{name:'全部撤回',exact:true}).click();
   assert.equal(await page.locator('#promptInput').inputValue(),'draft\n\nreturned one\n\nreturned two');
   const draft=await page.locator('#promptInput').inputValue();
-  await page.getByRole('button',{name:'编辑并重新生成',exact:true}).click();
+  const editButton=page.getByRole('button',{name:'编辑并重新生成',exact:true});
+  assert.equal(await editButton.textContent(),'');
+  assert.equal(await editButton.locator('svg').count(),1);
+  const bubble=await page.locator('.role-user').boundingBox();
+  const icon=await editButton.boundingBox();
+  assert(icon.x>=bubble.x && icon.x+icon.width<=bubble.x+34,'edit icon stays in left gutter');
+  await editButton.click();
   await page.locator('#editBanner').waitFor({state:'visible'});
+  assert.equal(await page.locator('#promptInput').evaluate(e=>document.activeElement===e),true);
   assert.equal(await page.locator('#promptInput').inputValue(),'historical user text');
   await page.evaluate(()=>{handleEvent({type:'agent_start'});handleEvent({type:'agent_end'});});
   assert.equal(await page.locator('#chatStatus').getAttribute('data-state'),'busy');

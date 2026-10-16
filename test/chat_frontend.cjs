@@ -27,7 +27,7 @@ function harness() {
       removeChild(n) { this.children = this.children.filter(x => x !== n); n.parentNode = null; },
       remove() { if (this.parentNode) this.parentNode.removeChild(this); },
       setAttribute(k, v) { this[k] = v; },
-      focus() {}, addEventListener() {}, querySelectorAll() { return []; },
+      focus() {}, scrollIntoView() {}, addEventListener() {}, querySelectorAll() { return []; },
       getBoundingClientRect() { return {top: 100}; },
     };
   }

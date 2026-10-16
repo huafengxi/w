@@ -67,7 +67,7 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 /* 用户消息靠右（聊天惯例）：浅蓝底区分；无粗边条（任务 0829-2131-pdop
    inbox r3gt：整页所有消息块统一普通 1px 圆角边框） */
 .role-user { background: #ddf4ff; border: 1px solid #b6e3ff;
-  padding: 6px 10px; border-radius: 8px;
+  position: relative; padding: 6px 10px 6px 34px; border-radius: 8px;
   white-space: pre-wrap; word-break: break-word; max-width: 80%; margin-left: auto; }
 .md { word-break: break-word; }
 .md p { margin: 4px 0; }
@@ -249,7 +249,11 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 #chatStatus[data-state="success"] { color: var(--ok); }
 #chatStatus[data-state="failed"] { color: var(--err); }
 #editBanner { padding: 6px 16px; font-size: 12px; color: var(--warn); background: var(--panel); }
-.history-edit { margin-left: 8px; font-size: 11px; padding: 1px 6px; }
+.history-edit { position: absolute; left: 4px; top: 4px; width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px; border: 0; background: transparent; color: #576875; cursor: pointer; }
+.history-edit:hover, .history-edit:focus-visible { background: #b6e3ff; border-radius: 4px; }
+.history-edit svg { width: 16px; height: 16px; pointer-events: none; }
 .qp-head button { margin-left: 8px; font-size: 11px; }
 button:disabled { opacity: .5; cursor: default; }
 /* 内容超高时不顶穿视口（任务 8scsjj）：盒子以 bottom:80px 锚定，原先无高度上界
@@ -1713,6 +1717,7 @@ async function beginHistoryEdit(message, entryId) {
     .map(p => ({b64: p.data, mime: p.mimeType, dataUrl: "data:" + p.mimeType + ";base64," + p.data}));
   $("editBanner").classList.remove("hidden"); renderAttachBar(); resizePrompt(); paintChatStatus();
   $("promptInput").focus();
+  $("promptInput").scrollIntoView({block: "nearest"});
 }
 function cancelHistoryEdit() {
   if (!historyEdit || editSubmitting) return;
@@ -2496,7 +2501,9 @@ function renderUserMessage(m, entryId) {
   // Text/bubble click edits; image links retain their existing open-image action.
   d.onclick = ev => { if (ev.target === d) beginHistoryEdit(m, entryId); };
   const edit = document.createElement("button");
-  edit.className = "history-edit"; edit.textContent = "编辑并重新生成";
+  edit.className = "history-edit"; edit.type = "button";
+  edit.title = "编辑并重新生成"; edit.setAttribute("aria-label", "编辑并重新生成");
+  edit.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6Z"/><path d="m14 5 5 5"/></svg>';
   edit.onclick = () => beginHistoryEdit(m, entryId);
   d.appendChild(edit);
   for (const p of imgs) {
