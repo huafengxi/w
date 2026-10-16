@@ -47,7 +47,12 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await page.locator('#chatStatus').getAttribute('aria-label'),'已成功完成');
   await page.locator('#chatStatus').tap({force:true}).catch(()=>page.locator('#chatStatus').click());
   assert.equal(await page.locator('#flashNotice').textContent(),'已成功完成');
+  await page.locator('#promptInput').fill('single line');
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const before=await page.locator('#chatStatus').boundingBox();
+  const singleInput=await page.locator('#promptInput').boundingBox();
+  assert(Math.abs((before.y+before.height/2)-(singleInput.y+singleInput.height/2))<=1,
+    'indicator vertically centered in single-line input');
   await page.locator('#promptInput').fill('first\nsecond\nthird\nfourth');
   const after=await page.locator('#chatStatus').boundingBox();
   const input=await page.locator('#promptInput').boundingBox();

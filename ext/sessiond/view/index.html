@@ -239,11 +239,12 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 .notice.hidden { display: none; }
 #promptInput { flex: 1; background: transparent; color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
-  font: inherit; resize: none; max-height: 120px; }
+  font: inherit; line-height: 20px; resize: none; max-height: 120px; }
 #promptInput:focus { outline: none; border-color: var(--acc); }
 #inputbar { position: relative; }
 #promptInput { padding-right: 44px; min-width: 0; }
-#chatStatus { position: absolute; right: 18px; bottom: 12px; width: 28px; height: 28px;
+#chatStatus { position: absolute; right: 18px; bottom: 3px; width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center; line-height: 1;
   padding: 0; border: 0; background: var(--bg); font-size: 19px; color: var(--dim); }
 #chatStatus[data-state="busy"] { color: var(--acc); animation: waitpulse 1.6s infinite; }
 #chatStatus[data-state="success"] { color: var(--ok); }
