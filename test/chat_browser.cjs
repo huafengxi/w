@@ -27,7 +27,9 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await editButton.locator('svg').count(),1);
   const bubble=await page.locator('.role-user').boundingBox();
   const icon=await editButton.boundingBox();
-  assert(icon.x>=bubble.x && icon.x+icon.width<=bubble.x+34,'edit icon stays in left gutter');
+  assert(icon.x>=bubble.x && icon.x+icon.width<=bubble.x+24,'edit icon stays in compact left gutter');
+  assert.equal(await editButton.locator('svg').evaluate(e=>e.getBoundingClientRect().width),12);
+  assert.equal(await editButton.evaluate(e=>getComputedStyle(e).padding),'0px');
   await editButton.click();
   await page.locator('#editBanner').waitFor({state:'visible'});
   assert.equal(await page.locator('#promptInput').evaluate(e=>document.activeElement===e),true);
