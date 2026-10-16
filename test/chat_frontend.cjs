@@ -35,6 +35,7 @@ function harness() {
     hidden: false,
     getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
     createElement: element,
+    createTextNode(text) { const n = element(); n.textContent = text; return n; },
     addEventListener(name, cb) { listeners[name] = cb; },
     querySelectorAll() { return []; },
   };
@@ -415,6 +416,242 @@ test('historical rejection preserves edited payload, no automatic follow-up', as
   assert.equal(h.run('calls'), 1);
   assert.equal(h.run('historyEdit.entryId'), 'entry-1');
   assert.equal(h.run("$('promptInput').value"), 'new');
+});
+
+function status(h, label, active) {
+  assert.equal(h.run("$('chatStatusText').textContent"), label);
+  assert.equal(h.run("$('chatStatus').title"), label, 'indicator and visible text agree');
+  assert.equal(h.run("$('chatStatus')['aria-label']"), label);
+  if (active !== undefined) assert.equal(h.run('turnActive'), active);
+}
+
+test('run hooks remain starting until an assistant message actually starts or updates', () => {
+  const h = harness();
+  for (const type of ['message_start', 'before_agent_start', 'agent_start']) {
+    h.run(`handleEvent({type:'${type}',message:{role:'user',content:'fixture'}});gapTimerFire();`);
+    status(h, '启动中', true);
+    assert.equal(h.run('waitingEl'), null, 'hooks are not model generation');
+  }
+  h.run("handleEvent({type:'message_start',message:{role:'assistant'}});");
+  status(h, '模型生成中', true);
+  h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'new'}});");
+  status(h, '模型生成中', true);
+});
+
+test('pure text turn_end and agent_end retain visible finalization until settled', () => {
+  const h = harness();
+  h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_start',message:{role:'assistant'}});");
+  status(h, '模型生成中', true);
+  h.run("handleEvent({type:'message_end',message:{role:'assistant',content:'answer',stopReason:'stop'}});handleEvent({type:'turn_end',toolResults:[]});");
+  status(h, '收尾中', true);
+  assert.equal(h.run('waitingEl'), null, 'status does not depend on body Waiting');
+  h.run('gapTimerFire();');
+  status(h, '收尾中', true);
+  h.run("handleEvent({type:'agent_end'});gapTimerFire();");
+  status(h, '收尾中', true);
+  assert.equal(h.run('waitingEl'), null);
+  h.run("handleEvent({type:'agent_settled'});");
+  status(h, '已成功完成', false);
+});
+
+test('current tools, long silence, ask/answer and notify never use old DOM as a phase', () => {
+  const h = harness();
+  h.run(`handleEvent({type:'agent_start'});
+    handleEvent({type:'tool_execution_start',toolCallId:'a',toolName:'bash'});
+    handleEvent({type:'tool_execution_start',toolCallId:'b',toolName:'bash'});gapTimerFire();`);
+  status(h, '工具执行中', true);
+  h.run("handleEvent({type:'tool_execution_end',toolCallId:'a',result:{content:[]}});gapTimerFire();");
+  status(h, '工具执行中', true);
+  h.run("handleEvent({type:'extension_ui_request',id:'ask',method:'confirm',title:'Continue?'});collapseDialog();gapTimerFire();");
+  status(h, '等待用户回答', true);
+  h.run("handleEvent({type:'sessiond.dialog_resolved',id:'ask'});");
+  status(h, '处理中（阶段未知）', true);
+  h.run("handleEvent({type:'tool_execution_end',toolCallId:'b',result:{content:[]}});gapTimerFire();");
+  status(h, '处理中（阶段未知）', true);
+  h.run("handleEvent({type:'extension_ui_request',method:'notify',message:'notice'});");
+  assert.equal(h.run('Object.keys(pendingDialogs).length'), 0);
+  status(h, '处理中（阶段未知）', true);
+  h.run("handleEvent({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'new'}});");
+  status(h, '模型生成中', true);
+});
+
+test('structured current ask_dispatcher wait lasts until its tool ends, not a historical text hint', async () => {
+  const h = harness();
+  h.run(`attached='/test.jsonl';handleEvent({type:'agent_start'});
+    handleEvent({type:'tool_execution_start',toolName:'ask_dispatcher',toolCallId:'ask-call'});
+    handleEvent({type:'tool_execution_update',toolName:'ask_dispatcher',toolCallId:'ask-call',
+      partialResult:{content:[{type:'text',text:'waiting words alone'}]}});`);
+  status(h, '工具执行中', true);
+  h.run(`handleEvent({type:'tool_execution_update',toolName:'ask_dispatcher',toolCallId:'ask-call',
+    partialResult:{details:{agentdWait:{askId:'current-ask',question:'Which option?',recipient:'queue/dispatcher',since:1,deadline:null}}}});
+    handleEvent({type:'tool_execution_update',toolName:'bash',toolCallId:'other',partialResult:{}});gapTimerFire();`);
+  status(h, '等待协调者答复', true);
+  await h.run(`(async()=>{api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});await refreshChatStatus();})()`);
+  status(h, '等待协调者答复', true);
+  h.run("handleEvent({type:'tool_execution_end',toolName:'bash',toolCallId:'other',result:{}});");
+  status(h, '等待协调者答复', true);
+  h.run("handleEvent({type:'tool_execution_end',toolName:'ask_dispatcher',toolCallId:'ask-call',result:{}});gapTimerFire();");
+  status(h, '处理中（阶段未知）', true);
+  h.run("handleEvent({type:'agent_settled'});handleEvent({type:'agent_start'});");
+  status(h, '启动中', true);
+  assert.equal(h.run('statusCoordinatorWaits.size'), 0);
+});
+
+test('retry, compression, errors and queued continuation are phases, not terminal guesses', async () => {
+  const h = harness();
+  h.run(`attached='/test.jsonl';api=()=>new Promise(()=>{});
+    handleEvent({type:'agent_start'});
+    handleEvent({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'old error'}});
+    handleEvent({type:'agent_end',errorMessage:'old error'});`);
+  status(h, '收尾中', true);
+  h.run("handleEvent({type:'auto_retry_start',attempt:1,maxAttempts:3,errorMessage:'old error'});gapTimerFire();");
+  status(h, '自动重试中', true);
+  h.run("handleEvent({type:'auto_retry_end',success:true});");
+  status(h, '处理中（阶段未知）', true);
+  h.run("handleEvent({type:'auto_compaction_start'});gapTimerFire();");
+  status(h, '上下文压缩中', true);
+  h.run("handleEvent({type:'auto_compaction_end'});");
+  status(h, '处理中（阶段未知）', true);
+  h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_end',message:{role:'assistant',stopReason:'stop'}});handleEvent({type:'agent_end'});handleEvent({type:'queue_update',followUp:['next']});");
+  status(h, '收尾中', true);
+  h.run("handleEvent({type:'message_start',message:{role:'user',content:'next'}});");
+  status(h, '启动中', true);
+  h.run("handleEvent({type:'agent_settled'});");
+  status(h, '已成功完成', false);
+  assert.equal(h.run('statusTools.size'), 0);
+  h.run("handleEvent({type:'agent_start'});handleEvent({type:'auto_retry_end',success:false});handleEvent({type:'agent_settled'});");
+  status(h, '最终失败', false);
+  h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_end',message:{role:'assistant',stopReason:'aborted'}});handleEvent({type:'agent_settled'});");
+  status(h, '已停止', false);
+  h.run("handleEvent({type:'agent_start'});gapTimerFire();");
+  status(h, '启动中', true);
+});
+
+test('settled clears current dialogs/tools and a new run cannot inherit a stale phase/error', () => {
+  const h = harness();
+  h.run(`handleEvent({type:'agent_start'});handleEvent({type:'tool_execution_start',toolCallId:'old'});
+    handleEvent({type:'extension_ui_request',id:'old-ask',method:'confirm'});
+    handleEvent({type:'agent_settled'});`);
+  status(h, '已成功完成', false);
+  assert.equal(h.run('Object.keys(pendingDialogs).length + statusTools.size'), 0);
+  h.run("handleEvent({type:'agent_start'});");
+  status(h, '启动中', true);
+});
+
+test('metadata get_state cannot terminate the retry/finally window', () => {
+  const h = harness();
+  h.run(`handleEvent({type:'agent_start'});handleEvent({type:'agent_end'});
+    handleEvent({type:'response',command:'get_state',success:true,data:{isStreaming:false,isCompacting:false,pendingMessageCount:0}});`);
+  status(h, '收尾中', true);
+});
+
+test('each current phase/result/dialog event fences an older authoritative idle response', async () => {
+  for (const event of [
+    "{type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'x'}}",
+    "{type:'message_end',message:{role:'assistant',stopReason:'error'}}",
+    "{type:'tool_execution_end',toolCallId:'a',result:{}}",
+    "{type:'turn_end',toolResults:[]}", "{type:'agent_end'}",
+    "{type:'auto_retry_end',success:true}",
+    "{type:'extension_ui_request',id:'ask',method:'confirm'}",
+    "{type:'sessiond.dialog_resolved',id:'ask'}",
+  ]) {
+    const h = harness();
+    await h.run(`(async()=>{attached='/test.jsonl';handleEvent({type:'agent_start'});
+      showDialog({id:'ask',method:'confirm'});let resolve;api=()=>new Promise(r=>resolve=r);
+      const p=refreshChatStatus();handleEvent(${event});
+      resolve({ok:true,state:'success',busy:false,pendingDialogs:[]});await p;})()`);
+    assert.equal(h.run('chatState'), 'busy', event);
+    assert.equal(h.run('turnActive'), true, event);
+  }
+});
+
+test('latest authoritative request wins, including late errors and replaced connections', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';let resolves=[];api=()=>new Promise((resolve,reject)=>resolves.push({resolve,reject}));
+    const old=refreshChatStatus(), fresh=refreshChatStatus();
+    resolves[1].resolve({ok:true,state:'busy',busy:true,pendingDialogs:[]});await fresh;
+    resolves[0].resolve({ok:true,state:'success',busy:false,pendingDialogs:[]});await old;
+  })()`);
+  status(h, '处理中（阶段未知）', true);
+  await h.run(`(async()=>{let reject;api=()=>new Promise((r,j)=>reject=j);const oldCtrl=new AbortController();streamCtrl=oldCtrl;
+    const p=refreshChatStatus(oldCtrl);streamCtrl=new AbortController();setChatStatus('ready');reject(Error('old connection'));await p;})()`);
+  status(h, '就绪');
+  await h.run(`(async()=>{let resolves=[];api=()=>new Promise((resolve,reject)=>resolves.push({resolve,reject}));
+    const old=refreshChatStatus(),fresh=refreshChatStatus();
+    resolves[1].resolve({ok:true,state:'ready',busy:false});await fresh;
+    resolves[0].reject(Error('old request'));await old;})()`);
+  status(h, '就绪', false);
+});
+
+test('local prompt invalidates in-flight idle snapshot, and its late HTTP failure cannot overwrite new events', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';let resolve,rejectSend;
+    api=(op)=>op==='chat_state'?new Promise(r=>resolve=r):new Promise((r,j)=>rejectSend=j);
+    const p=refreshChatStatus();$('promptInput').value='test';sendPrompt();
+    resolve({ok:true,state:'success',busy:false});await p;
+    handleEvent({type:'agent_start'});rejectSend(Error('old send failure'));await Promise.resolve();await Promise.resolve();})()`);
+  status(h, '启动中', true);
+});
+
+test('local follow-up admission fences an older idle read without resetting the current phase', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';handleEvent({type:'agent_start'});
+    let resolve;api=op=>op==='chat_state'?new Promise(r=>resolve=r):Promise.resolve({ok:true});
+    const p=refreshChatStatus();$('promptInput').value='queue fixture';sendPrompt();
+    resolve({ok:true,state:'success',busy:false,pendingDialogs:[]});await p;})()`);
+  status(h, '启动中', true);
+  assert.equal(h.run('Object.values(pendingSends)[0].cmd.type'), 'follow_up');
+});
+
+test('settled after a busy reconnect reads the final authority rather than inheriting an old outcome', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';stopStream();
+    api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});await refreshChatStatus();
+    api=async()=>({ok:true,state:'failed',busy:false,pendingDialogs:[]});
+    handleEvent({type:'agent_settled'});await Promise.resolve();await Promise.resolve();})()`);
+  status(h, '最终失败', false);
+});
+
+test('late explicit prompt rejection cannot terminate a newer run', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';api=()=>new Promise(()=>{});
+    $('promptInput').value='fixture';sendPrompt();const id=Object.keys(pendingSends)[0];
+    handleEvent({type:'agent_start'});handleEvent({type:'tool_execution_start',toolCallId:'new'});
+    handleEvent({type:'response',command:'prompt',id,success:false,error:'fixture rejection'});})()`);
+  status(h, '工具执行中', true);
+});
+
+test('SSE disconnect/reconnect calibrates phase unknown, restores live dialogs and idle results', async () => {
+  const h = harness();
+  let failRead;
+  h.context.fetch = async () => ({ok:true,body:{getReader:()=>({read:()=>new Promise((r,j)=>{failRead=j;})})}});
+  await h.run(`(async()=>{attached='/test.jsonl';api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});
+    openStream();await Promise.resolve();await Promise.resolve();})()`);
+  status(h, '处理中（阶段未知）', true);
+  h.run("handleEvent({type:'tool_execution_start',toolCallId:'live'});");
+  failRead(Error('fixture disconnected'));
+  for (let i=0;i<8;i++) await Promise.resolve();
+  status(h, '连接状态未知', true);
+  h.run(`api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[{id:'live-ask',method:'confirm'}]});`);
+  h.timers.get(h.run('reconnectTimer'))();
+  for (let i=0;i<8;i++) await Promise.resolve();
+  status(h, '等待用户回答', true);
+  await h.run(`(async()=>{api=async()=>({ok:true,state:'failed',busy:false,pendingDialogs:[]});openStream();
+    await Promise.resolve();await Promise.resolve();})()`);
+  status(h, '最终失败', false);
+  assert.equal(h.run('statusTools.size + Object.keys(pendingDialogs).length'), 0);
+  h.run('gapTimerFire();');
+  status(h, '最终失败', false);
+});
+
+test('busy-only snapshot does not borrow an old error or tool phase; missing authority stays unknown', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';handleEvent({type:'agent_start'});
+    handleEvent({type:'tool_execution_start',toolCallId:'historical'});lastRenderedErrorMsg='old';errorBoxLive=true;
+    api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});await refreshChatStatus();gapTimerFire();})()`);
+  status(h, '处理中（阶段未知）', true);
+  await h.run(`(async()=>{api=async()=>({ok:true});await refreshChatStatus();})()`);
+  status(h, '连接状态未知');
 });
 
 (async () => {

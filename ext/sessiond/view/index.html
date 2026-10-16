@@ -249,6 +249,8 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 #chatStatus[data-state="busy"] { color: var(--acc); animation: waitpulse 1.6s infinite; }
 #chatStatus[data-state="success"] { color: var(--ok); }
 #chatStatus[data-state="failed"] { color: var(--err); }
+#chatStatusText { flex: 0 0 auto; padding: 1px 16px 3px; color: var(--dim);
+  font-size: 12px; line-height: 16px; }
 #editBanner { padding: 6px 16px; font-size: 12px; color: var(--warn); background: var(--panel); }
 .qp-head button { margin-left: 8px; font-size: 11px; }
 button:disabled { opacity: .5; cursor: default; }
@@ -312,6 +314,7 @@ button:disabled { opacity: .5; cursor: default; }
       <button id="editStop" onclick="sendCmd({type:'abort',id:uid()})">停止当前任务</button>
       <span id="editHint"></span>
     </div>
+    <div id="chatStatusText" role="status" aria-live="polite" aria-atomic="true">连接状态未知</div>
     <div id="inputbar">
       <textarea id="promptInput" rows="1" placeholder="Type a prompt or /command, Enter to send (queues automatically while streaming), Shift+Enter for newline"></textarea>
       <button id="chatStatus" type="button" data-state="unknown" aria-label="连接状态未知" title="连接状态未知" onclick="sendPrompt()">◇</button>
@@ -446,7 +449,7 @@ const MD_RENDER_MS = 150;
 let dialogTimer = null;
 let dialogDeadline = 0;
 // Waiting for model 指示（任务 0829-2107-cvdn）：回合进行中但无流式产出时显示；
-// 状态机：user message_start = 回合开始（turnActive），agent_end = 回合结束；
+// 状态机：user message_start = 回合开始（turnActive），agent_settled / 权威空闲 = 回合结束；
 // turn_end 仅是子回合边界——每个 assistant 子回合（含以 tool call 结束的）都发一次，
 // 一次 agent run 发多个、仅一个 agent_end，不清 turnActive（0830-1029-urgg）；
 // 显示时机 = 回合中且无流式产出（用户消息发出后等首个产出、工具执行完成后等下一轮
@@ -548,7 +551,7 @@ function beep(kind) {
 async function attach(name) {
   if (attached === name && streamAlive) return true;
   stopStream();
-  setChatStatus("busy");             // Explicit attach may be starting the process.
+  setChatStatus("busy", "starting"); // Explicit attach may be starting the process.
   clearPendingDialogs();
   baselineGen++;                                    // 旧基线分片渲染立即作废（bw333x）
   $("stream").innerHTML = "";
@@ -568,6 +571,7 @@ async function attach(name) {
   catch (e) {
     // 服务端拒绝原文直接上行（「未登记（无 spec.json）…」「会话进程缺席…」「跨机…」等）。
     sysLine("Attach failed: " + e.message, "err");
+    setChatStatus("unknown");
     return false;
   }
   attached = name;
@@ -748,7 +752,7 @@ async function heal(reason) {
 }
 
 function stopStream() {
-  statusEpoch++; setChatStatus("unknown");
+  statusEpoch++; runOutcome = "unknown"; setChatStatus("unknown");
   streamAlive = false;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (streamCtrl) { try { streamCtrl.abort(); } catch (e) {} streamCtrl = null; }
@@ -787,7 +791,7 @@ function openStream() {
     .catch(e => {
       if (my.signal.aborted) return;      // 主动 abort（被新流顶替/停止）→ 不重连（防孤儿流，0830-1533-56xk）
       if (streamCtrl !== my) return;      // 双保险：已不是当前这一代流，无权发起重连（0830-1533-56xk）
-      statusEpoch++; setChatStatus("unknown");
+      statusEpoch++; runOutcome = "unknown"; setChatStatus("unknown");
       reconnectTimer = setTimeout(openStream, 1500);   // 真断线，静默重连（防刷屏）
     });
 }
@@ -1147,7 +1151,8 @@ function endRetryBox(o) {
 
 // ---------------- Waiting for model 指示（任务 0829-2107-cvdn） ----------------
 function showWaiting() {
-  if (!turnActive || waitingEl) return;         // 幂等：回合外/已显示不重复插
+  if (!turnActive || waitingEl || chatState !== "busy" || chatPhase !== "generating"
+      || statusTools.size || Object.keys(pendingDialogs).length) return;
   const d = document.createElement("div");
   d.className = "ev waiting";
   d.textContent = "Waiting for model\u2026";
@@ -1186,7 +1191,8 @@ function gapTimerFire() {
   if (!turnActive || waitingEl || retryBoxEl) return;
   if (awaitingAgentEnd) return;                            // 收尾窗：只等 agent_end，非等模型
   if (errorBoxLive) return;                                // 错误红框在场：错误即当前态，不误导"等模型"（ilznlp）
-  if (document.querySelector(".tool-block.run")) return;   // 工具执行中：块色态即进行指示，不误导"等模型"
+  if (chatState !== "busy" || chatPhase !== "generating" || statusTools.size) return;
+  // Timers never infer a phase from historical tool/error DOM or imply generation in finalization.
   if (Object.keys(pendingDialogs).length) return;          // 等用户应答 dialog，非等模型
   showWaiting();
 }
@@ -1433,6 +1439,7 @@ function highlightCode(codeEl) {
 function showDialog(o) {
   const id = o.id;
   pendingDialogs[id] = o;
+  statusEpoch++; paintChatStatus();
   const box = $("dialogBox");
   if (dialogShowing() && box.dataset.did !== String(id)) {
     sysLine("⚠ Another dialog queued [" + (o.method || "?") + "] id=" + id, "warn");
@@ -1557,6 +1564,9 @@ async function replyDialog(fields) {
 function castId(id) { const o = pendingDialogs[id]; return o ? o.id : id; }
 function closeDialog(id, note) {
   delete pendingDialogs[id];
+  statusEpoch++;
+  if (chatState === "busy") chatPhase = "unknown"; // Answered is not evidence of resumed generation.
+  paintChatStatus();
   const wasCollapsed = $("dialogPill").style.display === "flex";
   if ($("dialogBox").dataset.did === String(id)) {
     hideDialogBox();
@@ -1579,6 +1589,7 @@ function syncPendingDialogs(requests) {
   const current = $("dialogBox").dataset.did;
   if (dialogShowing() && Object.prototype.hasOwnProperty.call(next, current)) {
     pendingDialogs = next;
+    paintChatStatus();
     return;
   }
   clearPendingDialogs();
@@ -1591,61 +1602,115 @@ function clearPendingDialogs() {
   stopDialogCountdown();
   $("dialogTimeout").textContent = "";
   $("dialogPillTimeout").textContent = "";
+  paintChatStatus();
 }
 
 // ---------------- Chat lifecycle / historical editing / batch queue ----------------
-let chatState = "unknown", statusEpoch = 0, runOutcome = "success";
+let chatState = "unknown", chatPhase = "unknown", statusEpoch = 0, statusRequest = 0, runOutcome = "success";
+// Only current lifecycle events populate this set; never inspect historical tool DOM.
+const statusTools = new Set(), statusCoordinatorWaits = new Set();
 let queueBatchBusy = false, historyEdit = null, editSubmitting = false;
 const CHAT_STATES = {
-  unknown: ["◇", "连接状态未知"], busy: ["◌", "处理中（生成、工具、重试、压缩或启动）"],
-  waiting: ["?", "等待用户回答"], success: ["✓", "已成功完成"],
+  unknown: ["◇", "连接状态未知"], busy: ["◌", "处理中（阶段未知）"],
+  waiting: ["?", "等待用户回答"], coordinator: ["?", "等待协调者答复"], success: ["✓", "已成功完成"],
   failed: ["!", "最终失败"], stopped: ["○", "已停止"], ready: ["○", "就绪"]
 };
+const CHAT_PHASES = {starting: "启动中", generating: "模型生成中", tools: "工具执行中",
+  retrying: "自动重试中", compacting: "上下文压缩中", settling: "收尾中"};
 function paintChatStatus() {
-  const state = chatState !== "unknown" && Object.keys(pendingDialogs).length ? "waiting" : chatState;
-  const [icon, label] = CHAT_STATES[state] || CHAT_STATES.unknown;
+  const state = chatState !== "unknown" && Object.keys(pendingDialogs).length ? "waiting"
+    : chatState === "busy" && statusCoordinatorWaits.size ? "coordinator" : chatState;
+  const [icon, fallback] = CHAT_STATES[state] || CHAT_STATES.unknown;
+  const label = state === "busy" ? CHAT_PHASES[chatPhase] || fallback : fallback;
   const el = $("chatStatus"); el.textContent = icon; el.title = label;
   el.setAttribute("aria-label", label); el.dataset.state = state;
+  el.dataset.phase = state === "busy" ? chatPhase : state;
+  const text = $("chatStatusText");
+  if (text.textContent !== label) text.textContent = label; // Do not re-announce each token via aria-live.
+  $("chatStatusText").dataset.state = state;
   $("editSubmit").disabled = editSubmitting || turnActive || !["ready", "success", "failed", "stopped"].includes(state);
   $("editCancel").disabled = editSubmitting;
   $("editStop").disabled = editSubmitting || !turnActive;
   $("editHint").textContent = historyEdit && $("editSubmit").disabled ? "请等待空闲，或主动 /abort 停止后重新生成" : "";
 }
-function setChatStatus(state) { chatState = state; paintChatStatus(); }
+function setChatStatus(state, phase = "unknown") {
+  chatState = state; chatPhase = phase;
+  if (state !== "busy") { statusTools.clear(); statusCoordinatorWaits.clear(); }
+  paintChatStatus();
+}
+function beginChatRun(phase) {
+  statusEpoch++; turnActive = true; runOutcome = "success"; statusTools.clear(); statusCoordinatorWaits.clear();
+  setChatStatus("busy", phase);
+}
 async function refreshChatStatus(controller) {
-  const epoch = statusEpoch, session = attached;
+  const epoch = statusEpoch, session = attached, request = ++statusRequest;
+  const current = () => attached === session && request === statusRequest && epoch === statusEpoch
+    && (!controller || (!controller.signal.aborted && streamCtrl === controller));
   try {
     const r = await api("chat_state", {session});
-    if (attached !== session || (controller && (controller.signal.aborted || streamCtrl !== controller)) || epoch !== statusEpoch) return;
-    if (!r.ok) throw new Error(r.error);
-    turnActive = !!r.busy;
+    if (!current()) return;
+    if (!r.ok || typeof r.busy !== "boolean" || !CHAT_STATES[r.state]) throw new Error(r.error || "Invalid state");
+    turnActive = r.busy;
+    statusTools.clear();
+    if (!r.busy) statusCoordinatorWaits.clear();
+    for (const id of statusCoordinatorWaits) statusTools.add(id);
+    runOutcome = r.busy ? "unknown" : r.state;
     syncPendingDialogs(r.pendingDialogs || []);
-    setChatStatus(r.state || "unknown");
-  } catch (_) { if (epoch === statusEpoch) setChatStatus("unknown"); }
+    // Snapshot busy has no phase. Only a live structured wait in this connection
+    // survives it; disconnect/new run/terminal clears that wait, never restore from DOM.
+    setChatStatus(r.busy ? "busy" : r.state);
+    if (!r.busy) { hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false; }
+  } catch (_) { if (current()) setChatStatus("unknown"); }
 }
 function updateChatStatus(o) {
-  const t = o.type;
-  if ((t === "message_start" && o.message && o.message.role === "user") || ["agent_start", "before_agent_start", "tool_execution_start", "auto_retry_start", "compaction_start", "auto_compaction_start", "sessiond.session_starting", "sessiond.session_restarted"].includes(t)) {
-    statusEpoch++; turnActive = true;
-    if (t === "agent_start" || t === "auto_retry_start") runOutcome = "success";
-    setChatStatus("busy");
+  const t = o.type, m = o.message || {};
+  const phase = p => { statusEpoch++; turnActive = true; setChatStatus("busy", p); };
+  if ((t === "message_start" && m.role === "user") || ["agent_start", "before_agent_start", "sessiond.session_starting", "sessiond.session_restarted"].includes(t)) {
+    // Hooks can still be running; only assistant message_start/update proves generation.
+    beginChatRun("starting");
   }
-  if (t === "message_end" && o.message && o.message.role === "assistant") {
-    const reason = o.message.stopReason;
-    runOutcome = reason === "error" ? "failed" : reason === "aborted" ? "stopped" : "success";
+  if ((t === "message_start" && m.role === "assistant") || t === "message_update") phase("generating");
+  if (t === "tool_execution_start" || t === "tool_execution_update") {
+    statusTools.add(o.toolCallId);
+    const wait = o.partialResult && o.partialResult.details && o.partialResult.details.agentdWait;
+    if (t === "tool_execution_update" && o.toolName === "ask_dispatcher" && o.toolCallId
+        && wait && typeof wait.askId === "string" && wait.askId && typeof wait.question === "string" && wait.question)
+      statusCoordinatorWaits.add(o.toolCallId);
+    phase("tools");
   }
-  if ((t === "auto_retry_end" && !o.success && !o.aborted) || ((t === "compaction_end" || t === "auto_compaction_end") && o.errorMessage)) runOutcome = "failed";
+  if (t === "tool_execution_end") {
+    statusTools.delete(o.toolCallId); statusCoordinatorWaits.delete(o.toolCallId);
+    phase(statusTools.size ? "tools" : "unknown");
+  }
+  if (t === "auto_retry_start") { runOutcome = "success"; phase("retrying"); }
+  if (t === "compaction_start" || t === "auto_compaction_start") phase("compacting");
+  if (t === "message_end" && m.role === "assistant") {
+    statusEpoch++;
+    runOutcome = m.stopReason === "error" ? "failed" : m.stopReason === "aborted" ? "stopped" : "success";
+  }
+  if (t === "turn_end") phase(o.toolResults && o.toolResults.length ? "unknown" : "settling");
+  if (t === "agent_end") { if (o.errorMessage) runOutcome = "failed"; phase("settling"); }
+  if (t === "auto_retry_end") {
+    runOutcome = o.aborted ? "stopped" : o.success ? "success" : "failed";
+    phase(o.success ? "unknown" : "settling");
+  }
+  if (t === "compaction_end" || t === "auto_compaction_end") {
+    if (o.errorMessage) runOutcome = "failed";
+    phase("unknown"); refreshChatStatus(streamCtrl);
+  }
   if (t === "response" && o.command === "abort" && o.success) {
-    runOutcome = "stopped";
+    statusEpoch++; runOutcome = "stopped";
     if (!turnActive && chatState !== "unknown") setChatStatus("stopped");
   }
   if (t === "agent_settled") {
-    statusEpoch++; turnActive = false; setChatStatus(runOutcome);
+    statusEpoch++; turnActive = false; clearPendingDialogs(); setChatStatus(runOutcome);
+    if (runOutcome === "unknown") refreshChatStatus(streamCtrl);
   }
-  if (t === "compaction_end" || t === "auto_compaction_end") refreshChatStatus(streamCtrl);
-  if (t === "sessiond.session_dormant" || t === "agentd.task_ended") { statusEpoch++; turnActive = false; setChatStatus("stopped"); }
-  if (t === "sessiond.error") { statusEpoch++; setChatStatus("unknown"); }
-  // Dialog bookkeeping itself occurs in renderEvent; paint again after it.
+  if (t === "sessiond.session_dormant" || t === "agentd.task_ended") {
+    statusEpoch++; turnActive = false; clearPendingDialogs(); setChatStatus("stopped");
+  }
+  if (t === "sessiond.error" || t === "webgw.gap") { statusEpoch++; runOutcome = "unknown"; setChatStatus("unknown"); }
+  // Dialog bookkeeping occurs in renderEvent; paint again after it.
 }
 function appendRecoveredTexts(texts) {
   const text = texts.filter(t => typeof t === "string" && t).join("\n\n");
@@ -1738,7 +1803,7 @@ async function submitHistoryEdit() {
     $("promptInput").value = [edit.draft, changed].filter(Boolean).join("\n\n");
     pendingImages = edit.images.concat(pendingImages.filter(a => !submittedImages.includes(a)));
     historyEdit = null; $("editBanner").classList.add("hidden"); renderAttachBar(); resizePrompt();
-    turnActive = true; runOutcome = "success"; setChatStatus("busy");
+    beginChatRun("starting");
     await heal("historical branch regenerated");
   } catch (e) {
     flash("历史重新生成未确认：" + e.message + "。编辑内容仍保留，请先核对历史再重试。", "err");
@@ -1766,7 +1831,7 @@ function sendPrompt() {
   // agent 空闲 → prompt 直发；agent 流式中（turnActive）→ follow_up 自动排队。
   // 三段模式切换/发送按钮已移除；流式中不再有拦截提示。
   const type = turnActive ? "follow_up" : "prompt";
-  if (type === "prompt") { runOutcome = "success"; turnActive = true; setChatStatus("busy"); }
+  if (type === "prompt") beginChatRun("starting");
   const cmd = {type: type, message: msg, id: uid()};
   if (pendingImages.length) {
     // pi rpc ImageContent 格式（docs/rpc.md）；follow_up 同样支持 images；
@@ -1893,7 +1958,8 @@ function handleCmdResponse(o) {
       curThinkingLevel = o.data.thinkingLevel || curThinkingLevel;
       if (typeof o.data.messageCount === "number") curMsgCount = o.data.messageCount;  // inbox 增项：零额外请求自带
       curCompacting = !!o.data.isCompacting;
-      turnActive = !!o.data.isStreaming || curCompacting || !!o.data.pendingMessageCount;
+      // get_state omits retry/finally windows and may be stale. Only chat_state or
+      // agent_settled may clear lifecycle busy; this response is metadata only.
       refreshSlashNoticeIfVisible();
     }
     return;
@@ -1924,14 +1990,19 @@ function handleCmdResponse(o) {
   }
   flash("Send rejected (" + (o.command || p.mode) + "): " + err, "err");
   p.rejected = true; p.error = err;
-  if (p.mode === "prompt") { turnActive = false; setChatStatus("failed"); }
+  if (p.mode === "prompt") {
+    if (p.statusEpoch === statusEpoch) { statusEpoch++; turnActive = false; setChatStatus("failed"); }
+    else refreshChatStatus(streamCtrl); // A late rejection cannot end a newer run.
+  }
   renderQueuedPanel();
 }
 
 // 带发送跟踪的上行：HTTP 层失败时同步标错队列面板条目（sendCmd 的加强版）
 async function sendTracked(cmd) {
+  statusEpoch++; // A local queue/send also invalidates snapshots taken before admission.
   const pending = pendingSends[cmd.id];
-  if (pending) pending.cmd = cmd;                // 保留图片等完整负载直到送达/自动重发
+  if (pending) { pending.cmd = cmd; pending.statusEpoch = statusEpoch; } // Payload + lifecycle fence.
+  const epoch = statusEpoch, session = attached;
   try {
     if (!attached) throw new Error("Not attached to a session");
     await api("cmd", {session: attached, cmd: JSON.stringify(cmd)});
@@ -1939,7 +2010,7 @@ async function sendTracked(cmd) {
     sysLine("Send failed: " + e.message, "err");
     const p = pendingSends[cmd.id];
     if (p) { p.rejected = true; p.error = e.message; renderQueuedPanel(); }
-    setChatStatus("unknown");
+    if (attached === session && epoch === statusEpoch) { statusEpoch++; setChatStatus("unknown"); }
   }
 }
 // ---------------- get_state 权威查询（任务 0830-1257-vwzb） ----------------

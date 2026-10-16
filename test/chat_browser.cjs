@@ -82,8 +82,113 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(after.x,before.x);assert.equal(after.y+after.height,before.y+before.height);
   assert(after.x>=input.x && after.x+after.width<=input.x+input.width);
   assert.equal(await page.locator('#promptInput').evaluate(e=>parseFloat(getComputedStyle(e).paddingRight)),44);
-  if(process.env.CHAT_SCREENSHOT) await page.screenshot({path:process.env.CHAT_SCREENSHOT});
+  // Second real page: exercise the original api(), SSE fetch/decoder and rendering.
+  // All fetches terminate in this in-memory deterministic fixture, never production.
+  const statusPage=await browser.newPage({viewport:{width:390,height:844}});
+  statusPage.on('pageerror',e=>errors.push(e.message));
+  await statusPage.setContent(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,''));
+  await statusPage.addScriptTag({content:source});
+  await statusPage.evaluate(()=>{
+   window.fixtureState={ok:true,state:'ready',busy:false,pendingDialogs:[]};
+   window.fixtureSeq=0;window.fixtureCalls=[];
+   window.fetch=async(url,opts)=>{
+    if(opts.method==='POST'){
+     const body=new URLSearchParams(opts.body),op=body.get('op');window.fixtureCalls.push(op);
+     if(op!=='chat_state') throw Error('Unexpected fixture API '+op);
+     if(window.deferState) return new Promise(resolve=>window.resolveState=()=>resolve(new Response(JSON.stringify(window.fixtureState))));
+     return new Response(JSON.stringify(window.fixtureState));
+    }
+    return {ok:true,body:new ReadableStream({start(controller){window.fixtureStream=controller;}})};
+   };
+   window.emit=event=>window.fixtureStream.enqueue(new TextEncoder().encode(
+    'id: fixture:'+ ++window.fixtureSeq+'\ndata: '+JSON.stringify(event)+'\n\n'));
+   attached='/isolated.jsonl';openStream();
+  });
+  async function current(label,active){
+   await statusPage.waitForFunction(expected=>document.getElementById('chatStatusText').textContent===expected,label);
+   assert.equal(await statusPage.locator('#chatStatusText').isVisible(),true);
+   assert.equal(await statusPage.locator('#chatStatus').getAttribute('aria-label'),label);
+   assert.equal(await statusPage.evaluate(()=>turnActive),active);
+   const textBox=await statusPage.locator('#chatStatusText').boundingBox();
+   const promptBox=await statusPage.locator('#promptInput').boundingBox();
+   assert(textBox.height<=20 && textBox.y>=0 && textBox.y+textBox.height<=promptBox.y+1,
+    'short status stays visible immediately above composer');
+  }
+  async function emit(event){await statusPage.evaluate(e=>window.emit(e),event);}
+  await current('就绪',false);
+  await emit({type:'sessiond.session_starting'});await current('启动中',true);
+  await emit({type:'before_agent_start'});await current('启动中',true);
+  await emit({type:'agent_start'});await current('启动中',true);
+  await statusPage.evaluate(()=>gapTimerFire());await current('启动中',true);
+  await emit({type:'message_start',message:{role:'assistant'}});await current('模型生成中',true);
+  await statusPage.evaluate(()=>{
+   window.statusMutations=0;
+   window.statusObserver=new MutationObserver(records=>window.statusMutations+=records.length);
+   window.statusObserver.observe($('chatStatusText'),{childList:true,characterData:true,subtree:true});
+  });
+  await emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'Plain answer'}});
+  await emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:' more'}});
+  await statusPage.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
+  assert.equal(await statusPage.evaluate(()=>window.statusMutations),0,'unchanged live status is not re-announced per token');
+  await statusPage.evaluate(()=>window.statusObserver.disconnect());
+  await emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'Plain answer'}],stopReason:'stop'}});
+  await emit({type:'turn_end',toolResults:[]});await current('收尾中',true);
+  assert.equal(await statusPage.locator('.waiting-model').count(),0);
+  await statusPage.evaluate(()=>gapTimerFire());await current('收尾中',true);
+  await emit({type:'agent_end'});await current('收尾中',true);
+  await emit({type:'agent_settled'});await current('已成功完成',false);
+  await emit({type:'agent_start'});
+  await emit({type:'tool_execution_start',toolCallId:'long',toolName:'bash',args:{command:'fixture only'}});
+  await current('工具执行中',true);
+  await statusPage.evaluate(()=>gapTimerFire());await current('工具执行中',true);
+  await emit({type:'extension_ui_request',id:'question',method:'input',title:'Fixture question'});
+  await current('等待用户回答',true);
+  await statusPage.locator('#dialogCollapse').click();await current('等待用户回答',true);
+  await emit({type:'sessiond.dialog_resolved',id:'question'});await current('处理中（阶段未知）',true);
+  assert.equal(await statusPage.locator('#dialogPill').isVisible(),false);
+  await emit({type:'tool_execution_end',toolCallId:'long',toolName:'bash',result:{content:[]}});
+  await current('处理中（阶段未知）',true);
+  await emit({type:'tool_execution_start',toolCallId:'coord-ask',toolName:'ask_dispatcher'});
+  await emit({type:'tool_execution_update',toolCallId:'coord-ask',toolName:'ask_dispatcher',partialResult:{
+   content:[{type:'text',text:'fixture wait'}],details:{agentdWait:{askId:'fixture-ask',question:'Which option?',recipient:'queue/dispatcher',since:1,deadline:null}}}});
+  await current('等待协调者答复',true);
+  await statusPage.evaluate(()=>gapTimerFire());await current('等待协调者答复',true);
+  await emit({type:'tool_execution_end',toolCallId:'coord-ask',toolName:'ask_dispatcher',result:{content:[]}});
+  await current('处理中（阶段未知）',true);
+  await emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'fixture error'}});
+  await emit({type:'agent_end'});await current('收尾中',true);
+  await emit({type:'auto_retry_start',attempt:1,maxAttempts:2,errorMessage:'fixture error'});
+  await current('自动重试中',true);
+  await emit({type:'auto_retry_end',success:true});await current('处理中（阶段未知）',true);
+  await emit({type:'auto_compaction_start'});await current('上下文压缩中',true);
+  await statusPage.evaluate(()=>window.fixtureState={ok:true,state:'busy',busy:true,pendingDialogs:[]});
+  await emit({type:'auto_compaction_end'});await current('处理中（阶段未知）',true);
+  await emit({type:'agent_start'});await current('启动中',true);
+  await emit({type:'agent_end'});await current('收尾中',true);
+  await emit({type:'queue_update',steering:[],followUp:['queued next']});await current('收尾中',true);
+  await emit({type:'message_start',message:{role:'user',content:'queued next'}});await current('启动中',true);
+  // A late idle HTTP result must not erase a newer streaming frame.
+  await statusPage.evaluate(()=>{window.deferState=true;window.pendingRefresh=refreshChatStatus(streamCtrl);});
+  await emit({type:'tool_execution_start',toolCallId:'new-tool',toolName:'bash'});await current('工具执行中',true);
+  await statusPage.evaluate(async()=>{
+   window.fixtureState={ok:true,state:'success',busy:false,pendingDialogs:[]};window.resolveState();
+   await window.pendingRefresh;window.deferState=false;
+  });
+  await current('工具执行中',true);
+  await statusPage.evaluate(()=>window.fixtureStream.error(Error('fixture disconnect')));
+  await current('连接状态未知',true);
+  await statusPage.evaluate(()=>{window.fixtureState={ok:true,state:'busy',busy:true,pendingDialogs:[]};openStream();});
+  await current('处理中（阶段未知）',true);
+  await statusPage.evaluate(()=>{window.fixtureState={ok:true,state:'busy',busy:true,pendingDialogs:[{id:'restored',method:'confirm'}]};openStream();});
+  await current('等待用户回答',true);
+  await statusPage.evaluate(()=>{window.fixtureState={ok:true,state:'failed',busy:false,pendingDialogs:[]};openStream();});
+  await current('最终失败',false);
+  await emit({type:'agent_start'});await current('启动中',true);
+  await emit({type:'message_end',message:{role:'assistant',stopReason:'aborted'}});
+  await emit({type:'agent_settled'});await current('已停止',false);
+  await statusPage.evaluate(()=>gapTimerFire());await current('已停止',false);
+  if(process.env.CHAT_SCREENSHOT) await statusPage.screenshot({path:process.env.CHAT_SCREENSHOT});
   assert.deepEqual(errors,[]);
-  console.log('ALL PASS: Chromium mobile layout, icon-free bubble edit/cancel/busy and image links, batch recall, terminal icon and click-to-send prompt/queue/images/empty');
+  console.log('ALL PASS: Chromium mobile layout, icon-free bubble edit/cancel/busy and image links, batch recall, click-to-send prompt/queue/images/empty; visible lifecycle text, SSE finalization/tools/ask/retry/compaction/queue/terminal and reconnect/HTTP race fixtures');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
