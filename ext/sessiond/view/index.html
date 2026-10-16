@@ -535,7 +535,7 @@ async function attach(name) {
   curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
   turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false;   // 重挂接重置等待指示（0829-2107-cvdn；间隙计时/收尾窗/红框在场同清，0c736g/ilznlp）
-  pendingSends = {}; queueState = {steering: [], followUp: []};
+  retainFailedSends(); queueState = {steering: [], followUp: []};
   toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重挂接丢弃（bw333x）
   curMsgCount = null; curCompacting = null; curGen = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
   agentHost = null; agentWorkDir = null; agentSessionDir = null;  // 宿主可见性随重挂接重置（任务 bjhzvj；.agent 会话由 resolveAgentAndAttach 在 attach 后重填）
@@ -566,10 +566,10 @@ function applyBaseline(doc, initial) {
     curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
     seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
     turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false; // 自愈重渲染重置（0829-2107-cvdn；间隙计时/收尾窗/红框在场同清，0c736g/ilznlp）
-    pendingSends = {}; queueState = {steering: [], followUp: []};
+    retainFailedSends(); queueState = {steering: [], followUp: []};
     toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重渲染丢弃（bw333x）
     retryBoxEl = null; lastRenderedErrorMsg = null;     // 回合状态重置（0829-2131-pdop）
-    renderQueuedPanel();                                // 全量重渲染：待发/队列面板一并清除（0829-2115-zvti）
+    renderQueuedPanel();                                // 重建队列视图，保留可恢复的失败消息
   }
   curAssistantEl = null; curAssistantBuf = "";  // 基线内的插入锚点不外漏到实时流（0830-1047-ehzc）
   streamCursor = doc.watermark || "";
@@ -1595,7 +1595,7 @@ function sendPrompt() {
   }
   if (type === "follow_up") addPendingSend(cmd.id, msg, "queue");
   else pendingSends[cmd.id] = {mode: "prompt", text: msg, rejected: false};
-  // prompt 直发静默登记：不进队列面板（renderQueuedPanel 跳过 prompt 条目），
+  // prompt 直发静默登记：正常不进队列面板，失败时展示恢复入口，
   // 仅供 handleCmdResponse 的 "already processing" 兜底定位原文重发（0830-1029-urgg）
   sendTracked(cmd);
   stickyBottom = true; scrollStream(true);       // 用户发送 → 强制回底，看到自己的输入与回复起点（0830-1544-q9rr）
@@ -1616,34 +1616,64 @@ function renderQueuedPanel() {
   const seen = new Set(items.map(i => i.text));
   for (const k of Object.keys(pendingSends)) {
     const p = pendingSends[k];
-    if (p.mode === "prompt") continue;                    // prompt 直发不是排队条目，不进面板（0830-1029-urgg）
-    if (seen.has(p.text)) continue;                       // 后端已收编 → 不重复展示（去重）
+    if (p.mode === "prompt" && !p.rejected) continue; // 正常直发不入队；失败消息必须可恢复
+    if (!p.rejected && seen.has(p.text)) continue;
     items.push({kind: p.mode === "steer" ? "steer" : "fu", text: p.text,
-                rejected: p.rejected, local: true});
-    seen.add(p.text);
+                rejected: p.rejected, id: k, error: p.error,
+                imageCount: ((p.cmd && p.cmd.images) || []).length});
+    if (!p.rejected) seen.add(p.text);
   }
   if (!items.length) { panel.classList.add("hidden"); return; }
   panel.classList.remove("hidden");
   const head = document.createElement("div");
   head.className = "qp-head";
-  head.textContent = "QUEUED \u00b7 " + items.length;      // steer + follow-up 混合计数（含两者，0829-2131-pdop inbox s3p2）
+  head.textContent = (items.some(p => p.rejected) ? "待发送 / 发送失败" : "QUEUED")
+    + " \u00b7 " + items.length;
   panel.appendChild(head);
   for (const p of items) {
     const it = document.createElement("div");
     it.className = "qp-item" + (p.rejected ? " rejected" : "");
     const badge = document.createElement("span");
     badge.className = "qp-badge " + (p.kind === "steer" ? "steer" : "fu");
-    badge.textContent = p.kind === "steer" ? "steer" : "follow-up";
+    badge.textContent = p.rejected ? "发送失败" : p.kind === "steer" ? "steer" : "follow-up";
     const txt = document.createElement("span");
     txt.className = "qp-text";
-    txt.textContent = p.text;                             // CSS 单行截断省略号，title 存全文摘要（0829-2131-pdop）
-    txt.title = p.rejected ? "Send rejected/failed (see notice)"
+    txt.textContent = (p.text || (p.imageCount ? "（图片消息）" : ""))
+      + (p.imageCount ? " · " + p.imageCount + " 张图片" : "");
+    txt.title = p.rejected ? (p.error || "Send rejected/failed") + " — 送达状态可能未知；恢复后请确认历史，避免重复发送。"
       : p.kind === "steer"
         ? "Queued: delivered after the current tool finishes, before the next model call"
         : "Pending: delivered only after the agent fully stops";
     it.appendChild(badge); it.appendChild(txt);
+    if (p.rejected) {
+      const restore = document.createElement("button");
+      restore.textContent = "恢复到输入框";
+      restore.style.flexShrink = "0";
+      restore.onclick = () => restoreFailedSend(p.id);
+      it.appendChild(restore);
+    }
     panel.appendChild(it);
   }
+}
+// 基线自愈不应抹掉尚未被用户取回的失败负载；正常待发仍由权威队列重建。
+function retainFailedSends() {
+  pendingSends = Object.fromEntries(Object.entries(pendingSends).filter(([, p]) => p.rejected));
+}
+function restoreFailedSend(id) {
+  const p = pendingSends[id];
+  if (!p || !p.rejected) return;
+  const input = $("promptInput");
+  input.value = [input.value, p.text].filter(Boolean).join("\n");
+  for (const img of (p.cmd && p.cmd.images) || []) {
+    pendingImages.push({mime: img.mimeType, b64: img.data,
+      dataUrl: "data:" + img.mimeType + ";base64," + img.data});
+  }
+  delete pendingSends[id];
+  renderAttachBar(); renderQueuedPanel();
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 120) + "px";
+  input.focus();
+  flash("已恢复，未重发。请先确认历史中是否已送达，避免重复发送。", "warn");
 }
 function addPendingSend(id, text, mode) {
   pendingSends[id] = {mode: mode, text: text, rejected: false};
@@ -1706,7 +1736,7 @@ function handleCmdResponse(o) {
     return;
   }
   flash("Send rejected (" + (o.command || p.mode) + "): " + err, "err");
-  p.rejected = true;
+  p.rejected = true; p.error = err;
   renderQueuedPanel();
 }
 
@@ -1714,12 +1744,13 @@ function handleCmdResponse(o) {
 async function sendTracked(cmd) {
   const pending = pendingSends[cmd.id];
   if (pending) pending.cmd = cmd;                // 保留图片等完整负载直到送达/自动重发
-  if (!attached) { sysLine("Not attached to a session", "err"); return; }
-  try { await api("cmd", {session: attached, cmd: JSON.stringify(cmd)}); }
-  catch (e) {
+  try {
+    if (!attached) throw new Error("Not attached to a session");
+    await api("cmd", {session: attached, cmd: JSON.stringify(cmd)});
+  } catch (e) {
     sysLine("Send failed: " + e.message, "err");
     const p = pendingSends[cmd.id];
-    if (p) { p.rejected = true; renderQueuedPanel(); }
+    if (p) { p.rejected = true; p.error = e.message; renderQueuedPanel(); }
   }
 }
 // ---------------- get_state 权威查询（任务 0830-1257-vwzb） ----------------

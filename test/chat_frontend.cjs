@@ -18,13 +18,15 @@ function harness() {
   function element() {
     const classes = new Set();
     return {
-      style: {}, dataset: {}, children: [], textContent: '', value: '', innerHTML: '',
+      style: {}, dataset: {}, children: [], textContent: '', value: '',
+      get innerHTML() { return this._html || ''; },
+      set innerHTML(value) { this._html = value; this.children = []; },
       classList: {add(c) { classes.add(c); }, remove(c) { classes.delete(c); },
         contains(c) { return classes.has(c); }, toggle(c, on) { on ? classes.add(c) : classes.delete(c); }},
       appendChild(n) { this.children.push(n); n.parentNode = this; return n; },
       removeChild(n) { this.children = this.children.filter(x => x !== n); n.parentNode = null; },
       remove() { if (this.parentNode) this.parentNode.removeChild(this); },
-      addEventListener() {}, querySelectorAll() { return []; },
+      focus() {}, addEventListener() {}, querySelectorAll() { return []; },
       getBoundingClientRect() { return {top: 100}; },
     };
   }
@@ -189,6 +191,62 @@ for (const message of ['look at these', '']) {
     assert.equal(h.run('Object.keys(pendingSends).length'), 0);
   });
 }
+
+for (const message of ['important message', '']) {
+  test(`failed prompt retains recoverable payload (${message ? 'text + images' : 'images only'})`, async () => {
+    const h = harness();
+    await h.run(`(async()=>{
+      attached='/test.jsonl';globalThis.sent=[];
+      api=async(op,extra)=>{sent.push(JSON.parse(extra.cmd));throw new Error('network unavailable');};
+      pendingImages=[{mime:'image/png',b64:'AAAA',dataUrl:'data:image/png;base64,AAAA'}];
+      $('promptInput').value=${JSON.stringify(message)};sendPrompt();await Promise.resolve();
+    })()`);
+    assert.equal(h.run('Object.values(pendingSends)[0].rejected'), true);
+    const panel = h.elements.get('queuedPanel');
+    assert.equal(panel.classList.contains('hidden'), false);
+    assert.equal(panel.children[1].children[1].textContent.includes('1 张图片'), true);
+    assert.equal(panel.children[1].children[2].textContent, '恢复到输入框');
+    // Baseline healing must not discard a failed payload. Restore appends to a newer draft.
+    h.run(`applyBaseline(${emptyBaseline},false);
+      $('promptInput').value='new draft';
+      pendingImages=[{mime:'image/jpeg',b64:'BBBB',dataUrl:'data:image/jpeg;base64,BBBB'}];`);
+    panel.children[1].children[2].onclick();
+    assert.equal(h.elements.get('promptInput').value, 'new draft' + (message ? '\n' + message : ''));
+    assert.equal(h.run('pendingImages.length'), 2);
+    assert.equal(h.run('pendingImages[1].b64'), 'AAAA');
+    assert.equal(h.run('Object.keys(pendingSends).length'), 0);
+    assert.equal(h.run('sent.length'), 1, 'restore must not resend automatically');
+  });
+}
+
+test('RPC rejection exposes a normal prompt and can restore its text', () => {
+  const h = harness();
+  h.run(`attached='/test.jsonl';globalThis.sent=[];
+    api=async(op,extra)=>{sent.push(JSON.parse(extra.cmd));return {ok:true};};
+    $('promptInput').value='rejected text';sendPrompt();
+    handleCmdResponse({id:sent[0].id,command:'prompt',success:false,error:'permission denied'});`);
+  assert.equal(h.elements.get('queuedPanel').classList.contains('hidden'), false);
+  assert.equal(h.run('Object.values(pendingSends)[0].error'), 'permission denied');
+  h.run('restoreFailedSend(sent[0].id);restoreFailedSend(sent[0].id);');
+  assert.equal(h.elements.get('promptInput').value, 'rejected text', 'restore is single-use');
+  assert.equal(h.run('sent.length'), 1);
+});
+
+test('sending before attach leaves a recoverable failure instead of losing the draft', () => {
+  const h = harness();
+  h.run(`$('promptInput').value='early message';sendPrompt();`);
+  assert.equal(h.run('Object.values(pendingSends)[0].rejected'), true);
+  assert.equal(h.elements.get('queuedPanel').classList.contains('hidden'), false);
+  h.run('restoreFailedSend(Object.keys(pendingSends)[0]);');
+  assert.equal(h.elements.get('promptInput').value, 'early message');
+});
+
+test('successful normal prompts remain absent from the queue panel', () => {
+  const h = harness();
+  h.run(`attached='/test.jsonl';api=async()=>({ok:true});
+    $('promptInput').value='normal message';sendPrompt();renderQueuedPanel();`);
+  assert.equal(h.elements.get('queuedPanel').classList.contains('hidden'), true);
+});
 
 (async () => {
   for (const [name, fn] of tests) { await fn(); console.log('PASS ' + name); }
