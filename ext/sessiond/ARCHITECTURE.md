@@ -48,6 +48,9 @@ HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接�
 | `cmd` | 声明者路径、cmd JSON | 发送 pi RPC 命令 |
 | `commands` | 声明者路径 | 返回会话命令清单 |
 | `inspect` | 声明者路径 | 返回系统提示与工具清单 |
+| `queue_rpc` | 声明者路径、action=clear_queue/steer、message? | 等待真实 pi RPC 回执；仅文本，不处理附件 |
+| `chat_state` | 声明者路径 | 通过会话内公开扩展查询完整 busy/终态，并附悬空 dialog |
+| `regenerate` | 声明者路径、entryId、message、images JSON | 空闲时从目标用户消息之前重新生成同文件新分支 |
 | `reload` / `clear` | 声明者路径 | 交互会话直接操作；agentd 会话代理 control/restart 或 control/clear |
 | `list_sessions` | — | 枚举本机临时会话 |
 | `session_tabs` | — | 输出 itab 的动态行 |
@@ -75,6 +78,12 @@ HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接�
 前端为单文件 HTML，无构建步骤。历史按 leafId 重建活跃分支，分片渲染完成后开流。工具输出与过程组由事件更新；用户输入、dialog 与队列状态由各自面板承载。
 
 模型、思考强度、运行中状态和上下文用量从 pi 查询取得，宿主信息从 status 或声明解析结果取得。
+
+### 历史编辑
+
+用户消息以持久 entryId 定位；实时消息点击时先取真实 entries 唯一解析，不能唯一定位则拒绝。进入编辑仅装载文本/图片和保存当前草稿，不 abort 或回溯；取消恢复进入前草稿。busy/未知/待回答时不能提交历史编辑，也不能转为 follow-up；可主动点停止当前任务。
+
+后端先经 get_commands 确认当前世代存在 `sessiond-chat`，旧进程未加载时只报待空闲重载，绝不把未知内部斜杠命令误作用户消息送入模型。会话内 `sessiond-chat` 扩展命令检查空闲、目标活跃分支与实际持久文件绑定，使用公开 `ctx.navigateTree(entryId, {summarize:false})` 移到该用户消息的 parent，再用公开 `pi.sendUserMessage` 开新回合。旧分支仍在同一 append-only JSONL 中，不生成跨注册表的新文件、不带入旧分支摘要或旧后续上下文。pi 对当前 leaf 的 navigateTree 为 no-op 时，先公开追加一条不进入模型上下文的 custom breadcrumb，再导航。导航取消或不符预期时不提交消息，客户端保留编辑内容；网络失败可能送达未知，不自动重试。重新生成不会撤销旧工具操作。
 
 ## 8. 恢复
 
@@ -106,11 +115,11 @@ reload/clear 写入该参与方 control 请求并等待回执；进程操作由 
 
 ### 11.2 队列
 
-基线附最近的 queue_update；实时事件更新 steering/followUp。
+基线附最近的 queue_update；实时事件更新 steering/followUp。整批撤回与转 steer 以 clear_queue 返回数组为准，保留 steering 内及 followUp 内原顺序，不假定跨队列顺序。按钮在操作期间互斥；转发逐条等待回执，失败停止并把未确认及未发送文本追加至草稿，不盲重试。清空和转发不是原子操作，清空会移除队列图片但只取回文本；普通发送失败的附件恢复独立保留。
 
 ### 11.3 运行状态
 
-浏览器使用 agent_start、agent_settled 与 get_state 渲染回合状态。
+输入框右侧图标不承担发送/停止，文本 title、aria-label 和轻点说明区分未知、busy、等待用户、成功、失败、停止与就绪。agent_end 不收口；agent_settled 才区分结果，避免工具、重试、压缩、队列续跑之间闪现完成。SSE 建连时一次 chat_state 查询恢复权威状态，不新增周期轮询；断线置未知，较旧快照不能覆盖更新事件。普通输入不因 busy 禁用。
 
 ### 11.4 Dialog
 

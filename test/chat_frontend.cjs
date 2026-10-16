@@ -26,6 +26,7 @@ function harness() {
       appendChild(n) { this.children.push(n); n.parentNode = this; return n; },
       removeChild(n) { this.children = this.children.filter(x => x !== n); n.parentNode = null; },
       remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+      setAttribute(k, v) { this[k] = v; },
       focus() {}, addEventListener() {}, querySelectorAll() { return []; },
       getBoundingClientRect() { return {top: 100}; },
     };
@@ -246,6 +247,174 @@ test('successful normal prompts remain absent from the queue panel', () => {
   h.run(`attached='/test.jsonl';api=async()=>({ok:true});
     $('promptInput').value='normal message';sendPrompt();renderQueuedPanel();`);
   assert.equal(h.elements.get('queuedPanel').classList.contains('hidden'), true);
+});
+
+test('batch recall uses returned text, appends draft, ignores images, no abort', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl'; $('promptInput').value='draft';
+    queueState={steering:['stale'],followUp:['stale2']}; globalThis.calls=[];
+    api=async(op,x)=>{calls.push([op,x]);return {ok:true,data:{steering:['s1','s2'],followUp:['f1']}};};
+    pendingImages=[{mime:'image/png',b64:'AAAA',dataUrl:'data:image/png;base64,AAAA'}];
+    await queueBatch(false);})()`);
+  assert.equal(h.run("$('promptInput').value"), 'draft\n\ns1\n\ns2\n\nf1');
+  assert.equal(h.run('pendingImages.length'), 1);
+  assert.equal(h.run('calls.length'), 1);
+  assert.equal(h.run('calls[0][1].action'), 'clear_queue');
+});
+
+test('batch buttons exclude repeated clicks while clear or steer is pending', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';globalThis.calls=[];let resolve;
+    queueState={steering:['s'],followUp:[]};
+    api=(op,x)=>{calls.push(x.action);return new Promise(r=>resolve=r);};
+    const p=queueBatch(false);await queueBatch(true);
+    if (!$('queuedPanel').children[0].children.every(b=>b.disabled)) throw Error('buttons enabled');
+    resolve({ok:true,data:{steering:['s'],followUp:[]}});await p;})()`);
+  assert.equal(h.run('calls.join()'), 'clear_queue');
+  assert.equal(h.run('queueBatchBusy'), false);
+});
+
+test('batch steer respects per-queue order and recovers failed plus unsent texts', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';$('promptInput').value='draft';globalThis.calls=[];
+    api=async(op,x)=>{calls.push(x);if(x.action==='clear_queue')return {ok:true,data:{steering:['s1','s2'],followUp:['f1','f2']}};
+      return x.message==='s2'?{ok:false,error:'reject'}:{ok:true};};
+    await queueBatch(true);})()`);
+  assert.equal(h.run('calls.map(x=>x.message||x.action).join()'), 'clear_queue,s1,s2');
+  assert.equal(h.run("$('promptInput').value"), 'draft\n\ns2\n\nf1\n\nf2');
+  assert.equal(h.run('queueBatchBusy'), false);
+});
+
+test('batch steer success forwards each returned text once and preserves draft', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';$('promptInput').value='draft';globalThis.calls=[];
+    api=async(op,x)=>{calls.push(x);return x.action==='clear_queue'?{ok:true,data:{steering:['a','b'],followUp:['c']}}:{ok:true};};
+    await queueBatch(true);})()`);
+  assert.equal(h.run('calls.map(x=>x.message||x.action).join()'), 'clear_queue,a,b,c');
+  assert.equal(h.run("$('promptInput').value"), 'draft');
+});
+
+test('clear rejection or network failure does not fabricate recovered queue text', async () => {
+  for (const fail of ["return {ok:false,error:'unsupported'}", "throw Error('network')"]) {
+    const h = harness();
+    await h.run(`(async()=>{attached='/test.jsonl';$('promptInput').value='draft';queueState={steering:['not-receipted'],followUp:[]};
+      api=async()=>{${fail}};await queueBatch(false);})()`);
+    assert.equal(h.run("$('promptInput').value"), 'draft');
+    assert.equal(h.run('queueState.steering[0]'), 'not-receipted');
+    assert.equal(h.run('queueBatchBusy'), false);
+  }
+});
+
+test('status stays busy across agent_end, tool runs, retry and queued continuation', () => {
+  const h = harness();
+  for (const event of ["{type:'agent_start'}", "{type:'tool_execution_start',toolCallId:'x',toolName:'bash'}",
+    "{type:'agent_end'}", "{type:'auto_retry_start'}", "{type:'agent_start'}", "{type:'agent_end'}"]) {
+    h.run(`handleEvent(${event});`);
+    assert.equal(h.run('chatState'), 'busy');
+    assert.equal(h.run('turnActive'), true);
+  }
+  h.run("handleEvent({type:'agent_settled'});");
+  assert.equal(h.run('chatState'), 'success');
+  h.run("handleEvent({type:'queue_update',steering:[],followUp:[]});");
+  assert.equal(h.run('chatState'), 'success');
+});
+
+test('terminal status distinguishes final error, aborted and waiting, not just color', () => {
+  const h = harness();
+  h.run("updateChatStatus({type:'agent_start'});updateChatStatus({type:'message_end',message:{role:'assistant',stopReason:'error'}});updateChatStatus({type:'agent_settled'});");
+  assert.equal(h.elements.get('chatStatus').textContent, '!');
+  assert.equal(h.elements.get('chatStatus')['aria-label'], '最终失败');
+  h.run("updateChatStatus({type:'agent_start'});updateChatStatus({type:'message_end',message:{role:'assistant',stopReason:'aborted'}});updateChatStatus({type:'agent_settled'});");
+  assert.equal(h.run('chatState'), 'stopped');
+  h.run("pendingDialogs={ask:{id:'ask'}};paintChatStatus();");
+  assert.equal(h.elements.get('chatStatus').textContent, '?');
+  h.run("setChatStatus('unknown');");
+  assert.equal(h.elements.get('chatStatus').textContent, '◇');
+});
+
+test('authoritative reconnect snapshot restores busy or success without polling', async () => {
+  const h = harness();
+  for (const state of ['busy','success','failed','stopped','ready']) {
+    await h.run(`(async()=>{attached='/test.jsonl';api=async()=>({ok:true,state:'${state}',busy:${state==='busy'},pendingDialogs:[]});await refreshChatStatus();})()`);
+    assert.equal(h.run('chatState'), state);
+    assert.equal(h.run('turnActive'), state === 'busy');
+  }
+  await h.run("(async()=>{api=async()=>{throw Error('disconnected')};await refreshChatStatus();})()");
+  assert.equal(h.run('chatState'), 'unknown');
+});
+
+test('late snapshot cannot overwrite a newer lifecycle event', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';let resolve;api=()=>new Promise(r=>resolve=r);
+    const p=refreshChatStatus();updateChatStatus({type:'agent_start'});resolve({ok:true,state:'success',busy:false});await p;})()`);
+  assert.equal(h.run('chatState'), 'busy');
+});
+
+test('manual compaction stays busy then uses authority; idle abort becomes neutral stopped', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';api=async()=>({ok:true,state:'ready',busy:false,pendingDialogs:[]});
+    handleEvent({type:'compaction_start'});
+    if(chatState!=='busy')throw Error('not busy during compaction');
+    handleEvent({type:'compaction_end',result:{}});await Promise.resolve();await Promise.resolve();
+    handleEvent({type:'response',command:'abort',success:true});})()`);
+  assert.equal(h.run('chatState'), 'stopped');
+});
+
+test('new queue snapshot and new optimistic send survive an in-flight clear', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';let resolve;
+    api=()=>new Promise(r=>resolve=r);queueState={steering:['old'],followUp:[]};
+    const p=queueBatch(false);pendingSends.new={mode:'queue',text:'new draft message'};
+    handleEvent({type:'queue_update',steering:[],followUp:['new draft message']});
+    resolve({ok:true,data:{steering:['old'],followUp:[]}});await p;})()`);
+  assert.equal(h.run('queueState.followUp[0]'), 'new draft message');
+  assert.equal(h.run('pendingSends.new.text'), 'new draft message');
+  assert.equal(h.run("$('promptInput').value"), 'old');
+});
+
+test('history edit loads text/images, cancellation restores original draft/images', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';$('promptInput').value='draft';pendingImages=[{b64:'DRAFT',mime:'image/png'}];
+    await beginHistoryEdit({content:[{type:'text',text:'old'},{type:'image',data:'OLD',mimeType:'image/jpeg'}]},'entry-1');})()`);
+  assert.equal(h.run("$('promptInput').value"), 'old');
+  assert.equal(h.run('historyEdit.entryId'), 'entry-1');
+  assert.equal(h.run('pendingImages[0].b64'), 'OLD');
+  h.run('cancelHistoryEdit();');
+  assert.equal(h.run("$('promptInput').value"), 'draft');
+  assert.equal(h.run('pendingImages[0].b64'), 'DRAFT');
+});
+
+test('busy or unknown history edit cannot submit or become follow-up', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';globalThis.calls=[];api=async(op,x)=>{calls.push(op);return {ok:true};};
+    await beginHistoryEdit({content:'old'},'entry-1');$('promptInput').value='modified';
+    turnActive=true;setChatStatus('busy');sendPrompt();await submitHistoryEdit();
+    turnActive=false;setChatStatus('unknown');await submitHistoryEdit();})()`);
+  assert.equal(h.run('calls.length'), 0);
+  assert.equal(h.run("$('promptInput').value"), 'modified');
+});
+
+test('history submit uses stable entryId and dedicated operation; draft survives success', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';$('promptInput').value='draft';globalThis.calls=[];
+    api=async(op,x)=>{calls.push([op,x]);return {ok:true};};heal=async()=>{};setChatStatus('ready');
+    await beginHistoryEdit({content:'old'},'persistent-id');$('promptInput').value='new';
+    await submitHistoryEdit();})()`);
+  assert.equal(h.run('calls[0][0]'), 'regenerate');
+  assert.equal(h.run('calls[0][1].entryId'), 'persistent-id');
+  assert.equal(h.run('calls[0][1].message'), 'new');
+  assert.equal(h.run("$('promptInput').value"), 'draft');
+  assert.equal(h.run('historyEdit'), null);
+});
+
+test('historical rejection preserves edited payload, no automatic follow-up', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';setChatStatus('ready');globalThis.calls=0;
+    api=async()=>{calls++;return {ok:false,error:'busy'};};await beginHistoryEdit({content:'old'},'entry-1');
+    $('promptInput').value='new';await submitHistoryEdit();})()`);
+  assert.equal(h.run('calls'), 1);
+  assert.equal(h.run('historyEdit.entryId'), 'entry-1');
+  assert.equal(h.run("$('promptInput').value"), 'new');
 });
 
 (async () => {

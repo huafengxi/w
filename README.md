@@ -19,6 +19,7 @@
 | `RSH_FWD_DIR` | 路由使用 `${RSH_FWD_DIR}` 时必填绝对 socket 目录 |
 | `W_SESSION_PROFILE` | 调用方的缺省交互 profile 名；未设置时新建须显式传 profile，仍验证 manifest 的 interactive 白名单 |
 | `W_AGENTD_DIR` | 使用 sessiond 时必填，提供 `envscrub` 模块的绝对目录；身份洗刷由该模块负责 |
+| `W_SESSION_PI_BIN` | 可选，sessiond 交互会话的 pi 可执行文件；缺省按 PATH 查找。整批队列操作要求 pi >=0.84.4 的 `clear_queue` RPC，安装与版本由调用方管理 |
 | `W_ORG_LOAD_PATH` | 可选，以路径分隔符连接的 Emacs 包目录 |
 | `W_ORG_AUTHOR` / `W_ORG_EMAIL` / `W_REVEAL_ROOT` | 可选，org 导出元数据和 reveal 资源 URL |
 
@@ -39,5 +40,7 @@ feature-free `core/` 加 `ext/<feature>/`：mime、vmap、shell rc 和 bin 按�
 ## Tests
 
 从仓根执行 `python test/smoke.py`、`python test/proxy_unix_test.py`、`bash test/proxy_test.sh`、`node test/chat_frontend.cjs`。代理测试自建临时配置/上游和隔离 WSGI 实例，不覆盖部署配置。
+
+聊天新增回归：`node test/chat_frontend.cjs`（包含原有回归）、`python test/chat_backend.py`；真实 pi/确定性本地模型夹具：`PI_TEST_BIN=/path/to/pi python test/chat_pi_rpc.py`，不访问真实模型或修改全局配置，临时证据留在新建的测试目录。浏览器夹具：`PLAYWRIGHT_MODULE=/path/to/playwright CHROMIUM_BIN=/path/to/chromium node test/chat_browser.cjs`，可用 `CHAT_SCREENSHOT` 指定截图落点。
 
 sessiond 测试（`resolve_agent_edge.py`、`session_ops_edge.py`、`session_lifecycle.py`、`dormant_send_revive.py`）由调用方设置 `W_AGENTD_DIR` 提供身份洗刷依赖，工作区由 test/sandbox.py 创建，不使用真实 workspace。其余回归在 `test/test_*.py`；测试只读仓内机制资源，写入自建临时树。现场部署断言及截图入口归调用方运维仓。

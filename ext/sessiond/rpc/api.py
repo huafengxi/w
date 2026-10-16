@@ -287,7 +287,8 @@ def interp(store, op='', session='', cmd='', **kw):
         if op == 'rename_session':
             return _rename_session(session, kw)
         return _delete_session(session, kw)
-    if op not in ('status', 'attach', 'commands', 'inspect', 'reload', 'clear', 'cmd'):
+    if op not in ('status', 'attach', 'commands', 'inspect', 'reload', 'clear', 'cmd',
+                  'queue_rpc', 'chat_state', 'regenerate'):
         return _j({"ok": False, "error": "unknown op %r" % op}, '400 Bad Request')
     if op == 'cmd':
         try:
@@ -331,6 +332,30 @@ def interp(store, op='', session='', cmd='', **kw):
                        "error": "get_entries rejected: %s"
                        % (r["resp"].get("error") or "?")}, '502 Bad Gateway')
         return _j(doc)
+    if op in ('queue_rpc', 'chat_state', 'regenerate'):
+        if op == 'queue_rpc':
+            action = kw.get('action')
+            if action not in ('clear_queue', 'steer'):
+                return _j({"ok": False, "error": "unsupported queue action"}, '400 Bad Request')
+            command = {"type": action}
+            if action == 'steer':
+                command['message'] = kw.get('message', '')
+            r = b.request(command)
+        elif op == 'chat_state':
+            r = b.chat_action('state')
+            if r.get('ok'):
+                r['pendingDialogs'] = b.pending_dialog_list()
+                if not r.get('busy') and getattr(b, 'stop_requested', False):
+                    r['state'] = 'stopped'
+        else:
+            try:
+                images = _json.loads(kw.get('images') or '[]')
+            except (ValueError, TypeError):
+                return _j({"ok": False, "error": "invalid images JSON"}, '400 Bad Request')
+            r = b.chat_action('regenerate', {'entryId': kw.get('entryId'),
+                                           'message': kw.get('message', ''), 'images': images})
+        # Return RPC failure as data too: clear+forward is explicitly NOT atomic.
+        return _j(r)
     if op == 'commands':
         # 任务 a16jpj：pi rpc get_commands 只读查询（结构同 get_entries 配对等待，
         # 见 bridge.py:get_commands）；失败口径对齐 attach（502）。

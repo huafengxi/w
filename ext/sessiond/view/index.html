@@ -241,6 +241,17 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
   font: inherit; resize: none; max-height: 120px; }
 #promptInput:focus { outline: none; border-color: var(--acc); }
+#inputbar { position: relative; }
+#promptInput { padding-right: 44px; min-width: 0; }
+#chatStatus { position: absolute; right: 18px; bottom: 12px; width: 28px; height: 28px;
+  padding: 0; border: 0; background: var(--bg); font-size: 19px; color: var(--dim); }
+#chatStatus[data-state="busy"] { color: var(--acc); animation: waitpulse 1.6s infinite; }
+#chatStatus[data-state="success"] { color: var(--ok); }
+#chatStatus[data-state="failed"] { color: var(--err); }
+#editBanner { padding: 6px 16px; font-size: 12px; color: var(--warn); background: var(--panel); }
+.history-edit { margin-left: 8px; font-size: 11px; padding: 1px 6px; }
+.qp-head button { margin-left: 8px; font-size: 11px; }
+button:disabled { opacity: .5; cursor: default; }
 /* 内容超高时不顶穿视口（任务 8scsjj）：盒子以 bottom:80px 锚定，原先无高度上界
    ⇒ 内容一多就向上无限延伸、标题栏（含 – 收起按钮）滚出屏幕外不可点。
    现给高度上界（视口高 − bottom 80px − 顶部留白 20px）并改纵向 flex：
@@ -295,8 +306,15 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
     <div id="slashNotice" class="notice hidden"></div>
     <div id="attachBar" class="hidden"></div>
     <div id="queuedPanel" class="hidden"></div>
+    <div id="editBanner" class="hidden">正在编辑历史消息 · 重新生成会保留旧分支，但不会撤销旧工具操作。
+      <button id="editSubmit" onclick="submitHistoryEdit()">重新生成</button>
+      <button id="editCancel" onclick="cancelHistoryEdit()">取消</button>
+      <button id="editStop" onclick="sendCmd({type:'abort',id:uid()})">停止当前任务</button>
+      <span id="editHint"></span>
+    </div>
     <div id="inputbar">
       <textarea id="promptInput" rows="1" placeholder="Type a prompt or /command, Enter to send (queues automatically while streaming), Shift+Enter for newline"></textarea>
+      <button id="chatStatus" type="button" data-state="unknown" aria-label="连接状态未知" title="连接状态未知" onclick="flash(this.title)">◇</button>
     </div>
   </main>
 </div>
@@ -448,6 +466,7 @@ let waitingEl = null;
 let retryBoxEl = null;
 let lastRenderedErrorMsg = null;
 let queueState = {steering: [], followUp: []};
+let queueRevision = 0;
 
 // ---------------- 基础请求 ----------------
 async function api(op, extra) {
@@ -529,6 +548,7 @@ function beep(kind) {
 async function attach(name) {
   if (attached === name && streamAlive) return true;
   stopStream();
+  setChatStatus("busy");             // Explicit attach may be starting the process.
   clearPendingDialogs();
   baselineGen++;                                    // 旧基线分片渲染立即作废（bw333x）
   $("stream").innerHTML = "";
@@ -639,7 +659,7 @@ function activeBranch(entries, leafId) {
 function renderEntry(e) {
   if (!e || !e.id || seenEntryIds.has(e.id)) return;   // 幂等
   const t = e.type;
-  if (t === "message" && e.message) { renderEntryMessage(e.message); return; }
+  if (t === "message" && e.message) { renderEntryMessage(e.message, e.id); return; }
   if (t === "session_info") return;                     // 噪音，跳过
   if (t === "model_change") { curProvider = e.provider || curProvider;
     curModelId = e.modelId || curModelId;
@@ -648,10 +668,10 @@ function renderEntry(e) {
     sysLine("◆ thinking → " + (e.thinkingLevel || "?")); return; }
   sysLine("◆ " + (t || "?"));
 }
-function renderEntryMessage(m) {
+function renderEntryMessage(m, entryId) {
   const role = m.role;
   if (role === "user") {
-    renderUserMessage(m);                       // 基线渲染：文本 + 图片缩略图
+    renderUserMessage(m, entryId);               // Stable persistent entry ID, not DOM position.
     return;
   }
   if (role === "toolResult") {
@@ -728,6 +748,7 @@ async function heal(reason) {
 }
 
 function stopStream() {
+  statusEpoch++; setChatStatus("unknown");
   streamAlive = false;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (streamCtrl) { try { streamCtrl.abort(); } catch (e) {} streamCtrl = null; }
@@ -750,6 +771,7 @@ function openStream() {
       if (my.signal.aborted) return;      // 建流前已被顶替/停止，直接放弃（防孤儿流起跑）
       if (!resp.ok) throw new Error("stream " + resp.status);
       lastStreamAt = Date.now();            // 建流成功（任务 0830-1452-svok）
+      refreshChatStatus(my);                // One authoritative query per connection; no polling.
       const reader = resp.body.getReader();
       const dec = new TextDecoder("utf-8");
       let buf = "";
@@ -765,6 +787,7 @@ function openStream() {
     .catch(e => {
       if (my.signal.aborted) return;      // 主动 abort（被新流顶替/停止）→ 不重连（防孤儿流，0830-1533-56xk）
       if (streamCtrl !== my) return;      // 双保险：已不是当前这一代流，无权发起重连（0830-1533-56xk）
+      statusEpoch++; setChatStatus("unknown");
       reconnectTimer = setTimeout(openStream, 1500);   // 真断线，静默重连（防刷屏）
     });
 }
@@ -828,6 +851,7 @@ function drainFrames(buf) {
 // ---------------- 事件渲染（实时流） ----------------
 function handleEvent(o) {
   const t = o.type;
+  updateChatStatus(o);
   if (t === "webgw.gap") {
     flash("Event stream gap → healing baseline…", "warn");
     heal("event ring eviction");
@@ -880,11 +904,13 @@ function handleEvent(o) {
                                                         // 收尾窗内间隙静默检测挂起防误导（0c736g）
   }
   if (t === "agent_end") {
-    turnActive = false; hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false;
+    // Not settled: retry, compaction and queued continuation can follow.
+    hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false;
     collapseProcessGroups();                            // agent run 结束 → 自动折叠过程组（0830-1039-a6vy）
   }
   if (t === "response") { handleCmdResponse(o); }       // 上行命令回执（0829-2115-zvti）
   renderEvent(o);
+  paintChatStatus();
   // 块间间隙续接（任务 0c736g）：每收一个真实事件帧重置静默计时（保活 `: ping`
   // 注释帧在 drainFrames 被跳过不进本函数，不会误重置）；到期且守卫通过 → 复用
   // waiting 行（见 gapTimerFire）。间隙中偶发的控制帧（queue_update 等）只把指示
@@ -898,6 +924,7 @@ function renderEvent(o) {
   if (t === "auto_retry_start") { showRetryBox(o); return; }
   if (t === "auto_retry_end") { endRetryBox(o); return; }
   if (t === "queue_update") {
+    queueRevision++;
     queueState = {steering: Array.isArray(o.steering) ? o.steering : [],
                   followUp: Array.isArray(o.followUp) ? o.followUp : []};
     renderQueuedPanel();
@@ -1566,6 +1593,157 @@ function clearPendingDialogs() {
   $("dialogPillTimeout").textContent = "";
 }
 
+// ---------------- Chat lifecycle / historical editing / batch queue ----------------
+let chatState = "unknown", statusEpoch = 0, runOutcome = "success";
+let queueBatchBusy = false, historyEdit = null, editSubmitting = false;
+const CHAT_STATES = {
+  unknown: ["◇", "连接状态未知"], busy: ["◌", "处理中（生成、工具、重试、压缩或启动）"],
+  waiting: ["?", "等待用户回答"], success: ["✓", "已成功完成"],
+  failed: ["!", "最终失败"], stopped: ["○", "已停止"], ready: ["○", "就绪"]
+};
+function paintChatStatus() {
+  const state = chatState !== "unknown" && Object.keys(pendingDialogs).length ? "waiting" : chatState;
+  const [icon, label] = CHAT_STATES[state] || CHAT_STATES.unknown;
+  const el = $("chatStatus"); el.textContent = icon; el.title = label;
+  el.setAttribute("aria-label", label); el.dataset.state = state;
+  $("editSubmit").disabled = editSubmitting || turnActive || !["ready", "success", "failed", "stopped"].includes(state);
+  $("editCancel").disabled = editSubmitting;
+  $("editStop").disabled = editSubmitting || !turnActive;
+  $("editHint").textContent = historyEdit && $("editSubmit").disabled ? "请等待空闲，或主动 /abort 停止后重新生成" : "";
+}
+function setChatStatus(state) { chatState = state; paintChatStatus(); }
+async function refreshChatStatus(controller) {
+  const epoch = statusEpoch, session = attached;
+  try {
+    const r = await api("chat_state", {session});
+    if (attached !== session || (controller && (controller.signal.aborted || streamCtrl !== controller)) || epoch !== statusEpoch) return;
+    if (!r.ok) throw new Error(r.error);
+    turnActive = !!r.busy;
+    syncPendingDialogs(r.pendingDialogs || []);
+    setChatStatus(r.state || "unknown");
+  } catch (_) { if (epoch === statusEpoch) setChatStatus("unknown"); }
+}
+function updateChatStatus(o) {
+  const t = o.type;
+  if ((t === "message_start" && o.message && o.message.role === "user") || ["agent_start", "before_agent_start", "tool_execution_start", "auto_retry_start", "compaction_start", "auto_compaction_start", "sessiond.session_starting", "sessiond.session_restarted"].includes(t)) {
+    statusEpoch++; turnActive = true;
+    if (t === "agent_start" || t === "auto_retry_start") runOutcome = "success";
+    setChatStatus("busy");
+  }
+  if (t === "message_end" && o.message && o.message.role === "assistant") {
+    const reason = o.message.stopReason;
+    runOutcome = reason === "error" ? "failed" : reason === "aborted" ? "stopped" : "success";
+  }
+  if ((t === "auto_retry_end" && !o.success && !o.aborted) || ((t === "compaction_end" || t === "auto_compaction_end") && o.errorMessage)) runOutcome = "failed";
+  if (t === "response" && o.command === "abort" && o.success) {
+    runOutcome = "stopped";
+    if (!turnActive && chatState !== "unknown") setChatStatus("stopped");
+  }
+  if (t === "agent_settled") {
+    statusEpoch++; turnActive = false; setChatStatus(runOutcome);
+  }
+  if (t === "compaction_end" || t === "auto_compaction_end") refreshChatStatus(streamCtrl);
+  if (t === "sessiond.session_dormant" || t === "agentd.task_ended") { statusEpoch++; turnActive = false; setChatStatus("stopped"); }
+  if (t === "sessiond.error") { statusEpoch++; setChatStatus("unknown"); }
+  // Dialog bookkeeping itself occurs in renderEvent; paint again after it.
+}
+function appendRecoveredTexts(texts) {
+  const text = texts.filter(t => typeof t === "string" && t).join("\n\n");
+  if (!text) return;
+  if (historyEdit) historyEdit.draft = [historyEdit.draft, text].filter(Boolean).join("\n\n");
+  else {
+    const input = $("promptInput"); input.value = [input.value, text].filter(Boolean).join("\n\n");
+    resizePrompt();
+  }
+}
+function resizePrompt() {
+  const input = $("promptInput"); input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight || 32, 120) + "px";
+}
+async function queueBatch(asSteer) {
+  if (queueBatchBusy || !attached) return;
+  queueBatchBusy = true; renderQueuedPanel();
+  const session = attached, revision = queueRevision, optimistic = Object.keys(pendingSends);
+  let remaining = [];
+  try {
+    const r = await api("queue_rpc", {session, action: "clear_queue"});
+    if (!r.ok) throw new Error(r.error || "clear_queue failed");
+    const data = r.data || {};
+    if (!Array.isArray(data.steering) || !Array.isArray(data.followUp)) throw new Error("Invalid clear_queue receipt");
+    remaining = data.steering.concat(data.followUp).filter(t => typeof t === "string" && t.length); // Skip image-only empty texts.
+    if (revision === queueRevision) queueState = {steering: [], followUp: []};
+    // Do not erase optimistic sends created during the clear round trip.
+    for (const id of optimistic) {
+      const p = pendingSends[id]; if (p && !p.rejected && p.mode !== "prompt") delete pendingSends[id];
+    }
+    if (asSteer) {
+      while (remaining.length) {
+        const sent = await api("queue_rpc", {session, action: "steer", message: remaining[0]});
+        if (!sent.ok) throw new Error(sent.error || "steer failed");
+        remaining.shift();
+      }
+      flash("已清队列并逐批转发为 steer（非原子操作；仅文本，不含图片）");
+    } else flash("已全部撤回到" + (historyEdit ? "编辑前草稿" : "输入框") + "（仅取回文本，图片不恢复）", "warn");
+  } catch (e) {
+    flash("批量操作未完成：" + e.message + "。未确认转发的文本已保留；请确认历史后手动发送，不会自动重试。", "err");
+  } finally {
+    appendRecoveredTexts(remaining);
+    queueBatchBusy = false; renderQueuedPanel();
+  }
+}
+async function beginHistoryEdit(message, entryId) {
+  if (editSubmitting) return;
+  const session = attached;
+  if (!entryId) {
+    // Live message events have no entry IDs. Resolve against actual persisted
+    // entries; refuse ambiguous matches rather than inventing DOM/queue IDs.
+    try {
+      const doc = await api("attach", {session});
+      const matches = (doc.entries || []).filter(e => e.type === "message" && e.message.role === "user"
+        && e.message.timestamp === message.timestamp && JSON.stringify(e.message.content) === JSON.stringify(message.content));
+      if (matches.length !== 1) throw new Error("无法唯一定位持久 entryId，请刷新历史后再编辑");
+      entryId = matches[0].id;
+    } catch (e) { flash(e.message, "err"); return; }
+  }
+  if (attached !== session) return;
+  const original = historyEdit || {draft: $("promptInput").value, images: pendingImages.slice()};
+  historyEdit = {entryId, draft: original.draft, images: original.images};
+  $("promptInput").value = msgText(message);
+  pendingImages = (Array.isArray(message.content) ? message.content : []).filter(p => p.type === "image" && p.data && p.mimeType)
+    .map(p => ({b64: p.data, mime: p.mimeType, dataUrl: "data:" + p.mimeType + ";base64," + p.data}));
+  $("editBanner").classList.remove("hidden"); renderAttachBar(); resizePrompt(); paintChatStatus();
+  $("promptInput").focus();
+}
+function cancelHistoryEdit() {
+  if (!historyEdit || editSubmitting) return;
+  $("promptInput").value = historyEdit.draft; pendingImages = historyEdit.images;
+  historyEdit = null; $("editBanner").classList.add("hidden"); renderAttachBar(); resizePrompt();
+}
+async function submitHistoryEdit() {
+  if (!historyEdit || editSubmitting) return;
+  if (turnActive || !["ready", "success", "failed", "stopped"].includes(chatState) || Object.keys(pendingDialogs).length) {
+    flash("历史编辑不能排队：请等待空闲，或主动停止当前任务。", "warn"); return;
+  }
+  const edit = historyEdit, session = attached, text = $("promptInput").value;
+  const submittedImages = pendingImages.slice();
+  const images = submittedImages.map(a => ({type: "image", data: a.b64, mimeType: a.mime}));
+  if (!text.trim() && !images.length) return;
+  editSubmitting = true; paintChatStatus();
+  try {
+    const r = await api("regenerate", {session, entryId: edit.entryId, message: text, images: JSON.stringify(images)});
+    if (!r.ok) throw new Error(r.error || "重新生成被拒绝");
+    // Preserve anything typed while awaiting the receipt as well as pre-edit draft.
+    const changed = $("promptInput").value !== text ? $("promptInput").value : "";
+    $("promptInput").value = [edit.draft, changed].filter(Boolean).join("\n\n");
+    pendingImages = edit.images.concat(pendingImages.filter(a => !submittedImages.includes(a)));
+    historyEdit = null; $("editBanner").classList.add("hidden"); renderAttachBar(); resizePrompt();
+    turnActive = true; runOutcome = "success"; setChatStatus("busy");
+    await heal("historical branch regenerated");
+  } catch (e) {
+    flash("历史重新生成未确认：" + e.message + "。编辑内容仍保留，请先核对历史再重试。", "err");
+  } finally { editSubmitting = false; paintChatStatus(); }
+}
+
 // ---------------- 上行 ----------------
 async function sendCmd(cmd) {
   if (!attached) { sysLine("Not attached to a session", "err"); return; }
@@ -1573,6 +1751,7 @@ async function sendCmd(cmd) {
   catch (e) { sysLine("Send failed: " + e.message, "err"); }
 }
 function sendPrompt() {
+  if (historyEdit) { submitHistoryEdit(); return; }
   const el = $("promptInput");
   const msg = el.value.trim();
   if (!msg && !pendingImages.length) return;
@@ -1586,6 +1765,7 @@ function sendPrompt() {
   // agent 空闲 → prompt 直发；agent 流式中（turnActive）→ follow_up 自动排队。
   // 三段模式切换/发送按钮已移除；流式中不再有拦截提示。
   const type = turnActive ? "follow_up" : "prompt";
+  if (type === "prompt") { runOutcome = "success"; turnActive = true; setChatStatus("busy"); }
   const cmd = {type: type, message: msg, id: uid()};
   if (pendingImages.length) {
     // pi rpc ImageContent 格式（docs/rpc.md）；follow_up 同样支持 images；
@@ -1605,8 +1785,8 @@ function sendPrompt() {
 // 数据源 = queue_update 事件（后端权威：steering + followUp 分组）；本地待发记录
 // （pendingSends，steer/queue 送出后、对应 user message 事件到达前）退化为发送瞬间的
 // 乐观补位：仅当同文本尚不在后端队列里时显示，避免与权威条目重复。
-// 观感按 pi-web QUEUED 口径（见上方 CSS 注释）；无 Recall to input 按钮：
-// pi rpc 协议（steer/follow_up）无清除/召回队列的命令，不提供。
+// Batch operations use clear_queue's actual returned texts, never this display snapshot.
+// They intentionally do not restore/forward attachments, or claim atomicity.
 function renderQueuedPanel() {
   const panel = $("queuedPanel");
   panel.innerHTML = "";
@@ -1629,6 +1809,12 @@ function renderQueuedPanel() {
   head.className = "qp-head";
   head.textContent = (items.some(p => p.rejected) ? "待发送 / 发送失败" : "QUEUED")
     + " \u00b7 " + items.length;
+  for (const [label, steer] of [["全部撤回", false], ["全部转为 steer", true]]) {
+    const button = document.createElement("button"); button.textContent = label;
+    button.title = "仅取回文本；队列中的图片不会恢复或转发";
+    button.disabled = queueBatchBusy || !(queueState.steering.length + queueState.followUp.length);
+    button.onclick = () => queueBatch(steer); head.appendChild(button);
+  }
   panel.appendChild(head);
   for (const p of items) {
     const it = document.createElement("div");
@@ -1706,7 +1892,7 @@ function handleCmdResponse(o) {
       curThinkingLevel = o.data.thinkingLevel || curThinkingLevel;
       if (typeof o.data.messageCount === "number") curMsgCount = o.data.messageCount;  // inbox 增项：零额外请求自带
       curCompacting = !!o.data.isCompacting;
-      turnActive = !!o.data.isStreaming || curCompacting;
+      turnActive = !!o.data.isStreaming || curCompacting || !!o.data.pendingMessageCount;
       refreshSlashNoticeIfVisible();
     }
     return;
@@ -1737,6 +1923,7 @@ function handleCmdResponse(o) {
   }
   flash("Send rejected (" + (o.command || p.mode) + "): " + err, "err");
   p.rejected = true; p.error = err;
+  if (p.mode === "prompt") { turnActive = false; setChatStatus("failed"); }
   renderQueuedPanel();
 }
 
@@ -1751,6 +1938,7 @@ async function sendTracked(cmd) {
     sysLine("Send failed: " + e.message, "err");
     const p = pendingSends[cmd.id];
     if (p) { p.rejected = true; p.error = e.message; renderQueuedPanel(); }
+    setChatStatus("unknown");
   }
 }
 // ---------------- get_state 权威查询（任务 0830-1257-vwzb） ----------------
@@ -1983,7 +2171,7 @@ const CMD_DESC_LIMIT = 80;          // description 截断长度（a16jpj）
 let loadedCmdIndex = new Map();     // name -> source（extension | prompt | skill）
 // 内部探针：需 nonce、由后端 op=inspect 编排（bridge.py:inspect），人手敲只会写一个
 // 没人读的侧车文件 ⇒ 既不列进清单、也不进透传白名单（人用的入口是 /inspect）。
-const INTERNAL_COMMANDS = new Set(["sessiond-inspect"]);
+const INTERNAL_COMMANDS = new Set(["sessiond-inspect", "sessiond-chat"]);
 
 // 入参 = op=commands 的 commands 数组（null/非数组 → 清成空索引）。
 function setLoadedCommands(cmds) {
@@ -2298,13 +2486,17 @@ function renderAttachBar() {
 }
 
 // ---------------- 用户消息渲染（文本 + 图片缩略图；流式与基线共用） ----------------
-function renderUserMessage(m) {
+function renderUserMessage(m, entryId) {
   turnGroup = null;                             // 回合起点 → turn 组重置（基线/实时共用此入口，0830-1047-ehzc）
   const txt = msgText(m);
   const imgs = (Array.isArray(m.content) ? m.content : [])
     .filter(p => p && p.type === "image" && p.data && p.mimeType);
   if (!txt && !imgs.length) return;
   const d = addDiv("role-user", txt);
+  const edit = document.createElement("button");
+  edit.className = "history-edit"; edit.textContent = "编辑并重新生成";
+  edit.onclick = () => beginHistoryEdit(m, entryId);
+  d.appendChild(edit);
   for (const p of imgs) {
     const a = document.createElement("a");
     a.className = "msg-img-link";

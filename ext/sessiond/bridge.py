@@ -1,4 +1,5 @@
 """Per-session command channel, bounded event log and browser subscriptions."""
+import base64
 import json
 import logging
 import os
@@ -49,6 +50,7 @@ class Bridge:
         # 挂起 dialog：id -> 完整 extension_ui_request 对象（应答校验 + 基线
         # 重建，0830-0956-vk20 bug2：前端刷新/重连后经 attach 文档重建对话框）
         self.pending_dialogs = {}
+        self.stop_requested = False
         # dialog 超时 deadline（monotonic 秒，仅请求带 timeout 字段者有；
         # 0830-1104-eji4：pi 端超时是 rpc-mode 内部 setTimeout，不发任何事件，
         # 桥接不清理会让 attach 基线向新 tab 重建已死 dialog → 按 deadline 清理）
@@ -90,6 +92,8 @@ class Bridge:
         expired = []
         if isinstance(obj, dict):
             t = obj.get("type")
+            if t == "agent_start":
+                self.stop_requested = False
             if t == "extension_ui_request" and obj.get("method") in DIALOG_METHODS:
                 with self.lock:
                     expired = self._sweep_expired_dialogs_locked()
@@ -234,7 +238,11 @@ class Bridge:
                                "cancelled": True})
             if stale:
                 self._broadcast_dialog_resolved(stale, cancelled=True)
+        if t == "abort":
+            self.stop_requested = True
         if not self.sup.send(cmd_obj):
+            if t == "abort":
+                self.stop_requested = False
             return "session process stdin unavailable (state=%s)" \
                    % self.sup.state
         if t == "extension_ui_response":
@@ -299,6 +307,55 @@ class Bridge:
         return {"ok": True, "resp": waiter["resp"],
                 "watermark": waiter.get("eid") or "",
                 "gen": self.sup.gen}
+
+    def request(self, command, timeout=COMMANDS_TIMEOUT):
+        """RPC round trip, not merely an stdin write acknowledgement."""
+        # Register only after startup: session_restarted invalidates old waiters.
+        self.sup.ensure_started()
+        if not self.sup.wait_ready():
+            return {"ok": False, "error": "session process not ready (state=%s)" % self.sup.state}
+        with self.lock:
+            self._req_seq += 1
+            rid = "wbreq-%s-%d" % (self.ns, self._req_seq)
+            waiter = {"event": threading.Event(), "resp": None}
+            self.pending[rid] = waiter
+        try:
+            err = self.send(dict(command, id=rid))
+            if err:
+                return {"ok": False, "error": err}
+            if not waiter["event"].wait(timeout):
+                return {"ok": False, "error": "RPC timeout; delivery unknown, do not blindly retry"}
+            resp = waiter["resp"] or {}
+            return {"ok": bool(resp.get("success")), "data": resp.get("data"),
+                    "error": None if resp.get("success") else resp.get("error") or "RPC rejected"}
+        finally:
+            with self.lock:
+                self.pending.pop(rid, None)
+
+    def chat_action(self, action, payload=None):
+        """Public extension command: no fork/file rebinding or JSONL rewriting."""
+        # Old live pi generations may lack this newly added command. Never send
+        # an unknown /command as a prompt: pi would deliver it to the model.
+        commands = self.get_commands()
+        if not commands.get("ok"):
+            return commands
+        if not any(c.get("name") == "sessiond-chat" for c in commands.get("commands", [])):
+            return {"ok": False, "error": "chat extension unavailable; reload this idle session to activate it"}
+        nonce = uuid.uuid4().hex
+        args = base64.b64encode(json.dumps(dict(payload or {}, action=action,
+                                               nonce=nonce)).encode()).decode()
+        r = self.request({"type": "prompt", "message": "/sessiond-chat " + args})
+        if not r["ok"]:
+            return r
+        path = os.path.join(INSPECT_DIR, nonce + ".json")
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {"ok": False, "error": "chat extension unavailable; reload this idle session to activate it"}
+        finally:
+            if os.path.isfile(path):
+                os.unlink(path)
 
     # ---- 只读查询：get_commands（任务 a16jpj） ----
 

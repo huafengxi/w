@@ -274,7 +274,8 @@ def kill_hosts(session_file, grace=3.0):
 
 
 def pi_binary():
-    return shutil.which("pi") or "pi"
+    # Caller can pin a dedicated compatible runtime without replacing global pi.
+    return os.path.expanduser(os.environ.get("W_SESSION_PI_BIN") or shutil.which("pi") or "pi")
 
 
 # ----------------------------------------------------------------
