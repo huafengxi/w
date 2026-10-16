@@ -2493,6 +2493,8 @@ function renderUserMessage(m, entryId) {
     .filter(p => p && p.type === "image" && p.data && p.mimeType);
   if (!txt && !imgs.length) return;
   const d = addDiv("role-user", txt);
+  // Text/bubble click edits; image links retain their existing open-image action.
+  d.onclick = ev => { if (ev.target === d) beginHistoryEdit(m, entryId); };
   const edit = document.createElement("button");
   edit.className = "history-edit"; edit.textContent = "编辑并重新生成";
   edit.onclick = () => beginHistoryEdit(m, entryId);

@@ -31,6 +31,11 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await page.locator('#promptInput').isDisabled(),false);
   await page.locator('#editCancel').click();
   assert.equal(await page.locator('#promptInput').inputValue(),draft);
+  await page.locator('.role-user').click({position:{x:5,y:5}});
+  await page.locator('#editBanner').waitFor({state:'visible'});
+  assert.equal(await page.locator('#promptInput').inputValue(),'historical user text');
+  await page.locator('#editCancel').click();
+  assert.equal(await page.locator('#promptInput').inputValue(),draft);
   await page.evaluate(()=>handleEvent({type:'agent_settled'}));
   assert.equal(await page.locator('#chatStatus').getAttribute('aria-label'),'已成功完成');
   await page.locator('#chatStatus').tap({force:true}).catch(()=>page.locator('#chatStatus').click());
