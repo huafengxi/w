@@ -22,15 +22,11 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await page.getByRole('button',{name:'全部撤回',exact:true}).click();
   assert.equal(await page.locator('#promptInput').inputValue(),'draft\n\nreturned one\n\nreturned two');
   const draft=await page.locator('#promptInput').inputValue();
-  const editButton=page.getByRole('button',{name:'编辑并重新生成',exact:true});
-  assert.equal(await editButton.textContent(),'');
-  assert.equal(await editButton.locator('svg').count(),1);
-  const bubble=await page.locator('.role-user').boundingBox();
-  const icon=await editButton.boundingBox();
-  assert(icon.x>=bubble.x && icon.x+icon.width<=bubble.x+24,'edit icon stays in compact left gutter');
-  assert.equal(await editButton.locator('svg').evaluate(e=>e.getBoundingClientRect().width),12);
-  assert.equal(await editButton.evaluate(e=>getComputedStyle(e).padding),'0px');
-  await editButton.click();
+  const bubble=page.locator('.role-user');
+  assert.equal(await bubble.locator('button, svg').count(),0,'no edit icon or reserved control');
+  assert.deepEqual(await bubble.evaluate(e=>[getComputedStyle(e).paddingLeft,getComputedStyle(e).paddingRight]),
+   ['10px','10px'],'no extra left gutter');
+  await bubble.click({position:{x:20,y:14}});
   await page.locator('#editBanner').waitFor({state:'visible'});
   assert.equal(await page.locator('#promptInput').evaluate(e=>document.activeElement===e),true);
   assert.equal(await page.locator('#promptInput').inputValue(),'historical user text');
@@ -45,6 +41,13 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await page.locator('#promptInput').inputValue(),'historical user text');
   await page.locator('#editCancel').click();
   assert.equal(await page.locator('#promptInput').inputValue(),draft);
+  await page.evaluate(()=>{
+   window.openedImages=[];window.open=url=>window.openedImages.push(url);
+   renderUserMessage({content:[{type:'image',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWZkAAAAASUVORK5CYII=',mimeType:'image/png'}]},'image-id');
+  });
+  await page.locator('.role-user .msg-img').click();
+  assert.equal(await page.evaluate(()=>window.openedImages.length),1,'image still opens');
+  assert.equal(await page.evaluate(()=>historyEdit),null,'image click does not edit the message');
   await page.evaluate(()=>handleEvent({type:'agent_settled'}));
   assert.equal(await page.locator('#chatStatus').getAttribute('aria-label'),'已成功完成');
   await page.evaluate(()=>{
@@ -81,6 +84,6 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await page.locator('#promptInput').evaluate(e=>parseFloat(getComputedStyle(e).paddingRight)),44);
   if(process.env.CHAT_SCREENSHOT) await page.screenshot({path:process.env.CHAT_SCREENSHOT});
   assert.deepEqual(errors,[]);
-  console.log('ALL PASS: Chromium mobile layout, batch recall, edit/cancel/busy, terminal icon and click-to-send prompt/queue/images/empty');
+  console.log('ALL PASS: Chromium mobile layout, icon-free bubble edit/cancel/busy and image links, batch recall, terminal icon and click-to-send prompt/queue/images/empty');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
