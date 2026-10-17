@@ -63,6 +63,9 @@ const source=html.slice(html.indexOf('"use strict";'),html.indexOf('// ---------
   await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
   const before=await page.locator('#sendButton').boundingBox(),single=await page.locator('#promptInput').boundingBox();
   assert(Math.abs(before.y+before.height/2-single.y-single.height/2)<=1);
+  assert.equal(single.x+single.width-before.x-before.width,4,'send button sits 4px from the right edge');
+  assert.equal(before.width,28,'button hit area is unchanged');
+  assert.equal(await page.locator('#promptInput').evaluate(e=>getComputedStyle(e).paddingRight),'36px','text reserves space without overlapping the button');
   await page.locator('#promptInput').fill('first\nsecond\nthird\nfourth');
   await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
   const after=await page.locator('#sendButton').boundingBox();
