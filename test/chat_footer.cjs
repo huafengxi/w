@@ -5,8 +5,26 @@ test('footer is below the input; queue, slash and attachments remain above it; a
  for(let i=1;i<order.length;i++) assert(html.indexOf(`id="${order[i-1]}"`)<html.indexOf(`id="${order[i]}"`));
  assert.match(html,/id="imageButton"[^>]*onclick="handleSlash\('\/image'\)"/);
  assert.match(html,/id="clearButton"[^>]*onclick="handleSlash\('\/clear'\)"/);
+ assert.match(html,/id="deleteButton"[^>]*onclick="handleSlash\('\/delete'\)"/);
  assert.match(html,/id="sendButton"[^>]*onclick="sendPrompt\(\)"/);
  assert.doesNotMatch(html,/id="chatStatus"[^>]*onclick=/);
+});
+
+test('delete footer action follows /delete availability and disables after deletion', async () => {
+ const other=harness();other.run(`attached='/test.jsonl';setChatStatus('ready');`);
+ assert.equal(other.elements.get('deleteButton').classList.contains('hidden'),true);
+ assert.equal(other.elements.get('deleteButton').disabled,true);
+ const h=harness('/run/sessiond/fixture.agent');
+ h.run(`setChatStatus('ready');`);
+ assert.equal(h.elements.get('deleteButton').classList.contains('hidden'),false);
+ assert.equal(h.elements.get('deleteButton').disabled,true,'no attached session');
+ h.run(`attached='/run/sessiond/fixture.jsonl';setChatStatus('ready');`);
+ assert.equal(h.elements.get('deleteButton').disabled,false);
+ h.run(`healBusy=true;paintChatStatus();`);assert.equal(h.elements.get('deleteButton').disabled,true);
+ await h.run(`(async()=>{healBusy=false;globalThis.calls=[];
+  api=async(op,x)=>{calls.push({op,x});return {ok:true};};await doDelete();})()`);
+ assert.equal(h.run('calls[0].op'),'delete_session');assert.equal(h.run('calls[0].x.confirm'),'1');
+ assert.equal(h.run('sessionGone'),true);assert.equal(h.elements.get('deleteButton').disabled,true);
 });
 
 test('send action never becomes an indicator; busy sends queue and image picker preserves the draft', async () => {

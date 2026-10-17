@@ -110,6 +110,32 @@ const source=html.slice(html.indexOf('"use strict";'),html.indexOf('// ---------
    assert.deepEqual(await page.evaluate(()=>commandCalls.map(c=>c.cmd.type)),['abort','compact'],'/image opens picker, not model prompt');
   }
   console.log('PASS Chromium: click and Enter route /clear, /abort, /compact, /image and unknown commands identically; no prompt/follow_up leakage');
+  assert.equal(await page.locator('#deleteButton').isVisible(),false,'delete remains command-center only');
+  // Real footer click on a command-center URL, with all requests kept in fixtures.
+  const del=await browser.newPage({viewport:{width:320,height:360}});
+  del.on('pageerror',e=>errors.push(e.message));
+  await del.route('http://fixture.test/**',route=>route.fulfill({contentType:'text/html',body:html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')}));
+  await del.goto('http://fixture.test/run/sessiond/fixture.agent');await del.addScriptTag({content:source});
+  await del.evaluate(()=>{
+   attached='/run/sessiond/fixture.jsonl';turnActive=true;setChatStatus('busy');statusCoordinatorWaits.add('ask');paintChatStatus();
+   curCtx={tokens:42000,contextWindow:200000,percent:21};paintContextUsage();
+   window.deleteCalls=[];api=async(op,x)=>{deleteCalls.push({op,x});return {ok:false,error:'fixture denial'};};
+  });
+  assert(await del.locator('#deleteButton').isVisible());
+  const deleteLayout=await del.evaluate(()=>({width:document.documentElement.scrollWidth,right:$('deleteButton').getBoundingClientRect().right,
+   statusWidth:$('chatStatusText').scrollWidth,statusBox:$('chatStatusText').getBoundingClientRect().width}));
+  assert(deleteLayout.width<=320 && deleteLayout.right<=320,'extra action fits narrow footer');
+  assert(deleteLayout.statusWidth<=deleteLayout.statusBox+1,'status remains readable with delete action');
+  await del.locator('#deleteButton').click();await del.waitForFunction(()=>deleteCalls.length===1);
+  assert.equal(await del.evaluate(()=>sessionGone),false,'failed delete retains session');
+  assert.equal(await del.locator('#deleteButton').isDisabled(),false);
+  await del.evaluate(()=>{api=async(op,x)=>{deleteCalls.push({op,x});return {ok:true,removed:['fixture.agent'],process:{stopped:true}};};});
+  await del.locator('#deleteButton').click();await del.waitForFunction(()=>sessionGone);
+  assert.deepEqual(await del.evaluate(()=>deleteCalls.map(c=>[c.op,c.x.session,c.x.confirm])),
+   [['delete_session','/run/sessiond/fixture.jsonl','1'],['delete_session','/run/sessiond/fixture.jsonl','1']]);
+  assert(await del.locator('#deleteButton').isDisabled());assert(await del.locator('#promptInput').isDisabled());
+  assert.equal(await del.evaluate(()=>attached),null);await del.close();
+  console.log('PASS Chromium: footer delete reuses /delete, preserves scope, fits 320px and disables deleted sessions');
   // Separate page: original api(), fetch SSE decoder and lifecycle/race protections.
   const live=await browser.newPage({viewport:{width:390,height:844}});
   live.on('pageerror',e=>errors.push(e.message));

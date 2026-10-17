@@ -340,6 +340,7 @@ button:disabled { opacity: .5; cursor: default; }
       <span id="contextUsage" title="上下文估算，来自模型用量；非会话累计 token">ctx≈?</span>
       <button id="imageButton" type="button" aria-label="添加图片（/image）" title="添加图片（/image）" onclick="handleSlash('/image')">+</button>
       <button id="clearButton" type="button" title="清空会话（/clear）" onclick="handleSlash('/clear')" disabled>清空</button>
+      <button id="deleteButton" class="hidden" type="button" title="删除会话（/delete）" onclick="handleSlash('/delete')" disabled>删除</button>
     </div>
   </main>
 </div>
@@ -1606,6 +1607,8 @@ function paintChatStatus() {
   el.setAttribute("aria-label", displayLabel); el.dataset.state = state === "success" ? "ready" : state;
   el.dataset.phase = state === "busy" ? chatPhase : el.dataset.state;
   $("clearButton").disabled = !attached || sessionGone || healBusy;
+  $("deleteButton").classList.toggle("hidden", !IS_CC);
+  $("deleteButton").disabled = !IS_CC || !attached || sessionGone || healBusy;
   $("imageButton").disabled = sessionGone;
   paintSendButton();
   $("editSubmit").disabled = editSubmitting || turnActive || !["ready", "success", "failed", "stopped"].includes(state);
