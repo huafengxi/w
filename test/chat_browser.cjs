@@ -41,6 +41,9 @@ const source=html.slice(html.indexOf('"use strict";'),html.indexOf('// ---------
   assert.equal(await page.evaluate(()=>historyEdit),null);
   await page.evaluate(()=>{handleEvent({type:'agent_settled'});window.sent=[];api=async(op,x)=>{if(op==='cmd')sent.push(JSON.parse(x.cmd));return {ok:true};};});
   assert.equal(await page.locator('#chatStatusText').innerText(),'就绪');
+  assert.deepEqual(await page.locator('#chatFooter').evaluate(e=>{
+   const s=getComputedStyle(e);return [s.paddingTop,s.paddingRight,s.paddingBottom,s.paddingLeft,e.getBoundingClientRect().height];
+  }),['0px','6px','0px','6px',24],'compact footer retains 24px button hit areas');
   await page.locator('#promptInput').fill('click to send');await page.locator('#sendButton').click();
   await page.locator('#promptInput').fill('click while busy');await page.locator('#sendButton').click();
   assert.deepEqual(await page.evaluate(()=>sent.map(c=>[c.type,c.message])),[['prompt','click to send'],['follow_up','click while busy']]);

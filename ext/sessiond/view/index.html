@@ -248,8 +248,8 @@ main > #composerExtras { min-height: 0; max-height: 50%; overflow-y: auto; flex-
   display: flex; align-items: center; justify-content: center; line-height: 1;
   padding: 0; border: 0; background: var(--bg); font-size: 19px; color: var(--acc); }
 /* Persistent composer footer; input aids and queued messages stay above the input. */
-#chatFooter { display: flex; align-items: center; gap: 10px; min-width: 0;
-  padding: 2px 10px calc(2px + env(safe-area-inset-bottom, 0px));
+#chatFooter { display: flex; align-items: center; gap: 6px; min-width: 0;
+  padding: 0 6px env(safe-area-inset-bottom, 0px);
   color: var(--dim); font-size: 11px; line-height: 20px; }
 #chatStatus { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
 #chatStatusText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -263,7 +263,6 @@ main > #composerExtras { min-height: 0; max-height: 50%; overflow-y: auto; flex-
   font-size: 11px; padding: 0 4px; min-height: 24px; }
 #chatFooter button:hover { color: var(--acc); }
 #chatFooter #imageButton { font-size: 20px; min-width: 28px; }
-@media (max-width: 360px) { #chatFooter { gap: 6px; padding-left: 6px; padding-right: 6px; } }
 #editBanner { padding: 6px 16px; font-size: 12px; color: var(--warn); background: var(--panel); }
 .qp-head button { margin-left: 8px; font-size: 11px; }
 button:disabled { opacity: .5; cursor: default; }
