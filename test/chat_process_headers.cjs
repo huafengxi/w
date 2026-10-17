@@ -5,7 +5,7 @@ function processLabels(h) {
   return Array.from(h.run(`$('stream').children.filter(d => (d.className || '').split(' ').includes('process-group')).map(d => d.children[0].children[1].textContent)`));
 }
 function processStatus(h, text, count = 0) {
-  assert.equal(h.run('currentProcessGroup.label.textContent'), '过程 · ' + text + (count ? ' · ' + count + '次工具' : ''));
+  assert.equal(h.run('currentProcessGroup.label.textContent'), text + (count ? ' · ' + count + '次工具' : ''));
   assert.equal(h.elements.get('chatStatus').title, text, 'title and indicator share the status source');
 }
 const processBaseline = `{entries:[
@@ -40,7 +40,7 @@ test('process header starts before first token, admits once, text-only terminal 
   processStatus(h, '已成功完成');
   h.run(`stopStream();handleEvent({type:'message_start',message:{role:'user',content:'second'}});`);
   processStatus(h, '启动中');
-  assert.deepEqual(processLabels(h), ['过程 · 已成功完成', '过程 · 启动中']);
+  assert.deepEqual(processLabels(h), ['已成功完成', '启动中']);
   assert.equal(h.run('firstGroup.statusLabel'), '已成功完成');
   assert(!html.includes('id="chatStatusText"'), 'no independent bottom status text');
 });
@@ -96,10 +96,10 @@ test('follow_up queue admission cannot steal or create a header; previous final 
   processStatus(h, '收尾中');
   h.run(`handleEvent({type:'message_start',message:{role:'user',content:'queued'}});`);
   assert.equal(processLabels(h).length, 2);
-  assert.equal(h.run('oldGroup.label.textContent'), '过程', 'unfinished old turn becomes neutral, not a fabricated terminal');
+  assert.equal(h.run('oldGroup.label.textContent'), '', 'unfinished old turn becomes neutral, not a fabricated terminal');
   h.run(`handleEvent({type:'message_end',message:{role:'assistant',stopReason:'aborted'}});handleEvent({type:'agent_settled'});`);
   processStatus(h, '已停止');
-  assert.equal(h.run('oldGroup.label.textContent'), '过程');
+  assert.equal(h.run('oldGroup.label.textContent'), '');
 });
 
 test('ownership transfer clears any nonterminal old label but preserves each known terminal', () => {
@@ -108,7 +108,7 @@ test('ownership transfer clears any nonterminal old label but preserves each kno
     h.run(`handleEvent({type:'message_start',message:{role:'user',content:'old'}});
       setChatStatus('busy','${phase}');globalThis.old=currentProcessGroup;
       handleEvent({type:'message_start',message:{role:'user',content:'new'}});`);
-    assert.equal(h.run('old.label.textContent'),'过程');
+    assert.equal(h.run('old.label.textContent'),'');
     processStatus(h,'启动中');
     assert.equal(processLabels(h).length,2);
   }
@@ -131,9 +131,9 @@ test('sliced baseline stays statusless; busy binds last text-only turn, idle nev
     assert.equal(h.run('batchDepth'),1);
     assert.equal(h.run('currentProcessGroup'),null);
     h.drainTimers();
-    assert.deepEqual(processLabels(h),['过程 · 1次工具']);
+    assert.deepEqual(processLabels(h),['1次工具']);
     await h.run(`api=async()=>({ok:true,state:'${busy?'busy':'success'}',busy:${busy},pendingDialogs:[]});refreshChatStatus();`);
-    assert.deepEqual(processLabels(h),busy?['过程 · 1次工具','过程 · 处理中']:['过程 · 1次工具']);
+    assert.deepEqual(processLabels(h),busy?['1次工具','处理中']:['1次工具']);
     if(busy) {
       assert.equal(h.run(`$('stream').children.indexOf(currentProcessGroup.det) < $('stream').children.findIndex(d=>d._md?.textContent==='last text')`),true);
       h.run(`handleEvent({type:'message_start',message:{role:'assistant'}});
@@ -142,7 +142,7 @@ test('sliced baseline stays statusless; busy binds last text-only turn, idle nev
       processStatus(h,'模型生成中');
     } else {
       h.run(`handleEvent({type:'message_start',message:{role:'user',content:'new'}});`);
-      assert.deepEqual(processLabels(h),['过程 · 1次工具','过程 · 启动中']);
+      assert.deepEqual(processLabels(h),['1次工具','启动中']);
     }
   }
 });
@@ -151,10 +151,10 @@ test('busy baseline with existing blocks binds only last group; empty baseline a
   const h=harness();
   h.run(`attached='/test.jsonl';applyBaseline(${processBaseline.replace("{type:'text',text:'last text'}", "{type:'thinking',thinking:'last thought'}")},false);`);
   await h.run(`api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});refreshChatStatus();`);
-  assert.deepEqual(processLabels(h),['过程 · 1次工具','过程 · 处理中']);
+  assert.deepEqual(processLabels(h),['1次工具','处理中']);
   h.run(`applyBaseline(${emptyBaseline},false);`);
   await h.run('refreshChatStatus();');
-  assert.deepEqual(processLabels(h),['过程 · 处理中']);
+  assert.deepEqual(processLabels(h),['处理中']);
   h.run(`globalThis.placeholder=currentProcessGroup;handleEvent({type:'message_start',message:{role:'user',content:'admitted'}});`);
   assert(h.run('currentProcessGroup===placeholder'));
   assert.equal(processLabels(h).length,1);
@@ -173,10 +173,10 @@ test('process binding survives reconnect races, and heal invalidates pending aut
   assert(h.run('currentProcessGroup===grp'));
   await h.run(`(async()=>{let resolve;api=()=>new Promise(r=>resolve=r);const old=refreshChatStatus();
     applyBaseline(${processBaseline},false);resolve({ok:true,state:'busy',busy:true,pendingDialogs:[]});await old;})()`);
-  assert.deepEqual(processLabels(h),['过程 · 1次工具']);
+  assert.deepEqual(processLabels(h),['1次工具']);
   assert.equal(h.run('currentProcessGroup'),null);
   await h.run(`api=async()=>({ok:true,state:'ready',busy:false,pendingDialogs:[]});refreshChatStatus();`);
-  assert.deepEqual(processLabels(h),['过程 · 1次工具']);
+  assert.deepEqual(processLabels(h),['1次工具']);
 });
 
 

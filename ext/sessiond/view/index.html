@@ -1179,8 +1179,8 @@ function grpAddBlock(grp, node, isTool) {
   paintProcessGroup(grp);
 }
 function paintProcessGroup(grp) {
-  grp.label.textContent = "过程" + (grp.statusLabel ? " · " + grp.statusLabel : "")
-    + (grp.nTools ? " · " + grp.nTools + "次工具" : "");
+  grp.label.textContent = [grp.statusLabel, grp.nTools ? grp.nTools + "次工具" : ""]
+    .filter(Boolean).join(" · ");
 }
 function resetProcessBinding() {
   // Admission transfers live ownership, not a fabricated terminal. An unfinished

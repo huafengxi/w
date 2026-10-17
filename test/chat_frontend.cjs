@@ -660,7 +660,7 @@ test('silent generation keeps process status without a standalone model-waiting 
   h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_start',message:{role:'assistant'}});");
   h.drainTimers();
   status(h, '模型生成中', true);
-  assert.equal(h.run('currentProcessGroup.label.textContent'), '过程 · 模型生成中');
+  assert.equal(h.run('currentProcessGroup.label.textContent'), '模型生成中');
   assert.equal(h.elements.get('stream').children.some(n => /(?:^|\s)waiting(?:\s|$)/.test(n.className || '')), false);
   assert.equal(h.run('typeof gapTimerFire'), 'undefined', 'obsolete waiting timer was removed');
 });

@@ -43,7 +43,7 @@ module.exports = async ({browser, html, source, assert, errors}) => {
  await page.waitForFunction(()=>batchDepth===0 && currentProcessGroup?.statusLabel==='处理中');
  await page.evaluate(()=>Date.now=originalNow);
  const labels=()=>page.locator('.pg-label').allTextContents();
- assert.deepEqual(await labels(),['过程 · 1次工具','过程 · 处理中']);
+ assert.deepEqual(await labels(),['1次工具','处理中']);
  assert.equal(await page.locator('.process-group').first().evaluate(e=>e.open),false,'historical replay stays folded');
  assert.equal(await page.locator('.process-group').last().evaluate(e=>e.nextElementSibling.textContent),'Last text-only answer',
   'busy text-only baseline header is before its answer');
@@ -57,14 +57,14 @@ module.exports = async ({browser, html, source, assert, errors}) => {
  await emit({type:'tool_execution_start',toolCallId:'live-tool',toolName:'read',args:{path:'fixture'}});
  await page.waitForFunction(()=>currentProcessGroup.nTools===1);
  assert.equal(await page.locator('.process-group').last().evaluate(e=>e.open),false,'later block respects user collapse');
- assert.equal(await page.locator('.pg-label').first().innerText(),'过程 · 1次工具');
+ assert.equal(await page.locator('.pg-label').first().innerText(),'1次工具');
  // Heal/refresh: rebuild the same history under an idle authority. Never label it successful.
  await page.evaluate(async()=>{
   fixtureState={ok:true,state:'success',busy:false,pendingDialogs:[]};
   await heal('fixture idle refresh');
  });
  await page.waitForFunction(()=>batchDepth===0 && chatState==='success');
- assert.deepEqual(await labels(),['过程 · 1次工具']);
+ assert.deepEqual(await labels(),['1次工具']);
  assert.equal(await page.evaluate(()=>currentProcessGroup),null);
  // Optimistic local startup, its real SSE admission, and follow-up queuing.
  await page.locator('#promptInput').fill('Local text fixture');
@@ -89,15 +89,15 @@ module.exports = async ({browser, html, source, assert, errors}) => {
  await page.waitForFunction(()=>currentProcessGroup.statusLabel==='已成功完成');
  await emit({type:'message_start',message:{role:'user',content:'Queued text fixture'}});
  await page.waitForFunction(()=>document.querySelectorAll('.process-group').length===3);
- assert.equal(await page.locator('.pg-label').nth(1).innerText(),'过程 · 已成功完成');
+ assert.equal(await page.locator('.pg-label').nth(1).innerText(),'已成功完成');
  // A stale authoritative response cannot alter the new current header or bind history.
  await page.evaluate(()=>{window.deferState=true;window.oldRefresh=refreshChatStatus(streamCtrl);});
  await emit({type:'message_start',message:{role:'assistant'}});
  await emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'Second answer.'}});
  await page.waitForFunction(()=>currentProcessGroup.statusLabel==='模型生成中');
  await page.evaluate(async()=>{fixtureState={ok:true,state:'success',busy:false,pendingDialogs:[]};resolveState();await oldRefresh;window.deferState=false;});
- assert.equal(await page.locator('.pg-label').last().innerText(),'过程 · 模型生成中');
- assert.equal(await page.locator('.pg-label').nth(1).innerText(),'过程 · 已成功完成');
+ assert.equal(await page.locator('.pg-label').last().innerText(),'模型生成中');
+ assert.equal(await page.locator('.pg-label').nth(1).innerText(),'已成功完成');
  await emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'Second answer.'}],stopReason:'stop'}});
  await emit({type:'agent_settled'});
  await page.waitForFunction(()=>currentProcessGroup.statusLabel==='已成功完成');
