@@ -40,10 +40,10 @@ module.exports = async ({browser, html, source, assert, errors}) => {
  });
  await page.waitForFunction(()=>batchDepth>0);
  assert.equal(await page.evaluate(()=>currentProcessGroup),null,'no live binding during sliced replay');
- await page.waitForFunction(()=>batchDepth===0 && currentProcessGroup?.statusLabel==='处理中（阶段未知）');
+ await page.waitForFunction(()=>batchDepth===0 && currentProcessGroup?.statusLabel==='处理中');
  await page.evaluate(()=>Date.now=originalNow);
  const labels=()=>page.locator('.pg-label').allTextContents();
- assert.deepEqual(await labels(),['过程 · 1次工具','过程 · 处理中（阶段未知）']);
+ assert.deepEqual(await labels(),['过程 · 1次工具','过程 · 处理中']);
  assert.equal(await page.locator('.process-group').first().evaluate(e=>e.open),false,'historical replay stays folded');
  assert.equal(await page.locator('.process-group').last().evaluate(e=>e.nextElementSibling.textContent),'Last text-only answer',
   'busy text-only baseline header is before its answer');

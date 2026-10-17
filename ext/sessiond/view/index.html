@@ -1561,7 +1561,7 @@ let chatState = "unknown", chatPhase = "unknown", statusEpoch = 0, statusRequest
 const statusTools = new Set(), statusCoordinatorWaits = new Set();
 let queueBatchBusy = false, historyEdit = null, editSubmitting = false;
 const CHAT_STATES = {
-  unknown: ["◇", "连接状态未知"], busy: ["◌", "处理中（阶段未知）"],
+  unknown: ["◇", "连接状态未知"], busy: ["◌", "处理中"],
   waiting: ["?", "等待用户回答"], coordinator: ["?", "等待协调者答复"], success: ["✓", "已成功完成"],
   failed: ["!", "最终失败"], stopped: ["○", "已停止"], ready: ["○", "就绪"]
 };

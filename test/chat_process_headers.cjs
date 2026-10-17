@@ -73,7 +73,7 @@ test('thinking and multiple tools/assistant subturns reuse one collapsible live 
     handleEvent({type:'tool_execution_update',toolCallId:'ask',toolName:'ask_dispatcher',partialResult:{details:{agentdWait:{askId:'id',question:'fixture'}}}});`);
   processStatus(h, '等待协调者答复', 4);
   h.run(`handleEvent({type:'tool_execution_end',toolCallId:'ask',toolName:'ask_dispatcher',result:{content:[]}});`);
-  processStatus(h, '处理中（阶段未知）', 4);
+  processStatus(h, '处理中', 4);
   h.run(`handleEvent({type:'auto_retry_start',attempt:1,maxAttempts:2});`);
   processStatus(h, '自动重试中', 4);
   h.run(`handleEvent({type:'auto_retry_end',success:true});handleEvent({type:'auto_compaction_start'});`);
@@ -133,7 +133,7 @@ test('sliced baseline stays statusless; busy binds last text-only turn, idle nev
     h.drainTimers();
     assert.deepEqual(processLabels(h),['过程 · 1次工具']);
     await h.run(`api=async()=>({ok:true,state:'${busy?'busy':'success'}',busy:${busy},pendingDialogs:[]});refreshChatStatus();`);
-    assert.deepEqual(processLabels(h),busy?['过程 · 1次工具','过程 · 处理中（阶段未知）']:['过程 · 1次工具']);
+    assert.deepEqual(processLabels(h),busy?['过程 · 1次工具','过程 · 处理中']:['过程 · 1次工具']);
     if(busy) {
       assert.equal(h.run(`$('stream').children.indexOf(currentProcessGroup.det) < $('stream').children.findIndex(d=>d._md?.textContent==='last text')`),true);
       h.run(`handleEvent({type:'message_start',message:{role:'assistant'}});
@@ -151,10 +151,10 @@ test('busy baseline with existing blocks binds only last group; empty baseline a
   const h=harness();
   h.run(`attached='/test.jsonl';applyBaseline(${processBaseline.replace("{type:'text',text:'last text'}", "{type:'thinking',thinking:'last thought'}")},false);`);
   await h.run(`api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});refreshChatStatus();`);
-  assert.deepEqual(processLabels(h),['过程 · 1次工具','过程 · 处理中（阶段未知）']);
+  assert.deepEqual(processLabels(h),['过程 · 1次工具','过程 · 处理中']);
   h.run(`applyBaseline(${emptyBaseline},false);`);
   await h.run('refreshChatStatus();');
-  assert.deepEqual(processLabels(h),['过程 · 处理中（阶段未知）']);
+  assert.deepEqual(processLabels(h),['过程 · 处理中']);
   h.run(`globalThis.placeholder=currentProcessGroup;handleEvent({type:'message_start',message:{role:'user',content:'admitted'}});`);
   assert(h.run('currentProcessGroup===placeholder'));
   assert.equal(processLabels(h).length,1);
@@ -169,7 +169,7 @@ test('process binding survives reconnect races, and heal invalidates pending aut
   processStatus(h,'工具执行中',1);
   h.run('stopStream();');processStatus(h,'连接状态未知',1);
   await h.run(`api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});refreshChatStatus();`);
-  processStatus(h,'处理中（阶段未知）',1);
+  processStatus(h,'处理中',1);
   assert(h.run('currentProcessGroup===grp'));
   await h.run(`(async()=>{let resolve;api=()=>new Promise(r=>resolve=r);const old=refreshChatStatus();
     applyBaseline(${processBaseline},false);resolve({ok:true,state:'busy',busy:true,pendingDialogs:[]});await old;})()`);

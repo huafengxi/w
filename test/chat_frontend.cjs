@@ -467,12 +467,12 @@ test('current tools, long silence, ask/answer and notify never use old DOM as a 
   h.run("handleEvent({type:'extension_ui_request',id:'ask',method:'confirm',title:'Continue?'});collapseDialog();");
   status(h, '等待用户回答', true);
   h.run("handleEvent({type:'sessiond.dialog_resolved',id:'ask'});");
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   h.run("handleEvent({type:'tool_execution_end',toolCallId:'b',result:{content:[]}});");
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   h.run("handleEvent({type:'extension_ui_request',method:'notify',message:'notice'});");
   assert.equal(h.run('Object.keys(pendingDialogs).length'), 0);
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   h.run("handleEvent({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'new'}});");
   status(h, '模型生成中', true);
 });
@@ -493,7 +493,7 @@ test('structured current ask_dispatcher wait lasts until its tool ends, not a hi
   h.run("handleEvent({type:'tool_execution_end',toolName:'bash',toolCallId:'other',result:{}});");
   status(h, '等待协调者答复', true);
   h.run("handleEvent({type:'tool_execution_end',toolName:'ask_dispatcher',toolCallId:'ask-call',result:{}});");
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   h.run("handleEvent({type:'agent_settled'});handleEvent({type:'agent_start'});");
   status(h, '启动中', true);
   assert.equal(h.run('statusCoordinatorWaits.size'), 0);
@@ -509,11 +509,11 @@ test('retry, compression, errors and queued continuation are phases, not termina
   h.run("handleEvent({type:'auto_retry_start',attempt:1,maxAttempts:3,errorMessage:'old error'});");
   status(h, '自动重试中', true);
   h.run("handleEvent({type:'auto_retry_end',success:true});");
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   h.run("handleEvent({type:'auto_compaction_start'});");
   status(h, '上下文压缩中', true);
   h.run("handleEvent({type:'auto_compaction_end'});");
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_end',message:{role:'assistant',stopReason:'stop'}});handleEvent({type:'agent_end'});handleEvent({type:'queue_update',followUp:['next']});");
   status(h, '收尾中', true);
   h.run("handleEvent({type:'message_start',message:{role:'user',content:'next'}});");
@@ -574,7 +574,7 @@ test('latest authoritative request wins, including late errors and replaced conn
     resolves[1].resolve({ok:true,state:'busy',busy:true,pendingDialogs:[]});await fresh;
     resolves[0].resolve({ok:true,state:'success',busy:false,pendingDialogs:[]});await old;
   })()`);
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   await h.run(`(async()=>{let reject;api=()=>new Promise((r,j)=>reject=j);const oldCtrl=new AbortController();streamCtrl=oldCtrl;
     const p=refreshChatStatus(oldCtrl);streamCtrl=new AbortController();setChatStatus('ready');reject(Error('old connection'));await p;})()`);
   status(h, '就绪');
@@ -629,7 +629,7 @@ test('SSE disconnect/reconnect calibrates phase unknown, restores live dialogs a
   h.context.fetch = async () => ({ok:true,body:{getReader:()=>({read:()=>new Promise((r,j)=>{failRead=j;})})}});
   await h.run(`(async()=>{attached='/test.jsonl';api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});
     openStream();await Promise.resolve();await Promise.resolve();})()`);
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   h.run("handleEvent({type:'tool_execution_start',toolCallId:'live'});");
   failRead(Error('fixture disconnected'));
   for (let i=0;i<8;i++) await Promise.resolve();
@@ -650,7 +650,7 @@ test('busy-only snapshot does not borrow an old error or tool phase; missing aut
   await h.run(`(async()=>{attached='/test.jsonl';handleEvent({type:'agent_start'});
     handleEvent({type:'tool_execution_start',toolCallId:'historical'});lastRenderedErrorMsg='old';
     api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});await refreshChatStatus();})()`);
-  status(h, '处理中（阶段未知）', true);
+  status(h, '处理中', true);
   await h.run(`(async()=>{api=async()=>({ok:true});await refreshChatStatus();})()`);
   status(h, '连接状态未知');
 });
