@@ -4,265 +4,70 @@
     <title>console</title>
     <base target="_blank">
     <link rel="stylesheet" type="text/css" href="/w/view/my.css"/>
-    <script type="application/javascript" src="/w/view/my.js"></script>
-    <script type="application/javascript" src="/w/view/editor.js"></script>
-    <script type="application/javascript" src="/w/ext/markdown/deps/marked.min.js"></script>
-    <style>
-      #doc li > p { margin: 0.2em 0; }
-      /* manual cmd widget (${!cmd}): skipped by _v=autorun and run-all/refresh-all */
-      button.cmdw-manual { color: #b35900; border: 1px solid #b35900; }
-      /* the '$ <cmd>' label shows the whole command, which can be a long line
-         (e.g. an rsh one-liner): cap the width and ellipsis instead of
-         stretching the layout. Full command stays in the button's title. */
-      button.cmdw-cmd { max-width: 32em; overflow: hidden; text-overflow: ellipsis;
-                        white-space: nowrap; vertical-align: bottom; }
-      .iframe-preview { margin: 0.4em 0 0.8em; }
-      /* height is set to content height by autoFitPreview(); the small 4em is only
-         the pre-load placeholder. max-height caps absurdly long docs — the iframe
-         then scrolls internally instead of stretching the page. */
-      .iframe-preview iframe { display: block; height: 4em; max-height: 80vh; }
-    </style>
+    <script src="/w/view/my.js"></script>
+    <script src="/w/view/editor.js"></script>
+    <script src="/w/ext/markdown/deps/marked.min.js"></script>
+    <script src="/w/view/anchor-widgets.js" defer></script>
+    <style>#doc li > p { margin: 0.2em 0; }</style>
     <script type="application/javascript">
-      // src is a server-side store path; pathname may additionally carry a proxy
-      // route. Keep that route on the RPC URL, never in the shell's file path.
+      // The view supplies deployment context; the widget library knows neither
+      // Markdown nor the server's template injection/proxy routing conventions.
       var cmdSource = (function () {
-         try {
-            var args = $ARGS_JSON;
-            if (args && typeof args.src === 'string' && args.src) return args.src;
-         } catch (e) {} // Unsubstituted/static view: retain direct-open behavior.
-         return window.location.pathname;
+        try {
+          var args = $ARGS_JSON;
+          if (args && typeof args.src === 'string' && args.src) return args.src;
+        } catch (e) {}
+        return window.location.pathname;
       })();
       var cmdPrefix = (function () {
-         var p = window.location.pathname, s = cmdSource;
-         return (p.length > s.length && p.slice(p.length - s.length) === s)
-            ? p.slice(0, p.length - s.length) : '';
+        var p = window.location.pathname, s = cmdSource;
+        return p.length > s.length && p.slice(-s.length) === s ? p.slice(0, -s.length) : '';
       })();
       function toggle_editor() { toggleVisible($('editor')); }
-      function dirname(path) { return path.match(/.*\//);  }
       function getTitle(content) {
-         var m = content.match(/^# (.*)/m);
-         if (m) return m[1];
-         return "untitle";
+        var m = content.match(/^# (.*)/m);
+        return m ? m[1] : 'untitle';
       }
       function underscore_escape_filter(content) {
-         return content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|_/g, function(m, code){ return code ? code : '\\_'; });
+        // Preserve code and raw HTML tags (including href attributes).
+        return content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`|<[^>]*>)|_/g,
+          function(m, literal) { return literal ? literal : '\\_'; });
       }
       function renderMarkdown(text) {
-         // marked (GFM: tables, nested lists); then force tight lists by
-         // stripping paragraph wrappers from list items (loose lists add
-         // unwanted vertical spacing).
-         var html = window.marked.parse(underscore_escape_filter(text));
-         return html.replace(/<li>\s*<p>/g, '<li>').replace(/<\/p>\s*<\/li>/g, '</li>');
+        var html = window.marked.parse(underscore_escape_filter(text));
+        return html.replace(/<li>\s*<p>/g, '<li>').replace(/<\/p>\s*<\/li>/g, '</li>');
       }
-      // Build an inline-command widget: a '$ <cmd>' button that toggles the
-      // output area (stderr log console + stdout result), and a run button
-      // that (re-)runs the command. Commands always go to the bare-shell
-      // endpoint (sh.py runs them via `bash -c`), which streams output
-      // line-framed with a leading tag byte ('1'=stdout, '2'=stderr).
-      // Manual widgets (w.manual, from `${!cmd}`) are marked by the orange
-      // command-button outline; their semantics are identical — the flag
-      // only opts them out of autorun and run-all/refresh-all (see renderDoc).
-      function buildCmdWidget(w) {
-         var ph = $(w.id);
-         if (!ph) return null;
-         var box = $n('div');
-         var btn = $n('button'); btn.textContent = '$ ' + w.cmd;
-         btn.classList.add('cmdw-cmd'); // ellipsis cap for long commands (see <style>)
-         btn.title = w.cmd;             // full command on hover (the label may be truncated)
-         if (w.manual) {
-            btn.classList.add('cmdw-manual');
-            btn.title += '\n手动 widget：不参与 autorun / run-all，仅手点 run 执行';
-         }
-         var refreshBtn = $n('button'); refreshBtn.textContent = 'run';
-         var logBtn = $n('button'); logBtn.textContent = 'log';
-         var ts = $n('span'); ts.style.fontSize = '11px'; ts.style.color = '#999'; ts.style.marginLeft = '4px';
-         var log = $n('pre'); log.className = 'output console'; hide(log);
-         var result = $n('div'); result.className = 'doc';
-         logBtn.onclick = function(){ toggleVisible(log); };
-         box.appendChild(btn); box.appendChild(refreshBtn); box.appendChild(logBtn); box.appendChild(ts); box.appendChild(log); box.appendChild(result);
-         function stamp(){
-            var d = new Date();
-            function p(n){ return (n < 10 ? '0' : '') + n; }
-            ts.textContent = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
-         }
-         ph.parentNode.replaceChild(box, ph);
-         var outText, logText, buf;
-         function run(done){
-            outText = ''; logText = ''; buf = '';
-            result.innerHTML = ''; log.textContent = ''; hide(log); // stays collapsed; on_done shows it only if stderr arrived
-            rpc_stream(cmdPrefix + '/w/ext/shell/rpc/sh.py', {v: 'script', src: cmdSource, cmd: w.cmd, stream: 2},
-               function(text){
-                  buf += text; var i;
-                  while ((i = buf.indexOf('\n')) >= 0) {
-                     var line = buf.slice(0, i + 1); buf = buf.slice(i + 1);
-                     var data = line.slice(1);
-                     if (line.charAt(0) === '2') { logText += data; log.textContent = logText; }
-                     else { outText += data; result.innerHTML = renderMarkdown(outText); }
-                  }
-               },
-               function(){ if (logText) show(log); else hide(log); stamp(); if (done) done(); },
-               function(e){ logText += 'stream error: ' + e + '\n'; log.textContent = logText; show(log); stamp(); if (done) done(); });
-         }
-         btn.onclick = function(){ // toggle the whole output area (log + result)
-            if (isVisible(result)) { hide(result); hide(log); }
-            else { show(result); if (logText) show(log); }
-         };
-         refreshBtn.onclick = function(){ run(); };
-         return {run: run, log: log};
-      }
-      var cmdRunners = [], cmdLogs = [];
-      // Runs the AUTO set only (manual `${!cmd}` widgets are excluded); used
-      // by run-all, refresh-all and _v=autorun alike.
-      function runAll(){
-         var i = 0;
-         (function next(){ if (i < cmdRunners.length) cmdRunners[i++](next); })();
-      }
-      function toggleLogs(){
-         var anyVisible = cmdLogs.some(function(l){ return isVisible(l); });
-         cmdLogs.forEach(function(l){ anyVisible ? hide(l) : show(l); });
+      function updateWidgetButtons(widgets) {
+        var automatic = widgets.some(function(w) {
+          return !w.manual && !w.anchor.closest('[data-anchor-output]');
+        });
+        $('run-all').style.display = $('refresh-all').style.display = automatic ? 'inline' : 'none';
+        $('log-all').style.display = widgets.some(function(w) { return w.kind === 'cmd'; }) ? 'inline' : 'none';
       }
       function renderDoc(content) {
-         var widgets = [];
-         var replaced = content.replace(/((?:^|\n)```[\s\S]*?\n```|`[^`\n]*`)|\$\{([^}]+)\}/g, function(m, code, cmd){
-            if (code) return code;
-            // Leading whitespace is normalized away before the flag is read, so
-            // `${ !cmd}` cannot silently degrade into an AUTO widget: `!` is the
-            // manual flag and a stray leading space used to hide it, which would
-            // have let a mutating command join autorun / run-all (bash treats a
-            // leading `!` as pipeline negation and still runs the body). Only the
-            // leading run is stripped — trailing whitespace and the command body
-            // (newlines, heredoc indentation) are untouched.
-            var body = cmd.replace(/^\s+/, '');
-            // `${!cmd}` = manual widget: skipped by _v=autorun and
-            // run-all/refresh-all (block-level flag; the `!` is stripped
-            // before the command ever reaches the server).
-            var manual = body.charAt(0) === '!';
-            if (manual) body = body.slice(1).replace(/^\s+/, '');
-            // Degenerate input (`${!}`, `${ }`, `${! }`): nothing to run — keep
-            // the source text as a literal instead of building a widget whose
-            // run button would exec a bare `sh` (sh.py falls back to `cmd or 'sh'`)
-            // or an empty `bash -c`.
-            if (!body) return m;
-            var id = 'cmdw' + widgets.length;
-            widgets.push({id: id, cmd: body, manual: manual});
-            return '<span id="' + id + '"></span>';
-         });
-         setWindowTitle(getTitle(content));
-         $("doc").innerHTML = renderMarkdown(replaced);
-         // cmdRunners = the AUTO set only: manual widgets (${!cmd}) are
-         // deliberately excluded so run-all / refresh-all / _v=autorun can
-         // never trigger mutating commands. Manual widgets stay clickable via
-         // their own run button; their log consoles still join log-all.
-         cmdRunners = []; cmdLogs = [];
-         var anyWidget = false;
-         for (var i = 0; i < widgets.length; i++) {
-            var w = buildCmdWidget(widgets[i]);
-            if (w) {
-               anyWidget = true;
-               if (!widgets[i].manual) cmdRunners.push(w.run);
-               cmdLogs.push(w.log);
-            }
-         }
-         var dispAuto = cmdRunners.length ? 'inline' : 'none';
-         $('run-all').style.display = dispAuto;
-         $('refresh-all').style.display = dispAuto;
-         $('log-all').style.display = anyWidget ? 'inline' : 'none';
-         autoExpandInlinePreviews(); // _v=inline links: open on every render
-         // _v=autorun (client-private param namespace, see hrefNoPreviewParam):
-         // auto run-all after every render — for dashboards that want data on
-         // open. Only the exact value `autorun` triggers it. Manual widgets
-         // are never part of runAll(), so they are never auto-executed.
-         if (cmdRunners.length && new URLSearchParams(window.location.search).get('_v') === 'autorun') runAll();
+        setWindowTitle(getTitle(content));
+        $('doc').innerHTML = renderMarkdown(content);
+        AnchorWidgets.enhance($('doc'));
+        updateWidgetButtons(AnchorWidgets.getWidgets());
       }
-
-      var lastRendered = null; // updated by the editor save callback (makeEditor)
-
-      // Auto-fit a preview iframe's height to its content. The embedded md view
-      // renders asynchronously (readAsync fetches the source after load), so a
-      // ResizeObserver on the content document re-measures whenever the body
-      // resizes (initial render, edit re-renders, images). Same-origin only.
-      function autoFitPreview(f) {
-         function fit() {
-            try {
-               var d = f.contentDocument;
-               if (!d || !d.documentElement) return;
-               // Collapse first: documentElement.scrollHeight never reports less
-               // than the viewport, so a tall iframe would otherwise pin itself
-               // and never shrink when content gets smaller.
-               f.style.height = '1px';
-               void f.offsetHeight; // reflow so the measurement sees the collapse
-               var h = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0);
-               f.style.height = (h > 0 ? h : 1) + 'px';
-            } catch (e) { /* not same-origin: keep placeholder height */ }
-         }
-         function attach() {
-            var d = f.contentDocument;
-            if (!d || !d.body) return;
-            fit();
-            if (f.__fitRO) f.__fitRO.disconnect();
-            if (typeof ResizeObserver !== 'undefined') {
-               f.__fitRO = new ResizeObserver(fit);
-               f.__fitRO.observe(d.body);
-               f.__fitRO.observe(d.documentElement);
-            }
-         }
-         f.addEventListener('load', attach);
-         attach();
-      }
-      // Link whose URL carries _v=inline: instead of navigating, preview it in an
-      // inline iframe right below the link (click toggles; several may stay open).
-      // `_v=` is the client-private param namespace (underscore-prefix convention):
-      // the server never consumes it, so it is stripped when building the iframe
-      // src (all other params kept). Such links also auto-expand after every
-      // render (autoExpandInlinePreviews in renderDoc).
-      function hrefNoPreviewParam(a) {
-         try {
-            var u = new URL(a.getAttribute('href'), window.location.href);
-            return u.searchParams.get('_v') === 'inline' ? (u.searchParams.delete('_v'), u.href) : null;
-         } catch (e) { return null; }
-      }
-      function togglePreview(a) {
-         if (a.__iframeBox) {
-            var old = a.__iframeBox.querySelector('iframe');
-            if (old && old.__fitRO) old.__fitRO.disconnect(); // no observer leak on collapse
-            a.__iframeBox.remove(); a.__iframeBox = null; return;
-         }
-         var src = hrefNoPreviewParam(a);
-         if (!src) return;
-         var box = $n('div'); box.className = 'iframe-preview';
-         var f = $n('iframe'); f.src = src;
-         autoFitPreview(f);
-         box.appendChild(f);
-         var anchor = a.closest('li') || a.closest('p') || a;
-         anchor.parentNode.insertBefore(box, anchor.nextSibling);
-         a.__iframeBox = box;
-      }
-      function autoExpandInlinePreviews() {
-         $('doc').querySelectorAll('a[href]').forEach(function (a) {
-            if (!a.__iframeBox && hrefNoPreviewParam(a)) togglePreview(a);
-         });
-      }
-      function iframePreviewInit() {
-         $('doc').addEventListener('click', function (ev) {
-            if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button !== 0) return; // modifier click: browser default (new tab)
-            var a = ev.target.closest ? ev.target.closest('a[href]') : null;
-            if (!a || !hrefNoPreviewParam(a)) return; // not a _v=inline link: leave default behavior untouched
-            ev.preventDefault();
-            togglePreview(a);
-         });
-      }
-      function initApp(){
-        if (inIframe())hide($('head-bar'));
-        makeEditor($('editor'), function (content){ lastRendered = content; renderDoc(content); });
-        iframePreviewInit();
+      function runAll() { return AnchorWidgets.runAll(); }
+      function toggleLogs() { AnchorWidgets.toggleLogs(); }
+      var lastRendered = null;
+      function initApp() {
+        if (inIframe()) hide($('head-bar'));
+        AnchorWidgets.configure({
+          source: cmdSource,
+          shellEndpoint: cmdPrefix + '/w/ext/shell/rpc/sh.py',
+          autoRun: new URLSearchParams(window.location.search).get('_v') === 'autorun',
+          renderOutput: function(node, text) { node.innerHTML = renderMarkdown(text); },
+          onChange: updateWidgetButtons
+        });
+        makeEditor($('editor'), function(content) { lastRendered = content; renderDoc(content); });
       }
     </script>
   </head>
   <body onload="initApp()">
-    <nav id="head-bar"><a href="#" onclick="toggle_editor(); return false;">edit</a><a id="run-all" href="#" onclick="runAll(); return false;" style="display:none">run-all</a><a id="refresh-all" href="#" onclick="runAll(); return false;" style="display:none">refresh-all</a><a id="log-all" href="#" onclick="toggleLogs(); return false;" style="display:none">log</a>
-
-    <hr style="margin:0;"/>
-    </nav>
+    <nav id="head-bar"><a href="#" onclick="toggle_editor(); return false;">edit</a><a id="run-all" href="#" onclick="runAll(); return false;" style="display:none">run-all</a><a id="refresh-all" href="#" onclick="runAll(); return false;" style="display:none">refresh-all</a><a id="log-all" href="#" onclick="toggleLogs(); return false;" style="display:none">log</a><hr/></nav>
     <div id="editor"></div>
     <div id="doc" class="doc"></div>
   </body>

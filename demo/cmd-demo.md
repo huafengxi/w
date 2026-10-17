@@ -1,15 +1,13 @@
-# cmd widget 演示
+# Anchor 控件演示
 
-本页演示 markdown 视图 cmd widget 的裸 shell 缺省语义：`${...}` 写在正文中（代码块外）即生成可运行的 widget，点 run 执行命令。
+点链接文本执行／重新加载，点旁边按钮显示／隐藏结果。
 
-当前时间（点 run 即显示）：
+[当前时间](cmd:date)
 
-${date}
+[磁盘使用情况](<cmd:df -h | head -3>)
 
-磁盘使用情况（stdout 按 markdown 渲染）：
+[系统负载](cmd:uptime)
 
-${df -h | head -3}
+[仅手动显示时间](cmd:!date)
 
-系统负载：
-
-${uptime}
+[按需查看演示文档](inline:!/w/README.md)

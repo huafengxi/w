@@ -1,108 +1,97 @@
 # ext/markdown — Markdown 视图（text/md）
 
-把 `.md` 文件渲染成页面：标准 GFM markdown（marked），外加 cmd interp
-扩展语法——行内命令 widget，命令在服务端执行、结果以 markdown 流式内嵌到页面。
+`.md` 按 GFM Markdown 渲染；`?v=text/md` 可强制任意文件使用本视图。
+文档第一个 `# 一级标题` 用作页面标题；列表紧凑渲染；代码以外的 `_` 按字面显示，强调使用 `*…*`。
+站内路径与视图路由见根 `README.md`「shell 路由」。顶栏 edit 读写源文件，保存后重新渲染。
+普通链接默认新 tab 打开；本视图在 iframe 内时隐藏顶栏。
 
-## 视图入口
+## 扩展 anchor 协议
 
-- `.md` 扩展名 → `text/md` → 本视图（`mime.frag` / `vmap.frag`）。
-- `?v=text/md` 可对任意文件强制本视图（如 `.py` 文件按 md 渲染）。
-
-链接书写约定（绝对路径、`.md` 无需 `?v=` 后缀等）见根 `README.md`
-「shell 路由」条目，不复述。
-
-## 标准渲染
-
-+ marked GFM（表格、嵌套列表）。
-+ 下划线转义：代码块/行内代码之外的 `_` 一律转义为字面下划线——
-  即 `_` 永远不会触发强调（斜体），`snake_case`、文件名等可放心直写；
-  需要强调用 `*...*`。
-+ 列表项按紧凑列表渲染（忽略空行带来的松散列表间距）。
-+ 文档第一个 `# 一级标题` 作为页面标题。
-
-## 扩展语法：cmd interp
-
-### `${命令}` → 行内命令 widget
-
-正文中 `${...}`（花括号内为命令，不含 `}`）在渲染处生成一个 widget：
-
-+ $ 命令：显示/隐藏输出区（结果区 + log 控制台）的开关，不执行命令。
-+ run：执行/重跑命令。输出按行流式到达：
-  - stdout → 累积后按 markdown 渲染，内嵌展示在 widget 结果区（边跑边更新）；
-  - stderr → 进 widget 自带的 log 控制台（log 按钮切换显隐）。log 控制台缺省收起：完成时 stderr 为空保持隐藏、非空自动展开（流错误同样自动展开）。
-+ log：切换本 widget 的 stderr 控制台；按钮后小号灰字显示该 widget 最近一次完成时间（本地 `HH:MM:SS`，未跑过为空）。
-+ 长命令标签：`$ 命令` 按钮超过 32em 时以省略号截断（不撑宽版面），悬停 tooltip 显示完整命令。
-+ 退化输入：命令体为空（`${ }`、`${!}`）不生成 widget，原样按字面量文本渲染（不执行、不报错）。
-
-### 执行语义 = 裸 shell
-
-`${...}` 的命令一律以 `bash -c` 在服务端直接执行（端点固定为
-`/w/ext/shell/rpc/sh.py`，无任何派发）：
-
-+ stdout → 结果区，按 markdown 渲染，边跑边更新；
-+ stderr → log 控制台；
-+ `src` 环境变量指向文档路径。
-
-**流式协议要点**（理解输出行为所需）：端点以行帧流式返回，每行带一个前导
-标签字节——`'1'` = stdout（进结果区，按 markdown 渲染）、`'2'` = stderr
-（进 log 控制台）；命令结束流即关闭。
-
-### `${!命令}` → 手动 widget（block 级 flag）
-
-花括号内以 `!` 开头 = 手动 widget（flag 属单个 cmd block，纯客户端行为，
-`!` 在发往服务端前剥离，执行语义与普通 widget 一致）：
-
-解析时先剥掉花括号内的前导空白再读 `!`，故 `${ !cmd}`、`${! cmd}` 与 `${!cmd}`
-等价（都判为手动）——前导空格不再把手写命令意外留在自动集合里被 autorun /
-run-all 执行。只有前导空白被归一，命令体本身（换行、heredoc 缩进、尾部空白）不动。
-
-+ `_v=autorun` 自动执行时跳过；
-+ 顶栏 run-all / refresh-all 也跳过（防止「全部执行」连带触发变更操作）；
-+ 自身的 run / log 按钮正常可用，点了才跑；
-+ 视觉标记：`$ 命令` 按钮橙色描边/文字（悬停有提示），一眼可辨「不会自动跑」；
-+ log-all 仍覆盖手动 widget 的 log 控制台。
-
-适用：有副作用的变更操作（重启服务、同步、清理等）。不带 `!` 的 widget
-行为不变（向后兼容）。
-
-### 顶栏按钮
-
-页面含至少一个 `${...}` widget 时，顶栏显示：
-
-+ run-all / refresh-all：按文档顺序逐个执行所有普通命令
-  （串行，一个跑完再跑下一个；手动 `${!...}` widget 一律跳过；页面只有手动
-  widget 时这两个按钮不显示）；
-+ log：统一切换所有 widget 的 log 控制台。
-
-无 widget 的页面这三个按钮不显示。
-
-### ⚠️ 安全提示
-
-`${...}` 的命令在服务端执行，权限 = w 服务进程（可读改服务账号的一切
-文件、执行任意程序）。不要对不可信来源的 md 文档渲染本视图。
-
-## 页面交互
-
-+ 顶栏 edit：页内编辑器，直接读写源文件（保存后即时重渲染）。
-+ 链接缺省新 tab 打开（`<base target="_blank">`）。
-+ 链接带 `_v=inline`：不跳转，渲染完成后默认在链接下方就地展开一个 iframe 预览（目标页就地嵌入，高度随内容自适应），点击收起/再展开；可同时展开多个；ctrl/meta/shift+点击或中键点击不拦截（走浏览器默认新 tab 行为）。`_v=` 是客户端私有参数命名空间（下划线前缀约定）：服务端不消费，构造内嵌 iframe 的 src 前剥离，其余参数保留。
-+ 页面 URL 带 `_v=autorun`：每次渲染完成后自动执行全部普通 `${...}` 命令 widget（等价点 run-all，串行流式；手动 `${!...}` widget 跳过）；编辑器保存重渲染后也会重跑。面向打开即要数据的仪表盘页面。
-+ 本视图被嵌进外层容器（iframe 内）时，顶栏自动隐藏。
-
-## 最小示例
-
-缺省（裸 shell）——无需任何指令行，`${...}` 即真实可执行：
-
+扩展由独立库 `/w/view/anchor-widgets.js` 处理 HTML anchor，与 Markdown 解析器无关。
+支持普通 HTML、Markdown 或模板系统生成的 anchor；不处理 `td` / `th`、`pre` / `code`
+和 `[data-anchor-widgets="off"]` 内的 anchor。表格内使用普通导航链接。
 
 ```md
-# Demo 页
-
-当前时间（点 run 后内嵌显示，流式更新）：
-${date}
-
-磁盘概览（stdout 按 markdown 渲染，stderr 进 log 控制台）：
-${df -h | head -3}
-
-重启某服务（手动 widget：autorun / run-all 跳过，仅手点）：
-${!make some-service.restart}
+[当前时间](cmd:date)
+[服务状态](<cmd:python3 status.py>)
+[同步服务](<cmd:!make some-service.sync>)
+[内嵌概览](inline:/overview.md)
+[按需查看](inline:!/details.md)
+[打开原页](/details.md)
 ```
+
+- `cmd:`：命令在服务端以 `bash -c` 执行，stdout 交给输出 renderer，stderr 进入日志区。
+- `inline:`：URL 以 iframe 就地加载。仅接受 HTTP(S) 目标；相对 URL 相对宿主页解析。
+- 前缀后第一个字面 `!`：该项只能手动触发，不参与自动加载或全部刷新；允许标记两侧前导空白。
+- 链接文本：执行／重新加载，并展开结果；运行中点击不重复启动。
+- 链接旁的 `▾` / `▸` 按钮：只控制结果显隐。没有结果时禁用；隐藏不取消命令、不销毁 iframe。
+- cmd 的 log 按钮控制 stderr；执行完成有 stderr 或加载错误时自动显示日志。
+- 未加载扩展 JS 时，链接按普通 Markdown/HTML 显示；特殊协议不保证可以打开。链接文本应有可读标签。
+
+### 编码
+
+`cmd:` 后的正文按 URI 编码承载，库读取 `getAttribute('href')` 并只解码一次。
+字面 `!` 标记在解码之前识别；命令正文开头的 shell `!` 应编码成 `%21`。
+`?` / `#` 不作控件参数或 fragment 解释，均属于命令正文。原命令中的 `%` 必须编码为 `%25`。
+
+短命令可直写；目标含空格时 Markdown 使用 `<…>`，例如 `[状态](<cmd:echo hello>)`。
+复杂命令优先移入脚本；程序生成链接时使用 `encodeURIComponent(command)`，并将正文中的 `!` 编码为 `%21`。
+`inline:` 目标沿用普通 URL 编码，库不对整个 URL 解码，保留 query、fragment 和转义路径。
+
+### 自动与批量加载
+
+页面 URL 的 `_v=autorun` 让本视图在每次渲染后自动加载普通扩展项。
+顶栏 run-all / refresh-all 按 DOM 顺序串行加载普通项；两者和 autorun 一律跳过 `!` 项。
+log 统一控制 cmd 的日志。无相应控件时隐藏对应顶栏按钮。
+
+动态插入的 anchor 自动增强且增强幂等。命令结果区中的扩展 anchor 可以手动触发，
+但不参与 autorun / run-all，避免输出递归执行。表格内的 anchor 始终跳过。
+
+## 独立 HTML 使用
+
+```html
+<script>
+window.AnchorWidgetsConfig = {
+  autoRun: false,
+  source: '/example.html',
+  shellEndpoint: '/w/ext/shell/rpc/sh.py'
+};
+</script>
+<script src="/w/view/anchor-widgets.js" defer></script>
+<a href="cmd:date">当前时间</a>
+<a href="inline:!/details.md">查看详情</a>
+```
+
+只加载此库即可自动扫描及观察后插入的 DOM，无需 `my.js` 或 Markdown 库。
+缺省输出 renderer 使用纯文本；宿主页可显式提供 `renderOutput(node, text)`。
+Markdown 视图用自己的 renderer 将 stdout 渲染为 Markdown，库本身不依赖 marked。
+
+公共接口：
+
+- `AnchorWidgets.configure(options)`：设置 `autoRun`、`source`、`shellEndpoint`、`renderOutput`、`onChange(widgets)`；
+  启动前也可通过 `window.AnchorWidgetsConfig` 指定扫描/观察根 `root`（缺省 body）。
+- `AnchorWidgets.enhance(root)`：立即增强该区域，重复调用不重复造控件。
+- `AnchorWidgets.runAll()`：串行加载当前普通项，返回 Promise。
+- `AnchorWidgets.toggleLogs()`：统一控制 cmd 日志。
+- `AnchorWidgets.getWidgets()`：返回当前仍连接在文档中的控件。
+
+代理页面的 RPC 路由与源文件路径由宿主页分别提供。Markdown 视图从服务端注入的 `src`
+确定源文件路径，从浏览器路径差值保留代理前缀；库不推断机器名或部署配置。
+iframe 高度在同源时随内容调整，最大 80vh；异源时保持固定视口。显式重新加载可替换 iframe，
+仅展开／隐藏保留原 iframe 和内部状态。
+
+## 执行协议与安全边界
+
+shell 端点 `/w/ext/shell/rpc/sh.py` 接受 `v=script`、`src`、`cmd`、`stream=2`。
+`src` 环境变量指向源文件。响应为带行标签的流：`1` = stdout、`2` = stderr，流关闭表示结束。
+协议不提供退出码，不能把请求结束等同于命令成功。
+
+命令权限等同 web 服务进程，能够读写其账号可访问的文件并执行任意程序。
+只对可信页面和可信输出 renderer 启用扩展；`!` 只是自动加载排除标记，不是权限或副作用检查。
+
+## 回归
+
+`node test/markdown_widget.cjs` 检查 Markdown 编码与代理上下文。
+`PLAYWRIGHT_MODULE=/path/to/playwright CHROMIUM_BIN=/path/to/chromium node test/anchor_widgets_browser.cjs`
+在隔离浏览器夹具中检查独立 HTML、增量增强、表格排除、手动集合、流式输出与 iframe 生命周期，
+不连接部署服务或执行真实命令。
