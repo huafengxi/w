@@ -419,8 +419,8 @@ test('historical rejection preserves edited payload, no automatic follow-up', as
 });
 
 function status(h, label, active) {
-  assert.equal(h.run("$('chatStatusText').textContent"), label);
-  assert.equal(h.run("$('chatStatus').title"), label, 'indicator and visible text agree');
+  assert.equal(h.elements.has('chatStatusText'), false, 'no separate status text is rendered');
+  assert.equal(h.run("$('chatStatus').title"), label);
   assert.equal(h.run("$('chatStatus')['aria-label']"), label);
   if (active !== undefined) assert.equal(h.run('turnActive'), active);
 }
@@ -438,7 +438,7 @@ test('run hooks remain starting until an assistant message actually starts or up
   status(h, '模型生成中', true);
 });
 
-test('pure text turn_end and agent_end retain visible finalization until settled', () => {
+test('pure text turn_end and agent_end retain indicator finalization until settled', () => {
   const h = harness();
   h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_start',message:{role:'assistant'}});");
   status(h, '模型生成中', true);

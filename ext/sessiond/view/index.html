@@ -249,8 +249,6 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
 #chatStatus[data-state="busy"] { color: var(--acc); animation: waitpulse 1.6s infinite; }
 #chatStatus[data-state="success"] { color: var(--ok); }
 #chatStatus[data-state="failed"] { color: var(--err); }
-#chatStatusText { flex: 0 0 auto; padding: 1px 16px 3px; color: var(--dim);
-  font-size: 12px; line-height: 16px; }
 #editBanner { padding: 6px 16px; font-size: 12px; color: var(--warn); background: var(--panel); }
 .qp-head button { margin-left: 8px; font-size: 11px; }
 button:disabled { opacity: .5; cursor: default; }
@@ -314,7 +312,6 @@ button:disabled { opacity: .5; cursor: default; }
       <button id="editStop" onclick="sendCmd({type:'abort',id:uid()})">停止当前任务</button>
       <span id="editHint"></span>
     </div>
-    <div id="chatStatusText" role="status" aria-live="polite" aria-atomic="true">连接状态未知</div>
     <div id="inputbar">
       <textarea id="promptInput" rows="1" placeholder="Type a prompt or /command, Enter to send (queues automatically while streaming), Shift+Enter for newline"></textarea>
       <button id="chatStatus" type="button" data-state="unknown" aria-label="连接状态未知" title="连接状态未知" onclick="sendPrompt()">◇</button>
@@ -1625,9 +1622,6 @@ function paintChatStatus() {
   const el = $("chatStatus"); el.textContent = icon; el.title = label;
   el.setAttribute("aria-label", label); el.dataset.state = state;
   el.dataset.phase = state === "busy" ? chatPhase : state;
-  const text = $("chatStatusText");
-  if (text.textContent !== label) text.textContent = label; // Do not re-announce each token via aria-live.
-  $("chatStatusText").dataset.state = state;
   $("editSubmit").disabled = editSubmitting || turnActive || !["ready", "success", "failed", "stopped"].includes(state);
   $("editCancel").disabled = editSubmitting;
   $("editStop").disabled = editSubmitting || !turnActive;

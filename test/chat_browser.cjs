@@ -105,14 +105,15 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
    attached='/isolated.jsonl';openStream();
   });
   async function current(label,active){
-   await statusPage.waitForFunction(expected=>document.getElementById('chatStatusText').textContent===expected,label);
-   assert.equal(await statusPage.locator('#chatStatusText').isVisible(),true);
-   assert.equal(await statusPage.locator('#chatStatus').getAttribute('aria-label'),label);
+   await statusPage.waitForFunction(expected=>document.getElementById('chatStatus').getAttribute('aria-label')===expected,label);
+   assert.equal(await statusPage.locator('#chatStatusText').count(),0,'no separate status text row');
+   assert.equal(await statusPage.locator('#chatStatus').isVisible(),true);
+   assert.equal(await statusPage.locator('#chatStatus').getAttribute('title'),label);
    assert.equal(await statusPage.evaluate(()=>turnActive),active);
-   const textBox=await statusPage.locator('#chatStatusText').boundingBox();
+   const iconBox=await statusPage.locator('#chatStatus').boundingBox();
    const promptBox=await statusPage.locator('#promptInput').boundingBox();
-   assert(textBox.height<=20 && textBox.y>=0 && textBox.y+textBox.height<=promptBox.y+1,
-    'short status stays visible immediately above composer');
+   assert(iconBox.y>=promptBox.y && iconBox.y+iconBox.height<=promptBox.y+promptBox.height+1,
+    'indicator remains within composer without an extra status row');
   }
   async function emit(event){await statusPage.evaluate(e=>window.emit(e),event);}
   await current('就绪',false);
@@ -121,16 +122,9 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await emit({type:'agent_start'});await current('启动中',true);
   await statusPage.evaluate(()=>gapTimerFire());await current('启动中',true);
   await emit({type:'message_start',message:{role:'assistant'}});await current('模型生成中',true);
-  await statusPage.evaluate(()=>{
-   window.statusMutations=0;
-   window.statusObserver=new MutationObserver(records=>window.statusMutations+=records.length);
-   window.statusObserver.observe($('chatStatusText'),{childList:true,characterData:true,subtree:true});
-  });
   await emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'Plain answer'}});
   await emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:' more'}});
-  await statusPage.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
-  assert.equal(await statusPage.evaluate(()=>window.statusMutations),0,'unchanged live status is not re-announced per token');
-  await statusPage.evaluate(()=>window.statusObserver.disconnect());
+  await current('模型生成中',true);
   await emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'Plain answer'}],stopReason:'stop'}});
   await emit({type:'turn_end',toolResults:[]});await current('收尾中',true);
   assert.equal(await statusPage.locator('.waiting-model').count(),0);
@@ -189,6 +183,6 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await statusPage.evaluate(()=>gapTimerFire());await current('已停止',false);
   if(process.env.CHAT_SCREENSHOT) await statusPage.screenshot({path:process.env.CHAT_SCREENSHOT});
   assert.deepEqual(errors,[]);
-  console.log('ALL PASS: Chromium mobile layout, icon-free bubble edit/cancel/busy and image links, batch recall, click-to-send prompt/queue/images/empty; visible lifecycle text, SSE finalization/tools/ask/retry/compaction/queue/terminal and reconnect/HTTP race fixtures');
+  console.log('ALL PASS: Chromium mobile layout, icon-free bubble edit/cancel/busy and image links, batch recall, click-to-send prompt/queue/images/empty; indicator-only lifecycle status without extra text, SSE finalization/tools/ask/retry/compaction/queue/terminal and reconnect/HTTP race fixtures');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
