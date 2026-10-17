@@ -36,11 +36,11 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
       window.fetch = async (url, opts) => {
         const args = Object.fromEntries(new URLSearchParams(opts.body));
         calls.push({url, ...args});
-        if (args.cmd === 'http-error') return new Response('denied', {status: 403});
-        if (args.cmd === 'bad-stream') return new Response('Exception: shell failed\n');
+        if (args.cmd === 'http-error' && !window.recoverError) return new Response('denied', {status: 403});
+        if (args.cmd === 'bad-stream' && !window.recoverError) return new Response('Exception: shell failed\n');
         return new Response(new ReadableStream({start(controller) {
           window.release = () => {
-            const bytes = new TextEncoder().encode('1**ok** 雪\n2warning\n1last');
+            const bytes = new TextEncoder().encode(window.withoutStderr ? '1clean\n' : '1**ok** 雪\n2warning\n1last');
             controller.enqueue(bytes.slice(0, 10));
             controller.enqueue(bytes.slice(10, 13));
             controller.enqueue(bytes.slice(13)); controller.close();
@@ -52,6 +52,8 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     await page.addScriptTag({content: library});
     assert.equal(await page.evaluate(() => typeof marked), 'undefined', 'no Markdown dependency');
     assert.equal(await page.locator('.aw-label').count(), 3);
+    assert.equal(await page.locator('.aw-controls button').count(), 3, 'one visibility button per widget');
+    assert.equal(await page.locator('.aw-diagnostics:visible, .aw-error:visible').count(), 0);
     assert.equal(await page.evaluate(() => calls.length), 0, 'enhancement does not execute by default');
     assert.equal(await page.locator('#td + .aw-controls, #th + .aw-controls').count(), 0);
     assert.equal(await page.locator('#old').getAttribute('class'), null, 'no old URL compatibility');
@@ -64,6 +66,12 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     assert.equal(await autoOutput.locator('.aw-result').innerText(), '**ok** 雪\nlast', 'plain renderer and chunk decoder');
     assert.equal(await autoOutput.locator('.aw-log').innerText(), 'warning\n');
     assert.equal(await autoOutput.locator('.aw-log').isVisible(), true);
+    assert.equal(await autoOutput.locator('.aw-diagnostics').getAttribute('open'), '');
+    assert.equal(await autoOutput.locator('summary').innerText(), '诊断输出');
+    await autoOutput.locator('summary').click();
+    assert.equal(await autoOutput.locator('.aw-log').isVisible(), false);
+    await autoOutput.locator('summary').click();
+    assert.equal(await page.evaluate(() => calls.length), 1, 'diagnostic folding does not execute');
     await page.locator('#auto + .aw-controls button').first().click();
     assert.equal(await autoOutput.isVisible(), false);
     await page.locator('#auto + .aw-controls button').first().click();
@@ -79,6 +87,14 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     await page.click('#manual');
     await page.waitForFunction(() => calls.some(c => c.cmd === 'change'));
     assert(await page.locator('#manual').evaluate(a => a.classList.contains('aw-manual')));
+    await page.evaluate(() => { window.withoutStderr = true; });
+    await page.click('#auto');
+    await page.waitForFunction(() => !document.querySelector('#auto').hasAttribute('aria-busy'));
+    assert.equal(await autoOutput.locator('.aw-result').innerText(), 'clean\n');
+    assert.equal(await autoOutput.locator('.aw-diagnostics').isVisible(), false, 'clean rerun removes prior diagnostics');
+    assert.equal(await autoOutput.locator('.aw-log').textContent(), '');
+    assert.equal(await autoOutput.locator('.aw-error').isVisible(), false);
+    await page.evaluate(() => { window.withoutStderr = false; });
 
     // New nodes automatically enhance. Output nodes never join autorun/run-all.
     await page.evaluate(() => {
@@ -128,7 +144,20 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
       }, cmd);
       await page.waitForSelector('#failure.aw-label'); await page.click('#failure');
       await page.waitForFunction(() => document.querySelector('#failure + .aw-controls .aw-status').textContent === '加载失败');
+      const failedOutput = page.locator('.aw-output').filter({has: page.locator('.aw-error:visible')});
+      assert.equal(await failedOutput.count(), 1);
+      assert.equal(await failedOutput.locator('.aw-error').getAttribute('role'), 'alert');
+      assert((await failedOutput.locator('.aw-error').innerText()).includes(cmd === 'http-error' ? 'HTTP 403' : 'Invalid shell stream'));
+      assert.equal(await failedOutput.locator('.aw-diagnostics').isVisible(), false, 'errors are direct, not folded');
     }
+
+    await page.evaluate(() => {
+      window.recoverError = true; window.withoutStderr = true;
+    });
+    await page.click('#failure');
+    await page.waitForFunction(() => !document.querySelector('#failure').hasAttribute('aria-busy'));
+    assert.equal(await page.locator('.aw-error:visible').count(), 0, 'successful retry clears stale error');
+    await page.evaluate(() => { window.withoutStderr = false; });
 
     await page.click('#preview'); await page.waitForSelector('.aw-output iframe');
     await page.waitForFunction(() => !document.querySelector('#preview').hasAttribute('aria-busy'));
@@ -171,6 +200,8 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     await mdPage.goto('http://fixture.test/worker/example.md?_v=autorun');
     await mdPage.waitForSelector('#doc .aw-result table');
     assert.equal(await mdPage.locator('#doc .aw-label').count(), 2);
+    assert.equal(await mdPage.locator('#log-all').count(), 0, 'no global log action');
+    assert.equal(await mdPage.locator('#doc .aw-controls button').count(), 2);
     assert.equal(requests.length, 1);
     assert.deepEqual([requests[0].path, requests[0].src, requests[0].cmd],
       ['/worker/w/ext/shell/rpc/sh.py', '/example.md', 'echo snake_case']);

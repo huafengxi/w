@@ -105,6 +105,9 @@
         options.renderOutput(w.result, stdout);
       } else if (text[0] === '2') {
         stderr += text.slice(1); w.log.textContent = stderr;
+        if (w.diagnostics.hidden) {
+          w.diagnostics.hidden = false; w.diagnostics.open = true;
+        }
       } else {
         throw new Error('Invalid shell stream: ' + text.trim().slice(0, 160));
       }
@@ -126,7 +129,6 @@
       accept(decoder.decode());
       if (buffer) line(buffer);
     } finally { reader.releaseLock(); }
-    w.log.hidden = !stderr;
   }
   function run(w) {
     if (w.running) return w.running;
@@ -134,9 +136,11 @@
     setVisible(w, true);
     w.anchor.setAttribute('aria-busy', 'true');
     w.status.textContent = '加载中…';
+    w.log.textContent = ''; w.diagnostics.hidden = true; w.diagnostics.open = false;
+    w.error.textContent = ''; w.error.hidden = true;
     w.running = Promise.resolve().then(async () => {
       if (w.kind === 'cmd') {
-        w.result.replaceChildren(); w.log.textContent = ''; w.log.hidden = true;
+        w.result.replaceChildren();
         await command(w);
       } else {
         // Only explicit loading replaces the frame. Hide/show retains it.
@@ -162,8 +166,8 @@
       w.status.textContent = new Date().toLocaleTimeString([], {hour12: false});
     }).catch(error => {
       w.status.textContent = '加载失败';
-      w.log.textContent += (w.log.textContent ? '\n' : '') + String(error);
-      w.log.hidden = false;
+      w.error.textContent = String(error);
+      w.error.hidden = false;
     }).finally(() => {
       w.anchor.removeAttribute('aria-busy');
       w.running = null;
@@ -178,22 +182,18 @@
     const controls = element('span', 'aw-controls');
     w.toggle = element('button', '', '▸'); w.toggle.type = 'button'; w.toggle.disabled = true;
     w.status = element('small', 'aw-status');
-    controls.append(w.toggle);
-    if (w.kind === 'cmd') {
-      const logButton = element('button', '', 'log'); logButton.type = 'button';
-      logButton.title = '显示／隐藏 stderr 日志';
-      logButton.addEventListener('click', () => {
-        setVisible(w, true); w.log.hidden = !w.log.hidden;
-      });
-      controls.append(logButton);
-    }
-    controls.append(w.status);
+    controls.append(w.toggle, w.status);
     anchor.after(controls);
     w.output = element('div', 'aw-output'); w.output.id = 'anchor-output-' + ++nextId;
     // Renderer-produced anchors may be enhanced, but never automatically execute.
     w.output.setAttribute('data-anchor-output', '');
-    w.result = element('div', 'aw-result'); w.log = element('pre', 'aw-log'); w.log.hidden = true;
-    w.output.append(w.result, w.log);
+    w.result = element('div', 'aw-result');
+    w.diagnostics = element('details', 'aw-diagnostics'); w.diagnostics.hidden = true;
+    w.log = element('pre', 'aw-log');
+    w.diagnostics.append(element('summary', '', '诊断输出'), w.log);
+    w.error = element('pre', 'aw-error'); w.error.hidden = true;
+    w.error.setAttribute('role', 'alert');
+    w.output.append(w.result, w.diagnostics, w.error);
     const block = anchor.closest('p') || controls;
     let tail = block;
     while (tail.nextElementSibling && tail.nextElementSibling.classList.contains('aw-output')) tail = tail.nextElementSibling;
@@ -234,23 +234,16 @@
   function runAll() {
     return enqueue(connected().filter(w => !w.manual && !w.anchor.closest('[data-anchor-output]')));
   }
-  function toggleLogs() {
-    const list = connected().filter(w => w.kind === 'cmd');
-    const visible = list.some(w => !w.output.hidden && !w.log.hidden);
-    for (const w of list) {
-      if (!visible) setVisible(w, true);
-      w.log.hidden = visible;
-    }
-  }
   function configure(config) { Object.assign(options, config); }
   function boot() {
     const style = element('style');
     style.textContent = '.aw-controls{white-space:nowrap;margin-left:.35em}.aw-controls button{margin-right:.25em}' +
       '.aw-label[aria-busy="true"]{opacity:.65}.aw-manual{color:#b35900}.aw-status{color:#888;font-size:11px}' +
-      '.aw-output{margin:.4em 0 .8em}.aw-output[hidden],.aw-log[hidden]{display:none!important}' +
+      '.aw-output{margin:.4em 0 .8em}.aw-output[hidden],.aw-diagnostics[hidden],.aw-error[hidden]{display:none!important}' +
       '.aw-result{white-space:pre-wrap}.aw-result:has(>*){white-space:normal}' +
       '.aw-output iframe{display:block;width:100%;height:24em;max-height:80vh;box-sizing:border-box}' +
-      '.aw-log{white-space:pre-wrap;overflow-wrap:anywhere;color:#a33}';
+      '.aw-diagnostics{margin-top:.5em}.aw-diagnostics summary{cursor:pointer}' +
+      '.aw-log,.aw-error{white-space:pre-wrap;overflow-wrap:anywhere}.aw-error{color:#a33}';
     doc.head.appendChild(style);
     const root = options.root || doc.body;
     enhance(root);
@@ -262,7 +255,7 @@
     });
     observer.observe(root, {childList: true, subtree: true});
   }
-  global.AnchorWidgets = {configure, enhance, runAll, toggleLogs, parse,
+  global.AnchorWidgets = {configure, enhance, runAll, parse,
     getWidgets: connected};
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', boot, {once: true});
   else boot();

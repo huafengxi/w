@@ -20,12 +20,13 @@
 [打开原页](/details.md)
 ```
 
-- `cmd:`：命令在服务端以 `bash -c` 执行，stdout 交给输出 renderer，stderr 进入日志区。
+- `cmd:`：命令在服务端以 `bash -c` 执行，stdout 交给输出 renderer，stderr 进入结果末尾的「诊断输出」折叠区。
 - `inline:`：URL 以 iframe 就地加载。仅接受 HTTP(S) 目标；相对 URL 相对宿主页解析。
 - 前缀后第一个字面 `!`：该项只能手动触发，不参与自动加载或全部刷新；允许标记两侧前导空白。
 - 链接文本：执行／重新加载，并展开结果；运行中点击不重复启动。
 - 链接旁的 `▾` / `▸` 按钮：只控制结果显隐。没有结果时禁用；隐藏不取消命令、不销毁 iframe。
-- cmd 的 log 按钮控制 stderr；执行完成有 stderr 或加载错误时自动显示日志。
+- 有 stderr 时自动显示并展开「诊断输出」，用户可自行收起；无 stderr 时不显示该区。stderr 本身不判为失败。
+- 请求／加载失败直接在结果区显示错误，不折叠；重新加载清空上一轮诊断和错误。结果显隐按钮同时控制正文、诊断与错误。
 - 未加载扩展 JS 时，链接按普通 Markdown/HTML 显示；特殊协议不保证可以打开。链接文本应有可读标签。
 
 ### 编码
@@ -42,7 +43,7 @@
 
 页面 URL 的 `_v=autorun` 让本视图在每次渲染后自动加载普通扩展项。
 顶栏 run-all / refresh-all 按 DOM 顺序串行加载普通项；两者和 autorun 一律跳过 `!` 项。
-log 统一控制 cmd 的日志。无相应控件时隐藏对应顶栏按钮。
+无普通扩展项时隐藏对应顶栏按钮。
 
 动态插入的 anchor 自动增强且增强幂等。命令结果区中的扩展 anchor 可以手动触发，
 但不参与 autorun / run-all，避免输出递归执行。表格内的 anchor 始终跳过。
@@ -72,7 +73,6 @@ Markdown 视图用自己的 renderer 将 stdout 渲染为 Markdown，库本身�
   启动前也可通过 `window.AnchorWidgetsConfig` 指定扫描/观察根 `root`（缺省 body）。
 - `AnchorWidgets.enhance(root)`：立即增强该区域，重复调用不重复造控件。
 - `AnchorWidgets.runAll()`：串行加载当前普通项，返回 Promise。
-- `AnchorWidgets.toggleLogs()`：统一控制 cmd 日志。
 - `AnchorWidgets.getWidgets()`：返回当前仍连接在文档中的控件。
 
 代理页面的 RPC 路由与源文件路径由宿主页分别提供。Markdown 视图从服务端注入的 `src`

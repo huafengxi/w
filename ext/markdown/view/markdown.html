@@ -42,7 +42,6 @@
           return !w.manual && !w.anchor.closest('[data-anchor-output]');
         });
         $('run-all').style.display = $('refresh-all').style.display = automatic ? 'inline' : 'none';
-        $('log-all').style.display = widgets.some(function(w) { return w.kind === 'cmd'; }) ? 'inline' : 'none';
       }
       function renderDoc(content) {
         setWindowTitle(getTitle(content));
@@ -51,7 +50,6 @@
         updateWidgetButtons(AnchorWidgets.getWidgets());
       }
       function runAll() { return AnchorWidgets.runAll(); }
-      function toggleLogs() { AnchorWidgets.toggleLogs(); }
       var lastRendered = null;
       function initApp() {
         if (inIframe()) hide($('head-bar'));
@@ -67,7 +65,7 @@
     </script>
   </head>
   <body onload="initApp()">
-    <nav id="head-bar"><a href="#" onclick="toggle_editor(); return false;">edit</a><a id="run-all" href="#" onclick="runAll(); return false;" style="display:none">run-all</a><a id="refresh-all" href="#" onclick="runAll(); return false;" style="display:none">refresh-all</a><a id="log-all" href="#" onclick="toggleLogs(); return false;" style="display:none">log</a><hr/></nav>
+    <nav id="head-bar"><a href="#" onclick="toggle_editor(); return false;">edit</a><a id="run-all" href="#" onclick="runAll(); return false;" style="display:none">run-all</a><a id="refresh-all" href="#" onclick="runAll(); return false;" style="display:none">refresh-all</a><hr/></nav>
     <div id="editor"></div>
     <div id="doc" class="doc"></div>
   </body>
