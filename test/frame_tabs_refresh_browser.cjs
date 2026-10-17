@@ -6,6 +6,9 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.join(__dirname, '..');
 const frameView = fs.readFileSync(path.join(root, 'ext/frame/view/iframe.html'), 'utf8');
 const mdView = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'), 'utf8');
+const chatView = fs.readFileSync(path.join(root, 'ext/sessiond/view/index.html'), 'utf8');
+const chatScript = chatView.slice(chatView.indexOf('"use strict";'), chatView.indexOf('// ---------------- 启动：'));
+const chatUrl = '/run/sessiond/old.agent';
 const markdown = '# Sessions\n\n<input id="draft" value="unsaved">\n\n' +
   '<a id="create" href="cmd:!create" data-frame-refresh="tabs">Create</a>\n\n' +
   '[Ordinary](cmd:!ordinary)\n';
@@ -15,7 +18,7 @@ const markdown = '# Sessions\n\n<input id="draft" value="unsaved">\n\n' +
     const page = await browser.newPage();
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     let version = 0, mode = 'success', sourceReads = 0, dynamicReads = 0, shellCalls = 0, mdLoads = 0;
-    let removeOld = false, empty = false, sourceFailure = false;
+    let removeOld = false, empty = false, sourceFailure = false, chatFailure = false, chatTitle = '';
     await page.route('http://fixture.test/**', async route => {
       const req = route.request(), url = new URL(req.url());
       if (url.pathname === '/proxy/dashboard.itab') {
@@ -32,7 +35,7 @@ const markdown = '# Sessions\n\n<input id="draft" value="unsaved">\n\n' +
       if (['/proxy/tabs.py', '/proxy/tabs2.py'].includes(url.pathname)) {
         dynamicReads++;
         return route.fulfill({body: url.pathname.endsWith('tabs2.py') || empty ? '' :
-          (removeOld ? '' : (version ? 'Renamed' : 'Old') + ' /chat.html\n') +
+          (removeOld ? '' : (chatTitle || (version ? 'Renamed' : 'Old')) + ' ' + chatUrl + '\n') +
           (version ? 'New /new.html\n' : '')});
       }
       if (url.pathname === '/proxy/sessions.md') {
@@ -55,6 +58,23 @@ const markdown = '# Sessions\n\n<input id="draft" value="unsaved">\n\n' +
         }[mode];
         return route.fulfill({body: '1✅ created (display text is not a success signal)\n2diagnostic\n' + terminal});
       }
+      if (url.pathname === chatUrl) {
+        const body = chatView.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace('</body>', '<input id="chat-draft" value="kept"><script>' + chatScript +
+            '\nattached="/run/sessiond/old.jsonl";</script></body>');
+        return route.fulfill({contentType: 'text/html', body});
+      }
+      if (url.pathname === '/sessiond/rpc/api.py') {
+        if (chatFailure) return route.fulfill({status: 403, json: {ok: false, error: 'denied'}});
+        const args = new URLSearchParams(req.postData());
+        if (args.get('op') === 'rename_session') {
+          chatTitle = args.get('title') || 'AutoTitle';
+          return route.fulfill({json: {ok: true, title: chatTitle, override: !!args.get('title')}});
+        }
+        assert.equal(args.get('op'), 'delete_session');
+        removeOld = true;
+        return route.fulfill({json: {ok: true, removed: ['old.agent', 'old.jsonl']}});
+      }
       if (url.pathname.startsWith('/w/')) {
         const file = path.join(root, url.pathname.slice(3));
         return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : 'text/css',
@@ -72,7 +92,7 @@ const markdown = '# Sessions\n\n<input id="draft" value="unsaved">\n\n' +
     await sessions.locator('#draft').fill('preserve this input');
     await page.locator('#tab-scroll .tab').nth(2).click();
     await page.waitForFunction(() => items[2].active.contentDocument?.querySelector('#chat-draft'));
-    const chat = page.frames().find(f => f.url().endsWith('/chat.html'));
+    const chat = page.frames().find(f => f.url().endsWith(chatUrl));
     await chat.waitForSelector('#chat-draft');
     await chat.locator('#chat-draft').fill('chat unsaved');
     await page.locator('#tab-scroll .tab').nth(0).click();
@@ -117,11 +137,20 @@ const markdown = '# Sessions\n\n<input id="draft" value="unsaved">\n\n' +
     sourceFailure = false;
     // Selection is preserved by URL when earlier entries change; a removed active tab falls back.
     await page.locator('#tab-scroll .tab').nth(3).click();
-    await page.evaluate(() => refreshTabs());
-    assert.equal(await page.evaluate(() => items[currentTab].link), '/chat.html');
+    const beforeRename = sourceReads;
+    await chat.evaluate(() => doRename('ChatRenamed'));
+    await page.waitForFunction(() => items[currentTab].name === 'ChatRenamed');
+    assert.equal(sourceReads, beforeRename + 1, 'chat rename triggers exactly one complete list read');
+    assert.equal(await page.evaluate(() => items[currentTab].link), chatUrl);
     assert.equal(await chat.locator('#chat-draft').inputValue(), 'chat unsaved');
-    removeOld = true;
-    await page.evaluate(() => refreshTabs());
+    chatFailure = true;
+    const beforeFailure = sourceReads;
+    await chat.evaluate(async () => { await doRename('Denied'); await doDelete(); });
+    assert.equal(sourceReads, beforeFailure, 'failed rename/delete do not notify');
+    chatFailure = false;
+    await chat.evaluate(() => { doDelete(); });
+    await page.waitForFunction(() => items.length === 4 && items[currentTab].name === 'Sessions');
+    assert.equal(sourceReads, beforeFailure + 1, 'chat delete triggers exactly one complete list read');
     assert.equal(await page.evaluate(() => items[currentTab].name), 'Sessions');
     assert.equal(await page.locator('#iframe-list iframe').count(), 4);
     empty = true;
@@ -130,6 +159,6 @@ const markdown = '# Sessions\n\n<input id="draft" value="unsaved">\n\n' +
     assert.equal(await sessions.locator('#draft').inputValue(), 'preserve this input');
     assert.equal(await page.locator('#fs-toggle').count(), 1);
     assert.deepEqual(errors, []);
-    console.log('PASS completion status, success-only notification, origin/source checks, full-list reload, iframe/input/selection retention, rename/removal/empty/failure');
+    console.log('PASS completion status, success-only notification, origin/source checks, full-list reload, iframe/input/selection retention, chat rename/delete notifications, empty/failure');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

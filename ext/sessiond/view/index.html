@@ -2090,6 +2090,11 @@ async function doClear() {
 // /delete 直接执行、⛔ 不二次确认（口径同 /clear、/reload：用户拍板）；删完本 tab 即死 ⇒
 // 停流 + 摘 `attached`（`heal()`/`openStream()` 都以 `!attached` 短路 ⇒ 不重挂接、不为已删
 // 会话重拉进程）+ 锁输入框 + 粘性回执（删了什么、进程面、不可撤销）。
+function notifyTabsChanged() {
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({type: 'frame:tabs-changed'}, location.origin);
+  }
+}
 async function doRename(arg) {
   if (!IS_CC) { flash("/rename is only for command-center sessions (run/sessiond/)", "err"); return; }
   if (!attached) { flash("Not attached to a session, cannot rename", "err"); return; }
@@ -2100,9 +2105,11 @@ async function doRename(arg) {
   try {
     const d = await api("rename_session", {session: attached,
       title: (arg === "-") ? "" : arg});        // op 侧：空标题 = 清除 override
+    if (!d.ok) throw new Error(d.error || "Rename failed");
     document.title = (d.title || AGENT_NAME || "session") + " · chat";
     showNotice("Title: " + d.title + (d.override ? "  (override)"
       : "  (auto — override cleared)"), "", true);
+    notifyTabsChanged();
   } catch (e) {
     flash("Rename failed: " + e.message, "err");
   }
@@ -2116,6 +2123,7 @@ async function doDelete() {
   flash("Deleting session…");
   try {
     const d = await api("delete_session", {session: target, confirm: "1"});
+    if (!d.ok) throw new Error(d.error || "Delete failed");
     sessionGone = true;
     stopStream();
     attached = null;
@@ -2125,8 +2133,9 @@ async function doDelete() {
     showNotice("Session deleted: " + target
       + "\nremoved: " + ((d.removed || []).join(", ") || "(nothing)")
       + "  ·  process: " + JSON.stringify(d.process || {})
-      + "\n不可撤销（声明者与历史已 rm）；本 tab 已无会话可续 ⇒ 可关闭，刷新 dash 后该 tab 消失。",
+      + "\n不可撤销（声明者与历史已 rm）；本 tab 已无会话可续。dash 内嵌页会自动刷新 tab 列表。",
       "", true);
+    notifyTabsChanged();
   } catch (e) {
     flash("Delete failed: " + e.message, "err");
   }

@@ -153,4 +153,6 @@ select/confirm/input/editor 请求按 id 保留，基线重建尚未结算的问
 
 ### 12.3 动态 tab
 
-session_tabs 输出调用方 itab 的动态行；前端加载一次快照。
+session_tabs 输出调用方 itab 的动态行；前端加载时取快照。聊天窗内 `/rename`（包括清除标题 override）与 `/delete` 仅在 API 明确返回 `ok: true` 后，向父窗口同源发送一次 `{type: 'frame:tabs-changed'}`；失败不通知。独立打开、没有父级容器时不通知。
+
+frame 容器校验同源与已挂载子 iframe 身份后，重新获取完整列表文件及全部 `@dynamic`，不轮询、不重载整个父页面。改名保留原 iframe 与当前选中项；删除会移除对应 tab 和 iframe，删除当前项时回到首项。协议与机制见 `../../README.md`「iframe show many doc」。

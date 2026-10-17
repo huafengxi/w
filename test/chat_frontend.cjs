@@ -12,7 +12,7 @@ const end = html.indexOf('// ---------------- 启动：', start);
 assert(start >= 0 && end > start, 'chat script boundaries');
 const source = html.slice(start, end);
 
-function harness() {
+function harness(pathname = '/test.jsonl') {
   const elements = new Map(), listeners = {}, streams = [], timers = new Map(), intervals = [];
   let timerId = 0;
   function element() {
@@ -47,7 +47,7 @@ function harness() {
     querySelectorAll() { return []; },
   };
   const context = vm.createContext({
-    document, window: {addEventListener() {}, innerHeight: 800}, location: {pathname: '/test.jsonl'},
+    document, window: {addEventListener() {}, innerHeight: 800}, location: {pathname, origin: 'http://fixture.test'},
     console, URLSearchParams, AbortController, TextDecoder, Date, Set, Map, Promise,
     setTimeout(cb) { const id = ++timerId; timers.set(id, cb); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -663,6 +663,70 @@ test('silent generation keeps process status without a standalone model-waiting 
   assert.equal(h.run('currentProcessGroup.label.textContent'), '模型生成中');
   assert.equal(h.elements.get('stream').children.some(n => /(?:^|\s)waiting(?:\s|$)/.test(n.className || '')), false);
   assert.equal(h.run('typeof gapTimerFire'), 'undefined', 'obsolete waiting timer was removed');
+});
+
+test('rename and clearing override notify the parent once after explicit success', async () => {
+  const h = harness('/run/sessiond/fixture.agent');
+  h.run(`attached='/run/sessiond/fixture.jsonl'; window.notifications=[]; window.calls=[];
+    window.parent={postMessage:(data,origin)=>window.notifications.push({data,origin})};
+    $('promptInput').value='unsaved';
+    api=async(op,args)=>{window.calls.push({op,args});return {ok:true,title:args.title||'auto',override:!!args.title};};`);
+  await h.run(`doRename('new title')`);
+  await h.run(`doRename('-')`);
+  assert.equal(h.run('window.notifications.length'), 2);
+  assert.equal(h.run('window.notifications.every(n=>n.data.type==="frame:tabs-changed" && n.origin===location.origin)'), true);
+  assert.equal(h.run('window.calls[1].args.title'), '');
+  assert.equal(h.run('document.title'), 'auto · chat');
+  assert.equal(h.elements.get('promptInput').value, 'unsaved');
+  assert.equal(h.run('attached'), '/run/sessiond/fixture.jsonl');
+});
+
+test('delete notifies once after shutdown and never resurrects the deleted session', async () => {
+  const h = harness('/run/sessiond/fixture.agent');
+  h.run(`attached='/run/sessiond/fixture.jsonl'; window.notifications=[];
+    window.parent={postMessage:(data,origin)=>window.notifications.push({data,origin,attached,sessionGone})};
+    api=async()=>({ok:true,removed:['fixture.agent'],process:{stopped:true}});openStream();`);
+  await h.run('doDelete()');
+  assert.equal(h.run('window.notifications.length'), 1);
+  assert.equal(h.run('window.notifications[0].attached'), null);
+  assert.equal(h.run('window.notifications[0].sessionGone'), true);
+  assert.equal(h.run('window.notifications[0].data.type'), 'frame:tabs-changed');
+  assert.equal(h.run('window.notifications[0].origin'), 'http://fixture.test');
+  assert.equal(h.elements.get('promptInput').disabled, true);
+  assert.equal(activeStreams(h).length, 0);
+  await h.run('doDelete()'); h.listeners.visibilitychange();
+  assert.equal(h.run('window.notifications.length'), 1);
+  assert.equal(h.streams.length, 1, 'deleted session is never reattached');
+});
+
+test('rename/delete errors, ok:false and precondition failures never notify', async () => {
+  const h = harness('/run/sessiond/fixture.agent');
+  h.run(`attached='/run/sessiond/fixture.jsonl'; window.notifications=[];
+    window.parent={postMessage:msg=>window.notifications.push(msg)};
+    api=async()=>{throw Error('fixture denied');};`);
+  await h.run(`doRename('title')`); await h.run('doDelete()');
+  h.run(`api=async()=>({ok:false,error:'not completed'});`);
+  await h.run(`doRename('title')`); await h.run('doDelete()');
+  assert.equal(h.run('sessionGone'), false);
+  assert.equal(h.run('attached'), '/run/sessiond/fixture.jsonl');
+  await h.run(`doRename('')`);
+  h.run('attached=null');
+  await h.run(`doRename('title')`); await h.run('doDelete()');
+  assert.equal(h.run('window.notifications.length'), 0);
+  const other = harness();
+  other.run(`attached='/test.jsonl'; api=()=>{throw Error('not allowed');};`);
+  await other.run(`doRename('title')`); await other.run('doDelete()');
+});
+
+test('standalone rename/delete succeed without a parent dash', async () => {
+  const h = harness('/run/sessiond/fixture.agent');
+  h.run(`attached='/run/sessiond/fixture.jsonl';window.parent=window;
+    window.postMessage=()=>{throw Error('must not notify self');};
+    api=async()=>({ok:true,title:'standalone',override:true});`);
+  await h.run(`doRename('standalone')`);
+  assert.equal(h.run('document.title'), 'standalone · chat');
+  await h.run('doDelete()');
+  assert.equal(h.run('sessionGone'), true);
 });
 
 require('./chat_process_headers.cjs')({test, harness, assert, html, emptyBaseline});
