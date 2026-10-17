@@ -74,6 +74,42 @@ const source=html.slice(html.indexOf('"use strict";'),html.indexOf('// ---------
   await page.locator('#clearButton').click();await page.waitForFunction(()=>!healBusy);
   assert.deepEqual(await page.evaluate(()=>clearCalls),['status','clear','attach']);
   assert.equal(await page.locator('#promptInput').inputValue(),'first\nsecond\nthird\nfourth');
+  // Actual textarea + button/Enter paths, not direct handleSlash calls: built-in
+  // slash commands must never leak into prompt/follow_up, even while busy.
+  for(const busy of [false,true])for(const trigger of ['click','enter']) {
+   await page.evaluate(busy=>{
+    window.clearCalls=[];turnActive=busy;setChatStatus(busy?'busy':'ready');
+   },busy);
+   await page.locator('#promptInput').fill('  /clear  ');
+   if(trigger==='click')await page.locator('#sendButton').click();
+   else await page.locator('#promptInput').press('Enter');
+   await page.waitForFunction(()=>clearCalls.includes('attach') && !healBusy);
+   assert.deepEqual(await page.evaluate(()=>clearCalls),['status','clear','attach'],`${trigger} /clear, busy=${busy}: no model cmd`);
+   assert.equal(await page.locator('#promptInput').inputValue(),'');
+  }
+  for(const trigger of ['click','enter']) {
+   await page.evaluate(()=>{
+    window.commandCalls=[];api=async(op,x)=>{commandCalls.push({op,cmd:x?.cmd?JSON.parse(x.cmd):null});return {ok:true};};
+    turnActive=true;setChatStatus('busy');
+   });
+   for(const [text,type] of [['/abort','abort'],['/compact','compact']]) {
+    await page.locator('#promptInput').fill(text);
+    if(trigger==='click')await page.locator('#sendButton').click();
+    else await page.locator('#promptInput').press('Enter');
+    assert.equal(await page.evaluate(()=>commandCalls.at(-1).cmd.type),type);
+   }
+   await page.locator('#promptInput').fill('/not-a-real-command');
+   if(trigger==='click')await page.locator('#sendButton').click();
+   else await page.locator('#promptInput').press('Enter');
+   assert.deepEqual(await page.evaluate(()=>commandCalls.map(c=>c.cmd.type)),['abort','compact'],'unknown slash commands never become model text');
+   const picker=page.waitForEvent('filechooser');
+   await page.locator('#promptInput').fill('/image');
+   if(trigger==='click')await page.locator('#sendButton').click();
+   else await page.locator('#promptInput').press('Enter');
+   await (await picker).setFiles([]);
+   assert.deepEqual(await page.evaluate(()=>commandCalls.map(c=>c.cmd.type)),['abort','compact'],'/image opens picker, not model prompt');
+  }
+  console.log('PASS Chromium: click and Enter route /clear, /abort, /compact, /image and unknown commands identically; no prompt/follow_up leakage');
   // Separate page: original api(), fetch SSE decoder and lifecycle/race protections.
   const live=await browser.newPage({viewport:{width:390,height:844}});
   live.on('pageerror',e=>errors.push(e.message));
