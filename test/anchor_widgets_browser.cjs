@@ -174,11 +174,71 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     assert.deepEqual(errors, []);
     console.log('PASS standalone HTML, dynamic DOM, tables, encoding, manual/batch, visibility, streams, iframe lifecycle');
 
+    // Heading labels keep controls inline, but results must be heading siblings.
+    const headingPage = await browser.newPage();
+    headingPage.on('pageerror', e => errors.push(e.message));
+    await headingPage.route('http://fixture.test/**', route => route.fulfill({
+      contentType: 'text/html', body: '<p>heading preview</p>'
+    }));
+    await headingPage.goto('http://fixture.test/headings.html');
+    await headingPage.setContent(Array.from({length: 6}, (_, i) => {
+      const n = i + 1;
+      return `<h${n} id="level-${n}"><em><a id="heading-${n}" href="cmd:heading-${n}">标题 ${n}</a></em></h${n}>`;
+    }).join('') + '<h3 id="multiple"><a href="cmd:first">一</a> / <a href="cmd:second">二</a></h3>' +
+      '<h5 id="manual-heading"><a id="heading-manual" href="cmd:!manual-heading">手动标题</a></h5>' +
+      '<h4 id="inline-heading"><a id="heading-inline" href="inline:!/preview">预览标题</a></h4>');
+    await headingPage.evaluate(() => {
+      window.calls = [];
+      window.AnchorWidgetsConfig = {autoRun: true, source: '/headings.html'};
+      window.fetch = async (_url, opts) => {
+        calls.push(new URLSearchParams(opts.body).get('cmd'));
+        return new Response('1heading result\n');
+      };
+    });
+    await headingPage.addScriptTag({content: library});
+    await headingPage.waitForFunction(() => calls.length === 8 && !document.querySelector('[aria-busy]'));
+    for (let n = 1; n <= 6; n++) {
+      assert.equal(await headingPage.locator(`#level-${n} .aw-controls`).count(), 1);
+      assert.equal(await headingPage.locator(`#level-${n} .aw-output`).count(), 0);
+      assert.equal(await headingPage.locator(`#level-${n} + .aw-output .aw-result`).innerText(), 'heading result\n');
+    }
+    assert.deepEqual(await headingPage.evaluate(() => AnchorWidgets.getWidgets().map(w =>
+      [w.anchor.closest('h1,h2,h3,h4,h5,h6').id, w.output.previousElementSibling.id])), [
+      ...Array.from({length: 6}, (_, i) => [`level-${i + 1}`, `level-${i + 1}`]),
+      ['multiple', 'multiple'], ['multiple', 'anchor-output-7'],
+      ['manual-heading', 'manual-heading'], ['inline-heading', 'inline-heading']
+    ]);
+    assert.equal(await headingPage.evaluate(() => getComputedStyle(document.querySelector('#level-1 + .aw-output')).fontSize),
+      await headingPage.evaluate(() => getComputedStyle(document.body).fontSize), 'output does not inherit heading font');
+    await headingPage.evaluate(() => { AnchorWidgets.enhance(); AnchorWidgets.enhance(); });
+    assert.equal(await headingPage.locator('.aw-output').count(), 10, 'heading enhancement is idempotent');
+    await headingPage.evaluate(() => AnchorWidgets.runAll());
+    assert.equal(await headingPage.evaluate(() => calls.length), 16);
+    assert(!await headingPage.evaluate(() => calls.includes('manual-heading')));
+    await headingPage.click('#heading-1');
+    await headingPage.waitForFunction(() => calls.length === 17 && !document.querySelector('#heading-1').hasAttribute('aria-busy'));
+    await headingPage.locator('#heading-1 + .aw-controls button').click();
+    assert.equal(await headingPage.locator('#level-1 + .aw-output').isVisible(), false);
+    await headingPage.locator('#heading-1 + .aw-controls button').click();
+    assert.equal(await headingPage.locator('#level-1 + .aw-output').isVisible(), true);
+    assert.equal(await headingPage.evaluate(() => calls.length), 17, 'heading toggle never reruns');
+    await headingPage.click('#heading-manual');
+    await headingPage.waitForFunction(() => calls.includes('manual-heading'));
+    await headingPage.click('#heading-inline');
+    await headingPage.waitForSelector('#inline-heading + .aw-output iframe');
+    assert.equal(await headingPage.locator('#inline-heading .aw-output').count(), 0);
+    const orphan = await headingPage.locator('#level-1 + .aw-output').getAttribute('id');
+    await headingPage.evaluate(() => { document.querySelector('#level-1').remove(); AnchorWidgets.getWidgets(); });
+    assert.equal(await headingPage.locator('#' + orphan).count(), 0, 'removed headings clean up sibling output');
+    assert.deepEqual(errors, []);
+    await headingPage.close();
+    console.log('PASS h1-h6 labels, nested formatting, sibling outputs, multiple anchors, manual/autorun, visibility, inline, cleanup');
+
     // Actual Markdown view and editor wiring; all IO stays in fixture routes.
     const mdPage = await browser.newPage();
     mdPage.on('pageerror', e => errors.push(e.message));
     const requests = [];
-    const fixture = '# Dashboard\n\n[刷新](<cmd:echo snake_case>)\n\n[变更](<cmd:!change>)\n\n| 操作 |\n|---|\n| [表内](cmd:cell) |\n\n${date}\n';
+    const fixture = '# Dashboard\n\n### [状态](<cmd:echo snake_case>)\n\n[变更](<cmd:!change>)\n\n| 操作 |\n|---|\n| [表内](cmd:cell) |\n\n${date}\n';
     await mdPage.route('http://fixture.test/**', async route => {
       const req = route.request(), url = new URL(req.url());
       if (req.method() === 'POST') {
@@ -203,6 +263,8 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     assert.equal(await mdPage.locator('#log-all').count(), 0, 'no global log action');
     assert.equal(await mdPage.locator('#doc .aw-controls button').count(), 2);
     assert.equal(requests.length, 1);
+    assert.equal(await mdPage.locator('#doc h3 .aw-output').count(), 0);
+    assert.equal(await mdPage.locator('#doc h3 + .aw-output table').count(), 1);
     assert.deepEqual([requests[0].path, requests[0].src, requests[0].cmd],
       ['/worker/w/ext/shell/rpc/sh.py', '/example.md', 'echo snake_case']);
     assert((await mdPage.locator('#doc').innerText()).includes('${date}'));

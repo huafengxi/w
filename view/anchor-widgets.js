@@ -194,7 +194,7 @@
     w.error = element('pre', 'aw-error'); w.error.hidden = true;
     w.error.setAttribute('role', 'alert');
     w.output.append(w.result, w.diagnostics, w.error);
-    const block = anchor.closest('p') || controls;
+    const block = anchor.closest('h1, h2, h3, h4, h5, h6, p') || controls;
     let tail = block;
     while (tail.nextElementSibling && tail.nextElementSibling.classList.contains('aw-output')) tail = tail.nextElementSibling;
     tail.after(w.output);

@@ -23,6 +23,10 @@ for (const prefix of ['', '/dev', '/arbitrary-worker']) {
   assert.equal(config.autoRun, true);
   const rendered = context.renderMarkdown('[状态](<cmd:echo snake_case>)');
   assert(rendered.includes('href="cmd:echo%20snake_case"'));
+  for (let level = 1; level <= 6; level++) {
+    const heading = context.renderMarkdown('#'.repeat(level) + ' [状态](<cmd:echo snake_case>)');
+    assert(new RegExp('<h' + level + '[^>]*><a href="cmd:echo%20snake_case">状态</a></h' + level + '>').test(heading));
+  }
   assert(context.renderMarkdown('${date}').includes('${date}'), 'old command is literal');
   assert(!context.renderMarkdown('`[时间](cmd:date)`').includes('<a'));
   assert(!context.renderMarkdown('```md\n[时间](cmd:date)\n```').includes('<a'));
