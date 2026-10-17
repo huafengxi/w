@@ -59,7 +59,7 @@ function harness(pathname = '/test.jsonl') {
   const run = code => vm.runInContext(code, context);
   run(source);
   // Disable only notices and unrelated baseline metadata queries, not the state under test.
-  run('flash=()=>{}; sysLine=()=>{}; sendGetState=()=>{}; sendCtxStats=()=>{}; sendStatusQuery=()=>{}; refreshLoadedCommands=()=>{};');
+  run('globalThis.realSendCtxStats=sendCtxStats; flash=()=>{}; sysLine=()=>{}; sendGetState=()=>{}; sendCtxStats=()=>{}; sendStatusQuery=()=>{}; refreshLoadedCommands=()=>{};');
   return {run, context, elements, streams, listeners, intervals, timers,
     drainTimers() {
       let guard = 100;
@@ -330,14 +330,14 @@ test('status stays busy across agent_end, tool runs, retry and queued continuati
 test('terminal status distinguishes final error, aborted and waiting, not just color', () => {
   const h = harness();
   h.run("updateChatStatus({type:'agent_start'});updateChatStatus({type:'message_end',message:{role:'assistant',stopReason:'error'}});updateChatStatus({type:'agent_settled'});");
-  assert.equal(h.elements.get('chatStatus').textContent, '!');
+  assert.equal(h.elements.get('chatStatusIcon').textContent, '!');
   assert.equal(h.elements.get('chatStatus')['aria-label'], '最终失败');
   h.run("updateChatStatus({type:'agent_start'});updateChatStatus({type:'message_end',message:{role:'assistant',stopReason:'aborted'}});updateChatStatus({type:'agent_settled'});");
   assert.equal(h.run('chatState'), 'stopped');
   h.run("pendingDialogs={ask:{id:'ask'}};paintChatStatus();");
-  assert.equal(h.elements.get('chatStatus').textContent, '?');
+  assert.equal(h.elements.get('chatStatusIcon').textContent, '?');
   h.run("setChatStatus('unknown');");
-  assert.equal(h.elements.get('chatStatus').textContent, '◇');
+  assert.equal(h.elements.get('chatStatusIcon').textContent, '◇');
 });
 
 test('authoritative reconnect snapshot restores busy or success without polling', async () => {
@@ -426,7 +426,8 @@ test('historical rejection preserves edited payload, no automatic follow-up', as
 });
 
 function status(h, label, active) {
-  assert.equal(h.elements.has('chatStatusText'), false, 'no separate status text is rendered');
+  if (label === '已成功完成') label = '就绪';
+  assert.equal(h.run("$('chatStatusText').textContent"), label, 'footer carries the visible status');
   assert.equal(h.run("$('chatStatus').title"), label);
   assert.equal(h.run("$('chatStatus')['aria-label']"), label);
   if (active !== undefined) assert.equal(h.run('turnActive'), active);
@@ -655,12 +656,12 @@ test('busy-only snapshot does not borrow an old error or tool phase; missing aut
   status(h, '连接状态未知');
 });
 
-test('silent generation keeps process status without a standalone model-waiting line', () => {
+test('silent generation uses footer status without an empty process header or model-waiting line', () => {
   const h = harness();
   h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_start',message:{role:'assistant'}});");
   h.drainTimers();
   status(h, '模型生成中', true);
-  assert.equal(h.run('currentProcessGroup.label.textContent'), '模型生成中');
+  assert.equal(h.run('currentProcessGroup.det.parentNode'), undefined, 'empty process stays out of the stream');
   assert.equal(h.elements.get('stream').children.some(n => /(?:^|\s)waiting(?:\s|$)/.test(n.className || '')), false);
   assert.equal(h.run('typeof gapTimerFire'), 'undefined', 'obsolete waiting timer was removed');
 });
@@ -730,6 +731,7 @@ test('standalone rename/delete succeed without a parent dash', async () => {
 });
 
 require('./chat_process_headers.cjs')({test, harness, assert, html, emptyBaseline});
+require('./chat_footer.cjs')({test, harness, assert, html, emptyBaseline});
 
 (async () => {
   for (const [name, fn] of tests) { await fn(); console.log('PASS ' + name); }

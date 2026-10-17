@@ -56,7 +56,8 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   border: 1px solid var(--line); color: var(--dim); margin-left: 4px; }
 .badge.run { color: var(--ok); border-color: var(--ok); }
 .badge.off { color: var(--dim); } .badge.dis { color: var(--err); border-color: var(--err); }
-#stream { flex: 1; overflow-y: auto; padding: 12px 16px; }
+#stream { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px; }
+main > :not(#stream) { flex-shrink: 0; }
 /* 视口外块跳过布局/绘制（任务 bw333x）：大历史会话（1.3MB 基线/676KB DOM 文本）
    下，任何强制同步布局（输入框高度自适应、粘底滚动）与切回 tab 的重绘都从全量
    DOM 降到视口量级；`auto` 关键字记住上次实际尺寸，滚动高度估算贴近真实。
@@ -92,8 +93,6 @@ details summary::-webkit-details-marker { display: none; }
 .process-group summary { display: flex; align-items: center; gap: 6px; cursor: pointer;
   color: var(--dim); font-size: 12px; padding: 2px 0; user-select: none; }
 .process-group .pg-label { min-width: 0; overflow-wrap: anywhere; }
-.process-group.pg-empty > summary { cursor: default; }
-.process-group.pg-empty > summary .pg-arrow { visibility: hidden; }
 .process-group summary .pg-arrow { display: inline-block; flex-shrink: 0; font-size: 10px;
   transition: transform .15s; }
 .process-group[open] summary .pg-arrow { transform: rotate(90deg); }
@@ -186,6 +185,8 @@ details.raw summary { color: var(--dim); font-size: 12px; cursor: pointer; }
 details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   word-break: break-all; margin: 2px 0; }
 #inputbar { display: flex; gap: 8px; padding: 0; }
+/* Bound the combined accessory height, including with the mobile keyboard open. */
+main > #composerExtras { min-height: 0; max-height: 50%; overflow-y: auto; flex-shrink: 1; }
 /* QUEUED 面板（任务 0829-2115-zvti；设计口径 = pi-web QUEUED 截图参考，经 dispatcher
    inbox 2026-08-29-21-33 两条 inform 下发）：浅灰圆角盒子，头部一行「QUEUED · N」；
    每条 = 圆角小徽标（steer=蓝色描边强调 / follow-up=灰色弱化，等宽字体）+ 单行截断文本。
@@ -236,18 +237,33 @@ details.raw pre { font-size: 11px; color: var(--dim); white-space: pre-wrap;
   white-space: pre-wrap; word-break: break-word; }
 .notice.err { color: var(--err); }
 .notice.hidden { display: none; }
+#slashNotice { max-height: 30vh; overflow-y: auto; }
 #promptInput { flex: 1; background: transparent; color: var(--fg);
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
   font: inherit; line-height: 20px; resize: none; max-height: 120px; }
 #promptInput:focus { outline: none; border-color: var(--acc); }
 #inputbar { position: relative; }
 #promptInput { padding-right: 44px; min-width: 0; }
-#chatStatus { position: absolute; right: 18px; bottom: 3px; width: 28px; height: 28px;
+#sendButton { position: absolute; right: 10px; bottom: 3px; width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center; line-height: 1;
-  padding: 0; border: 0; background: var(--bg); font-size: 19px; color: var(--dim); }
-#chatStatus[data-state="busy"] { color: var(--acc); animation: waitpulse 1.6s infinite; }
-#chatStatus[data-state="success"] { color: var(--ok); }
-#chatStatus[data-state="failed"] { color: var(--err); }
+  padding: 0; border: 0; background: var(--bg); font-size: 19px; color: var(--acc); }
+/* Persistent composer footer; input aids and queued messages stay above the input. */
+#chatFooter { display: flex; align-items: center; gap: 10px; min-width: 0;
+  padding: 2px 10px calc(2px + env(safe-area-inset-bottom, 0px));
+  color: var(--dim); font-size: 11px; line-height: 20px; }
+#chatStatus { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+#chatStatusText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chatStatusIcon { flex: none; }
+#chatStatus[data-state="busy"] #chatStatusIcon { color: var(--acc); animation: waitpulse 1.6s infinite; }
+#chatStatus[data-state="waiting"], #chatStatus[data-state="coordinator"] { color: var(--warn); }
+#chatStatus[data-state="failed"], #chatStatus[data-state="unknown"] { color: var(--err); }
+#contextUsage { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#contextUsage[data-level="high"] { color: var(--warn); }
+#chatFooter button { flex: none; border: 0; background: transparent; color: var(--dim);
+  font-size: 11px; padding: 0 4px; min-height: 24px; }
+#chatFooter button:hover { color: var(--acc); }
+#chatFooter #imageButton { font-size: 20px; min-width: 28px; }
+@media (max-width: 360px) { #chatFooter { gap: 6px; padding-left: 6px; padding-right: 6px; } }
 #editBanner { padding: 6px 16px; font-size: 12px; color: var(--warn); background: var(--panel); }
 .qp-head button { margin-left: 8px; font-size: 11px; }
 button:disabled { opacity: .5; cursor: default; }
@@ -302,9 +318,11 @@ button:disabled { opacity: .5; cursor: default; }
 <div class="layout">
   <main>
     <div id="stream"></div>
-    <div id="slashNotice" class="notice hidden"></div>
-    <div id="attachBar" class="hidden"></div>
-    <div id="queuedPanel" class="hidden"></div>
+    <div id="composerExtras">
+      <div id="slashNotice" class="notice hidden"></div>
+      <div id="attachBar" class="hidden"></div>
+      <div id="queuedPanel" class="hidden"></div>
+    </div>
     <div id="editBanner" class="hidden">正在编辑历史消息 · 重新生成会保留旧分支，但不会撤销旧工具操作。
       <button id="editSubmit" onclick="submitHistoryEdit()">重新生成</button>
       <button id="editCancel" onclick="cancelHistoryEdit()">取消</button>
@@ -313,7 +331,15 @@ button:disabled { opacity: .5; cursor: default; }
     </div>
     <div id="inputbar">
       <textarea id="promptInput" rows="1" placeholder="输入消息或 /命令"></textarea>
-      <button id="chatStatus" type="button" data-state="unknown" aria-label="连接状态未知" title="连接状态未知" onclick="sendPrompt()">◇</button>
+      <button id="sendButton" type="button" aria-label="发送" title="发送" onclick="sendPrompt()" disabled>↑</button>
+    </div>
+    <div id="chatFooter" aria-label="会话状态与操作">
+      <div id="chatStatus" role="status" aria-live="polite" aria-atomic="true" data-state="unknown" aria-label="连接状态未知" title="连接状态未知">
+        <span id="chatStatusIcon" aria-hidden="true">◇</span><span id="chatStatusText">连接状态未知</span>
+      </div>
+      <span id="contextUsage" title="上下文估算，来自模型用量；非会话累计 token">ctx≈?</span>
+      <button id="imageButton" type="button" aria-label="添加图片（/image）" title="添加图片（/image）" onclick="handleSlash('/image')">+</button>
+      <button id="clearButton" type="button" title="清空会话（/clear）" onclick="handleSlash('/clear')" disabled>清空</button>
     </div>
   </main>
 </div>
@@ -448,7 +474,7 @@ const MD_RENDER_MS = 150;
 let dialogTimer = null;
 let dialogDeadline = 0;
 // Busy covers the full run, including tools/retry/finalization. Only settled or
-// authoritative idle clears it; status is shown in the process header/indicator.
+// authoritative idle clears it; status is shown only in the persistent footer.
 let turnActive = false;
 // 回合状态三件套（任务 0829-2131-pdop）：
 // ① retryBoxEl = 当前 Retrying 警告框（auto_retry_start 建，end success 移除 / failure 转红框）；
@@ -553,7 +579,7 @@ async function attach(name) {
   toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重挂接丢弃（bw333x）
   curMsgCount = null; curCompacting = null; curGen = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
   agentHost = null; agentWorkDir = null; agentSessionDir = null;  // 宿主可见性随重挂接重置（任务 bjhzvj；.agent 会话由 resolveAgentAndAttach 在 attach 后重填）
-  curCtx = null;                                      // 上下文占用随重挂接重置（0830-1324-3qet）
+  curCtx = null; ctxStatsInFlight = false; ctxStatsRequestId = null; paintContextUsage();
   retryBoxEl = null; lastRenderedErrorMsg = null;       // 回合状态重置（0829-2131-pdop）
   renderQueuedPanel();                                  // 待发/队列面板随清屏重置（0829-2115-zvti）
   sysLine("Attaching " + name + ": fetching history baseline (get_entries)…");
@@ -573,6 +599,7 @@ async function attach(name) {
 // 基线落盘：渲染活跃分支、记游标/水位、开流（任务 bw333x 改分片渲染）
 function applyBaseline(doc, initial) {
   statusEpoch++; resetProcessBinding();
+  curCtx = null; ctxStatsInFlight = false; ctxStatsRequestId = null; paintContextUsage();
   lastGen = doc.gen !== undefined ? doc.gen : lastGen;
   curLeafId = doc.leafId || null;
   const branch = activeBranch(doc.entries || [], curLeafId);
@@ -718,6 +745,7 @@ function renderEntryMessage(m, entryId) {
     // 组、toolResult 走 toolBlocks map，均不依赖 el 在场。
     if (!String(text || "").trim() && !emsg) removeEmptyAssistant(el);
     if (emsg) renderErrorBox(emsg);
+    if (m.stopReason === "aborted") addDiv("sys", "已停止");
     return;
   }
   sysLine("◆ message role=" + role);
@@ -742,9 +770,9 @@ async function heal(reason) {
     healFails++;
     sysLine("Heal failed (" + reason + "): " + e.message, "err");
     if (healFails < 5) setTimeout(() => { healBusy = false; heal(reason); }, 2000);
-    else { sysLine("Heal retries exhausted — refresh or re-attach manually", "err"); healBusy = false; return; }
+    else { sysLine("Heal retries exhausted — refresh or re-attach manually", "err"); healBusy = false; paintChatStatus(); return; }
   }
-  healBusy = false;
+  healBusy = false; paintChatStatus();
 }
 
 function stopStream() {
@@ -892,6 +920,7 @@ function handleEvent(o) {
   if (document.hidden && (t === "sessiond.error" || t === "extension_ui_request")) beep("notify");
   if (t === "agent_settled") {
     beep("done"); collapseProcessGroups(); turnActive = false;
+    sendCtxStats(true);
   }
   if (t === "agent_end") {
     // Not settled: retry, compaction and queued continuation can follow.
@@ -984,6 +1013,7 @@ function renderEvent(o) {
   }
   if (t === "message_end") {
     const m = o.message || {};
+    if (m.role === "assistant") sendCtxStats(true);
     if (mdRenderTimer) { clearTimeout(mdRenderTimer); mdRenderTimer = null; }
     if (m.role === "assistant" && curAssistantEl) {
       const txt = curAssistantBuf || msgText(m);
@@ -1004,6 +1034,7 @@ function renderEvent(o) {
       const emsg = errMsgOf(m);                         // 模型错误 → 红框（0829-2131-pdop）；
       // 不依赖 curAssistantEl，无前置 message_start 的帧也能出框（去重逻辑内置）
       if (emsg) renderErrorBox(emsg);
+      if (m.stopReason === "aborted") addDiv("sys", "已停止");
     }
     if (m.role === "toolResult" && m.toolCallId) {
       seenToolIds.add("r:" + m.toolCallId);
@@ -1141,13 +1172,13 @@ function thinkingDetails(text) {
 // turn 级组级折叠容器（0830-1039-a6vy 引入；0830-1047-ehzc 粒度修订：从每条
 // assistant 消息一组 → 一个来回（turn）一组）：同一回合内所有 assistant 消息的
 // thinking + 工具块收进同一个组，最终回答文本留在各自 assistant div 内（组外）。
-// Live turns create a compact empty header immediately; replay stays lazy and statusless.
-// Ownership is explicit, never inferred from historical tool DOM. A baseline candidate
-// can be bound only by authoritative busy, not by an idle snapshot.
+// A live turn may reserve ownership/anchors, but only actual process blocks mount a
+// group into the stream. Text-only turns never have a header. Status belongs to the
+// footer, not to process history. Busy authority alone may bind a replay candidate.
 function processGroup(open) {
   if (turnGroup) return turnGroup;
   const d = document.createElement("details");
-  d.className = "process-group pg-empty";
+  d.className = "process-group";
   if (open) d.open = true;                              // 实时处理中展开；基线/自愈回放一律传 false 折叠
   const s = document.createElement("summary");
   const arrow = document.createElement("span");
@@ -1158,37 +1189,32 @@ function processGroup(open) {
   const body = document.createElement("div");
   body.className = "pg-body";
   d.appendChild(s); d.appendChild(body);
-  // stream 顶层插入：当前 assistant 元素之前 = 该回合所有文本之前（0830-1047-ehzc）
-  if (turnAnchor) $("stream").insertBefore(d, turnAnchor.nextSibling);
-  else if (curAssistantEl) $("stream").insertBefore(d, curAssistantEl);
-  else $("stream").appendChild(d);
-  const grp = {det: d, body: body, label: label, n: 0, nTools: 0, statusLabel: "", frozen: false};
-  s.onclick = ev => { if (!grp.n) ev.preventDefault(); };
+  // Reserve the original turn anchor even if the first block arrives after text.
+  const grp = {det: d, body: body, label: label, n: 0, nTools: 0, frozen: false,
+    anchor: turnAnchor, assistant: curAssistantEl};
   paintProcessGroup(grp);
   turnGroup = grp;
   lastProcessGroup = grp;                               // 孤儿兜底语义保留（0830-1039-a6vy）
   return grp;
 }
 function grpAddBlock(grp, node, isTool) {
-  // Preserve the original live first-block expansion, once only. Empty headers
-  // aren't expandable; after the first block, never override the user's toggle.
-  if (!grp.n && grp === currentProcessGroup && !grp.frozen) grp.det.open = true;
+  if (!grp.n) {
+    const stream = $("stream");
+    if (grp.anchor && grp.anchor.parentNode === stream) stream.insertBefore(grp.det, grp.anchor.nextSibling);
+    else if (grp.assistant && grp.assistant.parentNode === stream) stream.insertBefore(grp.det, grp.assistant);
+    else stream.appendChild(grp.det);
+    if (grp === currentProcessGroup && !grp.frozen) grp.det.open = true;
+  }
+  // Later blocks must not override a user's manual collapse.
   grp.body.appendChild(node);
   grp.n++; if (isTool) grp.nTools++;
-  grp.det.classList.remove("pg-empty");
   paintProcessGroup(grp);
 }
 function paintProcessGroup(grp) {
-  grp.label.textContent = [grp.statusLabel, grp.nTools ? grp.nTools + "次工具" : ""]
+  grp.label.textContent = [grp.n > grp.nTools ? "思考" : "", grp.nTools ? grp.nTools + "次工具" : ""]
     .filter(Boolean).join(" · ");
 }
 function resetProcessBinding() {
-  // Admission transfers live ownership, not a fabricated terminal. An unfinished
-  // previous turn becomes neutral; known terminal labels remain frozen.
-  if (currentProcessGroup && !currentProcessGroup.frozen) {
-    currentProcessGroup.statusLabel = "";
-    paintProcessGroup(currentProcessGroup);
-  }
   currentProcessGroup = null; processAwaitingUser = false; baselineProcessTurn = null;
   turnGroup = null; lastProcessGroup = null; turnAnchor = null;
 }
@@ -1572,23 +1598,34 @@ function paintChatStatus() {
     : chatState === "busy" && statusCoordinatorWaits.size ? "coordinator" : chatState;
   const [icon, fallback] = CHAT_STATES[state] || CHAT_STATES.unknown;
   const label = state === "busy" ? CHAT_PHASES[chatPhase] || fallback : fallback;
-  const el = $("chatStatus"); el.textContent = icon; el.title = label;
-  el.setAttribute("aria-label", label); el.dataset.state = state;
-  el.dataset.phase = state === "busy" ? chatPhase : state;
-  if (currentProcessGroup && !currentProcessGroup.frozen) {
-    currentProcessGroup.statusLabel = label;
-    paintProcessGroup(currentProcessGroup);
-  }
+  const displayLabel = state === "success" ? "就绪" : label;
+  const el = $("chatStatus"); el.title = displayLabel;
+  const displayIcon = state === "success" ? "○" : icon;
+  if ($("chatStatusIcon").textContent !== displayIcon) $("chatStatusIcon").textContent = displayIcon;
+  if ($("chatStatusText").textContent !== displayLabel) $("chatStatusText").textContent = displayLabel;
+  el.setAttribute("aria-label", displayLabel); el.dataset.state = state === "success" ? "ready" : state;
+  el.dataset.phase = state === "busy" ? chatPhase : el.dataset.state;
+  $("clearButton").disabled = !attached || sessionGone || healBusy;
+  $("imageButton").disabled = sessionGone;
+  paintSendButton();
   $("editSubmit").disabled = editSubmitting || turnActive || !["ready", "success", "failed", "stopped"].includes(state);
   $("editCancel").disabled = editSubmitting;
   $("editStop").disabled = editSubmitting || !turnActive;
   $("editHint").textContent = historyEdit && $("editSubmit").disabled ? "请等待空闲，或主动 /abort 停止后重新生成" : "";
 }
+function paintSendButton() {
+  const button = $("sendButton"), input = $("promptInput");
+  const label = historyEdit ? "重新生成" : turnActive ? "加入待发（follow-up）" : "发送";
+  button.title = label; button.setAttribute("aria-label", label);
+  button.disabled = !attached || sessionGone || (!input.value.trim() && !pendingImages.length)
+    || (!!historyEdit && (editSubmitting || turnActive || Object.keys(pendingDialogs).length > 0
+      || !["ready", "success", "failed", "stopped"].includes(chatState)));
+}
 function setChatStatus(state, phase = "unknown") {
   chatState = state; chatPhase = phase;
   if (state !== "busy") { statusTools.clear(); statusCoordinatorWaits.clear(); }
   paintChatStatus();
-  // A known terminal belongs to this turn forever, including through disconnects.
+  // Close live process ownership at a known terminal; history carries no status.
   if (currentProcessGroup && ["success", "failed", "stopped", "ready"].includes(state))
     currentProcessGroup.frozen = true;
 }
@@ -1645,7 +1682,10 @@ function updateChatStatus(o) {
     phase(statusTools.size ? "tools" : "unknown");
   }
   if (t === "auto_retry_start") { runOutcome = "success"; phase("retrying"); }
-  if (t === "compaction_start" || t === "auto_compaction_start") phase("compacting");
+  if (t === "compaction_start" || t === "auto_compaction_start") {
+    curCtx = null; ctxStatsInFlight = false; ctxStatsRequestId = null; paintContextUsage();
+    phase("compacting");
+  }
   if (t === "message_end" && m.role === "assistant") {
     statusEpoch++;
     runOutcome = m.stopReason === "error" ? "failed" : m.stopReason === "aborted" ? "stopped" : "success";
@@ -1658,6 +1698,7 @@ function updateChatStatus(o) {
   }
   if (t === "compaction_end" || t === "auto_compaction_end") {
     if (o.errorMessage) runOutcome = "failed";
+    curCtx = null; ctxStatsInFlight = false; ctxStatsRequestId = null; paintContextUsage(); sendCtxStats();
     phase("unknown"); refreshChatStatus(streamCtrl);
   }
   if (t === "response" && o.command === "abort" && o.success) {
@@ -1684,6 +1725,7 @@ function appendRecoveredTexts(texts) {
   }
 }
 function resizePrompt() {
+  paintSendButton();
   const input = $("promptInput"); input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight || 32, 120) + "px";
 }
@@ -1785,7 +1827,7 @@ function sendPrompt() {
   if (!msg && !pendingImages.length) return;
   // 斜杠命令拦截：/ 开头不进 prompt（附件保留，不误删）；控制命令面不走消息通道。
   if (msg.startsWith("/")) { el.value = ""; el.style.height = "auto";
-    hideNotice();
+    paintSendButton(); hideNotice();
     handleSlash(msg); return; }
   el.value = ""; el.style.height = "auto";
   hideNotice();
@@ -1805,7 +1847,7 @@ function sendPrompt() {
   else pendingSends[cmd.id] = {mode: "prompt", text: msg, rejected: false};
   // prompt 直发静默登记：正常不进队列面板，失败时展示恢复入口，
   // 仅供 handleCmdResponse 的 "already processing" 兜底定位原文重发（0830-1029-urgg）
-  sendTracked(cmd);
+  sendTracked(cmd); paintSendButton();
   stickyBottom = true; scrollStream(true);       // 用户发送 → 强制回底，看到自己的输入与回复起点（0830-1544-q9rr）
 }
 
@@ -1926,12 +1968,12 @@ function handleCmdResponse(o) {
     }
     return;
   }
-  if (o.command === "get_session_stats") {     // 上下文占用回执（0830-1324-3qet）
-    ctxStatsInFlight = false;
-    if (o.success && o.data) {                // 失败静默忽略（不闪 err）
-      curCtx = o.data.contextUsage || null;
-      refreshSlashNoticeIfVisible();
-    }
+  if (o.command === "get_session_stats") {
+    // Ignore replies from an old baseline/request (including another client's query).
+    if (o.id !== ctxStatsRequestId) return;
+    ctxStatsInFlight = false; ctxStatsRequestId = null;
+    curCtx = o.success && o.data ? o.data.contextUsage || null : null;
+    paintContextUsage(); refreshSlashNoticeIfVisible();
     return;
   }
   if (typeof o.id !== "string" || !(o.id in pendingSends)) return;
@@ -2011,15 +2053,20 @@ function sendStatusQuery() {
 }
 // ---------------- 上下文占用查询（任务 0830-1324-3qet） ----------------
 // 只读查询会话统计（pi rpc get_session_stats → SessionStats.contextUsage，流式中发也
-// 安全）；时机与 sendGetState 同（attach 基线后 + 每次展示斜杠提示时）。防抖/静默失败
-// 口径同 get_state；成功由 handleCmdResponse 回填 curCtx。
-let ctxStatsInFlight = false;
-function sendCtxStats() {
-  if (!attached || ctxStatsInFlight) return;
+// 安全）；在基线、assistant 消息结束、压缩结束、落定及 / 提示时刷新，无轮询。
+let ctxStatsInFlight = false, ctxStatsRequestId = null;
+function sendCtxStats(fresh = false) {
+  if (!attached || (ctxStatsInFlight && !fresh)) return;
+  // Content boundaries supersede older in-flight reads; slash queries coalesce.
   ctxStatsInFlight = true;
-  api("cmd", {session: attached, cmd: JSON.stringify({type: "get_session_stats", id: uid()})})
-    .catch(() => {});                          // HTTP 失败静默（不闪 err）
-  setTimeout(() => { ctxStatsInFlight = false; }, 3000);  // 回执丢失时的兜底解锁
+  const id = ctxStatsRequestId = uid();
+  const failed = () => {
+    if (ctxStatsRequestId !== id) return;
+    ctxStatsInFlight = false; ctxStatsRequestId = null; curCtx = null;
+    paintContextUsage(); refreshSlashNoticeIfVisible();
+  };
+  api("cmd", {session: attached, cmd: JSON.stringify({type: "get_session_stats", id})}).catch(failed);
+  setTimeout(failed, 3000); // Lost receipt: show unknown instead of stale precision.
 }
 // 进程级 reload：直接经 op=reload 杀会话进程并从 session.jsonl resume 重拉（用户拍板
 // 去二次确认，任务 0830-1132-7yh5：/reload 直接执行，不再弹 window.confirm，与 /clear 同口径）。
@@ -2059,12 +2106,14 @@ async function doReload() {
 async function doClear() {
   if (!attached) { flash("Not attached to a session, cannot clear", "err"); return; }
   if (healBusy) return;
+  healBusy = true; paintChatStatus();
   let sockMode = false;
   try { const st = await api("status", {session: attached}); sockMode = st.mode === "socket"; } catch (e) {}
-  healBusy = true;
   flash("Clearing session…");
   try {
     const r = await api("clear", {session: attached});
+    if (!r.ok) throw new Error(r.error || "Clear failed");
+    curCtx = null; ctxStatsInFlight = false; ctxStatsRequestId = null; paintContextUsage();
     if (sockMode) {
       healBusy = false;
       heal("clear (agentd control)");   // 换代窗口秒级：attach 失败自愈环会重试
@@ -2079,7 +2128,7 @@ async function doClear() {
   } catch (e) {
     flash("Clear failed: " + e.message, "err");
   }
-  healBusy = false;
+  healBusy = false; paintChatStatus();
 }
 
 // ---------------- 会话级变更（/rename · /delete） ----------------
@@ -2127,6 +2176,7 @@ async function doDelete() {
     sessionGone = true;
     stopStream();
     attached = null;
+    curCtx = null; ctxStatsInFlight = false; ctxStatsRequestId = null; paintContextUsage();
     clearPendingDialogs();
     const el = $("promptInput");
     if (el) { el.disabled = true; el.placeholder = "session deleted"; }
@@ -2172,14 +2222,20 @@ function hideNotice() {
 // {tokens, contextWindow, percent}（pi 权威值，含系统提示+工具开销，不做客户端估算）。
 // k 格式化复用 fmtThinkingCount；percent 取整。tokens=null（compaction 后未响应前）
 // → "ctx≈? / <window>k"；curCtx 全空 → "ctx≈?"。
-function ctxStatusText() {
+function ctxStatusText(compact = false) {
   if (!curCtx) return "ctx\u2248?";
   const wTxt = (typeof curCtx.contextWindow === "number") ? fmtThinkingCount(curCtx.contextWindow) : "?";
   const t = curCtx.tokens;
   if (t == null) return "ctx\u2248? / " + wTxt;
   const pTxt = (typeof curCtx.percent === "number") ? Math.round(curCtx.percent) : "?";
   return "ctx\u2248" + fmtThinkingCount(t) + " / " + wTxt
-    + " tok\uff08" + pTxt + "%\uff09";
+    + (compact ? "" : " tok\uff08" + pTxt + "%\uff09");
+}
+function paintContextUsage() {
+  const el = $("contextUsage");
+  el.textContent = ctxStatusText(true);
+  el.title = "上下文估算（含系统提示与工具开销，非累计 token）：" + ctxStatusText();
+  el.dataset.level = curCtx && typeof curCtx.percent === "number" && curCtx.percent >= 80 ? "high" : "normal";
 }
 function slashStatusLine() {
   const l1 = "model: " + (curProvider || "?") + "/" + (curModelId || "?")
@@ -2506,6 +2562,7 @@ function pickImages() {
   setTimeout(() => inp.click(), 250);
 }
 function renderAttachBar() {
+  paintSendButton();
   const bar = $("attachBar");
   bar.innerHTML = "";
   if (!pendingImages.length) { bar.classList.add("hidden"); return; }
@@ -2538,8 +2595,9 @@ function renderUserMessage(m, entryId, live = false) {
   const d = addDiv("role-user", txt);
   turnAnchor = d;
   if (live && currentProcessGroup) {
-    // Local prompt / agent_start may precede the real user message. Move, don't recreate.
-    $("stream").appendChild(currentProcessGroup.det);
+    // Local prompt / agent_start may precede user admission. Mount only actual blocks.
+    currentProcessGroup.anchor = d;
+    if (currentProcessGroup.n) $("stream").appendChild(currentProcessGroup.det);
     turnGroup = currentProcessGroup; lastProcessGroup = currentProcessGroup;
   }
   // Text/bubble click edits; image links retain their existing open-image action.
@@ -2592,6 +2650,7 @@ $("promptInput").addEventListener("keydown", e => {
 let inputFitScheduled = false;
 $("promptInput").addEventListener("input", function () {
   const el = this;
+  paintSendButton();
   if (!inputFitScheduled) {
     inputFitScheduled = true;
     requestAnimationFrame(() => {
