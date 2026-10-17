@@ -84,9 +84,21 @@ iframe 高度在同源时随内容调整，最大 80vh；异源时保持固定�
 
 ## 执行协议与安全边界
 
-shell 端点 `/w/ext/shell/rpc/sh.py` 接受 `v=script`、`src`、`cmd`、`stream=2`。
-`src` 环境变量指向源文件。响应为带行标签的流：`1` = stdout、`2` = stderr，流关闭表示结束。
-协议不提供退出码，不能把请求结束等同于命令成功。
+shell 端点 `/w/ext/shell/rpc/sh.py` 接受 `v=script`、`src`、`cmd`、`stream=3`。
+`src` 环境变量指向源文件。响应为带行标签的流：`1` = stdout、`2` = stderr，最后一行 `3{"exitcode":0}` 提供进程退出码。
+只有完整读到唯一终态行、其后没有其它数据且退出码为 0 才算成功；非零、缺失或非法终态均在结果区显示错误。stderr 本身不决定成败。
+旧 `stream=0/1/2` 的行为与格式不变，`stream=2` 仍无退出码。
+
+### 成功后刷新父级 tab 列表
+
+需要此行为的命令 anchor 显式声明 `data-frame-refresh="tabs"`，例如：
+
+```html
+<a href="cmd:!create-session" data-frame-refresh="tabs">新建会话</a>
+```
+
+独立库在该命令确认退出码为 0 后，向父窗口同源发送 `{type: 'frame:tabs-changed'}`，一次执行只发送一次；普通 anchor、失败命令、显隐操作不会发通知。独立打开页面时不发送。
+frame 容器校验 origin 与消息来源必须是自己已挂载的子 iframe，再重新读取完整 itab 列表及其中所有 `@dynamic`。不刷新整个父页面；现有 iframe 按 URL 复用，保留当前选中项与输入，不自动切到新增 tab。
 
 命令权限等同 web 服务进程，能够读写其账号可访问的文件并执行任意程序。
 只对可信页面和可信输出 renderer 启用扩展；`!` 只是自动加载排除标记，不是权限或副作用检查。
@@ -97,3 +109,4 @@ shell 端点 `/w/ext/shell/rpc/sh.py` 接受 `v=script`、`src`、`cmd`、`strea
 `PLAYWRIGHT_MODULE=/path/to/playwright CHROMIUM_BIN=/path/to/chromium node test/anchor_widgets_browser.cjs`
 在隔离浏览器夹具中检查独立 HTML、增量增强、表格排除、手动集合、流式输出与 iframe 生命周期，
 不连接部署服务或执行真实命令。
+`python test/shell_exit_status.py` 检查真实隔离子进程的退出状态与旧协议；`PLAYWRIGHT_MODULE=/path/to/playwright CHROMIUM_BIN=/path/to/chromium node test/frame_tabs_refresh_browser.cjs` 检查成功通知、失败不通知、来源校验、完整列表重取及 iframe／输入状态保留。

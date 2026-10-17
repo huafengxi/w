@@ -79,5 +79,8 @@ def interp(store, i='', cmd='', dir='', src=None, input=None, pipe_src=0, stream
             item = q.get()
             if item is None: done += 1
             else: yield item
-        p.wait()
+        exitcode = p.wait()
+        if stream == 3:
+            import json
+            yield ('3' + json.dumps({'exitcode': exitcode}) + '\n').encode()
     return dict(type='text/plain'), gen()

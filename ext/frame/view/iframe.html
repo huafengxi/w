@@ -58,7 +58,7 @@
       // mime → raw passthrough). Fall back to stripping v= from location.
       function getUrl() {
          if (ARGS.src) {
-             return ARGS.src + (ARGS.src.indexOf('?') >= 0 ? '&' : '?') + 'v=read';
+             return PREFIX + ARGS.src + (ARGS.src.indexOf('?') >= 0 ? '&' : '?') + 'v=read';
          }
          return window.location.href.replace(/v=(iframe|iflow|itab)/, '');
       }
@@ -231,19 +231,28 @@
       function baseName(p) { var m = String(p).match(/[^/]+$/); return m ? m[0] : p; }
       function initApp(){
          setWindowTitle(baseName(ARGS.src || window.location.pathname));
-         // 任务 8a1xdz：tab 列表改异步拉取（启动时的一次性同步 XHR 同样冻结主线程）
-         httpAsync(getUrl(), '', function (text) { buildApp(text.split('\n')); });
+         loadTabs().catch(function (error) { console.warn('Tabs load failed', error); });
+      }
+      function loadTabs() {
+         // Startup and refresh use exactly the same complete-list loading path.
+         return fetch(getUrl(), {
+            method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: ''
+         }).then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.text();
+         }).then(function (text) { return buildApp(text.split('\n')); });
       }
       // ---- @dynamic 指令行（任务 z293ql，设计稿 §4.3 方案 B；⛔ 不用 CmdStore）----
       // 语法：`@dynamic <站内路径>` —— 该路径是一个吐 itab 格式行（`名字 URL [k=v …]`，
       // 一行一枚）的端点；返回的行**就地 splice** 进列表（指令行的位置即展开位置）。
       // 通用增强：任何 itab/iflow 页都可用，⛔ 不只服务 dash（非 dash 用例 = /w/demo/dyn.itab）。
-      // 语义边界（设计稿已裁「加载快照」）：只在 buildApp 时 fetch 一次，⛔ 无轮询、
-      // ⛔ 无定时刷新（新建/删除会话后刷新页面才反映）；端点失败/吐出认不出的正文
-      // ⇒ 该指令即刻展开零行（⛔ 不重试）；返回行里的 @dynamic ⛔ 不递归展开。
+      // 加载时取快照；同源已挂载 iframe 的 frame:tabs-changed 通知可重新获取完整列表。
+      // 无轮询、无定时刷新；端点失败展开零行，返回行里的 @dynamic 不递归展开。
       // ⚠ 整表一次渲染（静态行与动态行同批建 DOM）⇒ 端点 hang 时整表（含静态行）延迟渲染，
       // 上界 = DYNAMIC_TIMEOUT_MS（10 s），到点同样按零行渲染。
       var DYNAMIC_TAG = '@dynamic';
+      var tabRefresh = Promise.resolve();
       var DYNAMIC_TIMEOUT_MS = 10000;   // 有界等待（假活防线）：超时即当零行，绝不让列表无限期不渲染
       function dynamicSpec(s) {
          var parts = String(s).trim().split(/\s+/);
@@ -290,22 +299,41 @@
             if (d) { specs.push({dynamic: d}); dyn.push(specs.length - 1); continue; }
             specs.push({row: s});
          }
-         if (!dyn.length) {                 // 无 @dynamic ⇒ 全同步，行为与既有逐字一致
+         if (!dyn.length) {
             buildRows(flattenSpecs(specs, null));
             finishLayout();
             return;
          }
-         Promise.all(dyn.map(function (k) { return fetchDynamicRows(specs[k].dynamic); }))
+         return Promise.all(dyn.map(function (k) { return fetchDynamicRows(specs[k].dynamic); }))
             .then(function (results) {
                buildRows(flattenSpecs(specs, results));
                finishLayout();
             });
       }
-      // 逐行建 DOM（= 原 buildApp 的循环体，逐字搬移；@dynamic 展开出的行走同一条路）
+      function refreshTabs() {
+         // One notification, one complete list reload. No polling or group cache.
+         if (layoutMode != 'tab') return Promise.resolve();
+         tabRefresh = tabRefresh.then(loadTabs).catch(function (error) { console.warn('Tabs refresh failed', error); });
+         return tabRefresh;
+      }
+      window.addEventListener('message', function (event) {
+         if (event.origin !== window.location.origin || !event.data || event.data.type !== 'frame:tabs-changed') return;
+         if (!items.some(function (it) { return it.active.contentWindow === event.source; })) return;
+         refreshTabs();
+      });
+      // Reconcile by URL, retaining existing iframes and their document/input state.
       function buildRows(links){
          var body = $("iframe-list");
          var checklist = $("check-list");
          var tabbar = $("tab-scroll");
+         var previous = items, selected = previous[currentTab], available = new Map();
+         previous.forEach(function (it) {
+             if (!available.has(it.link)) available.set(it.link, []);
+             available.get(it.link).push(it);
+         });
+         items = [];
+         tabbar.replaceChildren();
+         checklist.replaceChildren();
          for(var i in links) {
              var s = links[i];
              if (!s || s.startsWith('#')) continue;
@@ -322,15 +350,31 @@
              if (!row.name) continue; // 纯空白行跳过
              var name = row.name;
              var link = row.link;
-             var iframe = appendIframe(body);
-             var tab = appendTab(tabbar, name, items.length);
-             var item = { name: name, link: link, active: iframe, standby: null, standbyTimer: null, pendingSwap: false, checkbox: null, tab: tab };
-             item.checkbox = appendIndex(checklist, item, name, link);
+             var pool = available.get(link), item = pool && pool.shift();
+             if (item) {
+                 item.name = name;
+                 item.tab.textContent = item.tab.title = name;
+                 item.checkbox.name = name;
+                 item.checkbox.parentNode.lastChild.textContent = name;
+                 tabbar.appendChild(item.tab);
+                 checklist.appendChild(item.checkbox.parentNode);
+             } else {
+                 var iframe = appendIframe(body);
+                 var tab = appendTab(tabbar, name, items.length);
+                 item = { name: name, link: link, active: iframe, standby: null, standbyTimer: null, pendingSwap: false, checkbox: null, tab: tab };
+                 item.checkbox = appendIndex(checklist, item, name, link);
+                 if (layoutMode != 'tab') setIframeSrc(item.active, link);
+             }
+             item.tab.onclick = selectTab.bind(null, items.length);
              items.push(item);
-             // tab mode: lazy load — hidden tabs keep an empty src and are
-             // fetched only when first selected (selectTab()'s !iframeLoaded
-             // branch). Flow mode still loads every row up front.
-             if (layoutMode != 'tab') setIframeSrc(item.active, link);
+         }
+         available.forEach(function (pool) {
+             pool.forEach(function (it) { discardStandby(it); it.active.remove(); });
+         });
+         if (layoutMode == 'tab' && currentTab >= 0) {
+             var next = items.indexOf(selected);
+             currentTab = -1; // Re-selection is not a request to reload the active tab.
+             selectTab(next >= 0 ? next : 0);
          }
       }
       // single-shot layout init by route mode (replaces the old runtime switch)
@@ -345,14 +389,16 @@
              // scrolling happens only inside the embedded page.
              document.body.style.overflow = 'hidden';
              // fullscreen button: 挂在滚动条外、作为外层栏的末项 ⇒ 恒占最右且不随 tab 滚走
-             var fsBtn = document.createElement('div');
-             fsBtn.id = 'fs-toggle';
-             fsBtn.className = 'tab';
-             fsBtn.title = 'fullscreen';
-             fsBtn.textContent = '⛶';
-             fsBtn.onclick = toggleFullscreen;
-             tabbar.appendChild(fsBtn);
-             selectTab(currentTab >= 0 ? currentTab : 0);
+             if (!$('fs-toggle')) {
+                 var fsBtn = document.createElement('div');
+                 fsBtn.id = 'fs-toggle';
+                 fsBtn.className = 'tab';
+                 fsBtn.title = 'fullscreen';
+                 fsBtn.textContent = '⛶';
+                 fsBtn.onclick = toggleFullscreen;
+                 tabbar.appendChild(fsBtn);
+             }
+             if (currentTab < 0 && items.length) selectTab(0);
          }
       }
       // 双缓冲刷新（⟳ 按钮与再点当前 tab 共用）：隐藏 standby 预加载，就绪后无白屏换入。

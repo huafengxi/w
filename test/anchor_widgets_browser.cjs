@@ -40,7 +40,7 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
         if (args.cmd === 'bad-stream' && !window.recoverError) return new Response('Exception: shell failed\n');
         return new Response(new ReadableStream({start(controller) {
           window.release = () => {
-            const bytes = new TextEncoder().encode(window.withoutStderr ? '1clean\n' : '1**ok** 雪\n2warning\n1last');
+            const bytes = new TextEncoder().encode(window.withoutStderr ? '1clean\n3{"exitcode":0}\n' : '1**ok** 雪\n2warning\n1last\n3{"exitcode":0}\n');
             controller.enqueue(bytes.slice(0, 10));
             controller.enqueue(bytes.slice(10, 13));
             controller.enqueue(bytes.slice(13)); controller.close();
@@ -65,7 +65,7 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     await page.click('#auto');
     await page.waitForFunction(() => !document.querySelector('#auto').hasAttribute('aria-busy'));
     const autoOutput = page.locator('.aw-output').nth(0);
-    assert.equal(await autoOutput.locator('.aw-result').innerText(), '**ok** 雪\nlast', 'plain renderer and chunk decoder');
+    assert.equal(await autoOutput.locator('.aw-result').innerText(), '**ok** 雪\nlast\n', 'plain renderer and chunk decoder');
     assert.equal(await autoOutput.locator('.aw-log').innerText(), 'warning\n');
     assert.equal(await autoOutput.locator('.aw-log').isVisible(), true);
     assert.equal(await autoOutput.locator('.aw-diagnostics').getAttribute('open'), '');
@@ -96,7 +96,7 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     assert.equal(await page.evaluate(() => calls.length), 3);
     assert(!await page.evaluate(() => calls.some(c => ['change', 'cell', 'header', 'code', 'pre'].includes(c.cmd))));
     assert.deepEqual(await page.evaluate(() => [calls[0].url, calls[0].src, calls[0].stream]),
-      ['/worker/shell', '/document.md', '2']);
+      ['/worker/shell', '/document.md', '3']);
     await page.click('#manual');
     await page.waitForFunction(() => calls.some(c => c.cmd === 'change'));
     assert(await page.locator('#manual').evaluate(a => a.classList.contains('aw-manual')));
@@ -217,7 +217,7 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
       window.AnchorWidgetsConfig = {autoRun: true, source: '/headings.html'};
       window.fetch = async (_url, opts) => {
         calls.push(new URLSearchParams(opts.body).get('cmd'));
-        return new Response('1heading result\n');
+        return new Response('1heading result\n3{"exitcode":0}\n');
       };
     });
     await headingPage.addScriptTag({content: library});
@@ -270,7 +270,7 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
         const args = Object.fromEntries(new URLSearchParams(req.postData()));
         if (url.pathname.endsWith('/sh.py')) {
           requests.push({path: url.pathname, ...args});
-          return route.fulfill({body: '1| 名称 |\n1|---|\n1| fixture |\n'});
+          return route.fulfill({body: '1| 名称 |\n1|---|\n1| fixture |\n3{"exitcode":0}\n'});
         }
         return route.fulfill({body: fixture});
       }

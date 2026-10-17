@@ -25,7 +25,7 @@ const source = '# fixture\nStatic /static.html\n  @separator  \n@dynamic /tabs.p
               ? 'First /static.html\n@separator\nSecond /second.html\n' : source});
           }
           return route.fulfill({contentType: 'text/html', body: template
-            .replace('$QUERY_ARGS', JSON.stringify({src: '/proxy/fixture.itab', mode}))
+            .replace('$QUERY_ARGS', JSON.stringify({src: '/fixture.itab', mode}))
             .replace('$ARGS_JSON', JSON.stringify({src: '/fixture.itab'}))});
         }
         if (url.pathname === '/proxy/tabs.py') {

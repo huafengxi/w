@@ -89,7 +89,7 @@
     });
   }
   async function command(w) {
-    const args = new URLSearchParams({v: 'script', src: options.source || '', cmd: w.body, stream: '2'});
+    const args = new URLSearchParams({v: 'script', src: options.source || '', cmd: w.body, stream: '3'});
     const token = doc.cookie.match(/(?:^|;\s*)token=([^;]*)/);
     if (token) args.set('token', decodeURIComponent(token[1]));
     const response = await global.fetch(options.shellEndpoint, {
@@ -97,8 +97,9 @@
       headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: args.toString()
     });
     if (!response.ok) throw new Error('HTTP ' + response.status);
-    let stdout = '', stderr = '', buffer = '';
+    let stdout = '', stderr = '', buffer = '', exitcode = null;
     function line(text) {
+      if (exitcode !== null) throw new Error('Shell stream continued after exit status');
       if (text[0] === '1') {
         stdout += text.slice(1);
         options.renderOutput(w.result, stdout);
@@ -107,6 +108,10 @@
         if (w.diagnostics.hidden) {
           w.diagnostics.hidden = false; w.diagnostics.open = true;
         }
+      } else if (text[0] === '3') {
+        const status = JSON.parse(text.slice(1));
+        if (!status || !Number.isInteger(status.exitcode)) throw new Error('Invalid shell exit status');
+        exitcode = status.exitcode;
       } else {
         throw new Error('Invalid shell stream: ' + text.trim().slice(0, 160));
       }
@@ -128,6 +133,8 @@
       accept(decoder.decode());
       if (buffer) line(buffer);
     } finally { reader.releaseLock(); }
+    if (exitcode === null) throw new Error('Shell stream missing exit status');
+    if (exitcode !== 0) throw new Error('命令退出码 ' + exitcode);
   }
   function run(w) {
     if (w.running) return w.running;
@@ -141,6 +148,9 @@
       if (w.kind === 'cmd') {
         w.result.replaceChildren();
         await command(w);
+        if (w.anchor.isConnected && w.anchor.getAttribute('data-frame-refresh') === 'tabs' && global.parent !== global) {
+          global.parent.postMessage({type: 'frame:tabs-changed'}, global.location.origin);
+        }
       } else {
         // Only explicit loading replaces the frame. Hide/show retains it.
         // Replacing also guarantees reload for URLs ending in the same fragment.
