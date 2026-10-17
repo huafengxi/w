@@ -137,10 +137,6 @@ details summary::-webkit-details-marker { display: none; }
 .tool-block.err summary .thead { color: var(--err); }
 /* 任务 0830-1448-1qx4：错误态容器红底对齐 pi-web 错误配色 */
 .tool-block.err { background: rgba(248,113,113,0.05); border-color: rgba(248,113,113,0.45); }
-/* Waiting for model 指示（任务 0829-2107-cvdn）：回合进行中且无流式产出时，
-   聊天流末尾的低调提示行（呼吸动画） */
-.waiting { color: var(--dim); font-size: 12px; font-style: italic; padding: 4px 0;
-  animation: waitpulse 1.6s ease-in-out infinite; }
 @keyframes waitpulse { 0%, 100% { opacity: .35; } 50% { opacity: .9; } }
 /* 模型错误红框（任务 0829-2131-pdop，对齐 pi-web 观感）：assistant 错误消息 /
    agent_end、compaction_end 的 errorMessage 统一渲染为红边盒子；同文去重不叠框 */
@@ -316,7 +312,7 @@ button:disabled { opacity: .5; cursor: default; }
       <span id="editHint"></span>
     </div>
     <div id="inputbar">
-      <textarea id="promptInput" rows="1" placeholder="Type a prompt or /command, Enter to send (queues automatically while streaming), Shift+Enter for newline"></textarea>
+      <textarea id="promptInput" rows="1" placeholder="输入消息或 /命令"></textarea>
       <button id="chatStatus" type="button" data-state="unknown" aria-label="连接状态未知" title="连接状态未知" onclick="sendPrompt()">◇</button>
     </div>
   </main>
@@ -451,18 +447,9 @@ const MD_RENDER_MS = 150;
 // dialog 倒计时
 let dialogTimer = null;
 let dialogDeadline = 0;
-// Waiting for model 指示（任务 0829-2107-cvdn）：回合进行中但无流式产出时显示；
-// 状态机：user message_start = 回合开始（turnActive），agent_settled / 权威空闲 = 回合结束；
-// turn_end 仅是子回合边界——每个 assistant 子回合（含以 tool call 结束的）都发一次，
-// 一次 agent run 发多个、仅一个 agent_end，不清 turnActive（0830-1029-urgg）；
-// 显示时机 = 回合中且无流式产出（用户消息发出后等首个产出、工具执行完成后等下一轮
-// 模型响应）；任一模型产出帧（assistant message_start / message_update /
-// tool_execution_start）到达即移除。纯前端基于现有 SSE 事件推断，无后端新事件。
-// 块间间隙续接（任务 0c736g）：上述触发点全是事件边界——回合进行中模型响应块间
-// 静默（无任何帧流动）时指示缺位。补静默计时器（gapTimer，见下方 Waiting 节），
-// 静默超窗且守卫通过 → 复用同一 waiting 行。
+// Busy covers the full run, including tools/retry/finalization. Only settled or
+// authoritative idle clears it; status is shown in the process header/indicator.
 let turnActive = false;
-let waitingEl = null;
 // 回合状态三件套（任务 0829-2131-pdop）：
 // ① retryBoxEl = 当前 Retrying 警告框（auto_retry_start 建，end success 移除 / failure 转红框）；
 // ② lastRenderedErrorMsg = 最近已渲染的模型错误文本（agent_end/compaction_end 的
@@ -561,7 +548,7 @@ async function attach(name) {
   $("stream").innerHTML = "";
   curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
   seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
-  turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false;   // 重挂接重置等待指示（0829-2107-cvdn；间隙计时/收尾窗/红框在场同清，0c736g/ilznlp）
+  turnActive = false; // Reset lifecycle state before rebuilding the baseline.
   retainFailedSends(); queueState = {steering: [], followUp: []};
   toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重挂接丢弃（bw333x）
   curMsgCount = null; curCompacting = null; curGen = null;  // 跨会话状态行重置（0830-1257-vwzb inbox 增项）
@@ -594,7 +581,7 @@ function applyBaseline(doc, initial) {
     $("stream").innerHTML = "";
     curAssistantEl = null; curAssistantBuf = ""; lastProcessGroup = null; turnGroup = null;  // turn 组随清屏重置（0830-1047-ehzc）
     seenEntryIds = new Set(); seenToolIds = new Set(); toolBlocks = {};
-    turnActive = false; waitingEl = null; disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false; // 自愈重渲染重置（0829-2107-cvdn；间隙计时/收尾窗/红框在场同清，0c736g/ilznlp）
+    turnActive = false; // Authority restores lifecycle state after baseline rendering.
     retainFailedSends(); queueState = {steering: [], followUp: []};
     toolUpdatePending = {}; if (toolUpdateTimer) { clearTimeout(toolUpdateTimer); toolUpdateTimer = null; }  // 节流中的工具输出随重渲染丢弃（bw333x）
     retryBoxEl = null; lastRenderedErrorMsg = null;     // 回合状态重置（0829-2131-pdop）
@@ -880,7 +867,7 @@ function handleEvent(o) {
     return;
   }
   if (t === "sessiond.session_dormant") { flash("Session dormant (no subscribers) — refresh or send a message to revive", "warn");
-    turnActive = false; hideWaiting(); disarmGapTimer(); return; }
+    turnActive = false; return; }
   if (t === "sessiond.dialog_resolved") {
     if (pendingDialogs[o.id]) closeDialog(o.id, "answered");
     return;
@@ -903,32 +890,16 @@ function handleEvent(o) {
   //    声音是它唯一的用户可见产出）。
   if (document.hidden && t === "message_start" && !turnActive) beep("notify");
   if (document.hidden && (t === "sessiond.error" || t === "extension_ui_request")) beep("notify");
-  if (t === "agent_settled") { beep("done"); collapseProcessGroups();   // 回合彻底落定 → 组折叠（0830-1039-a6vy）
-    turnActive = false; hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false; }               // settled = 无重试/无 compaction/无队列续跑终态：busy 态收敛兜底（0c736g，防 agent_end 缺失的异常路径挂住等待指示与 follow_up 排队判定；红框在场同清，ilznlp）
-  // turn_end 真实发射时序（pi-agent-core/dist/agent-loop.js:131）：toolResults 已入上下文之后、
-  // 下一次模型调用之前发射，事件携带 toolResults 字段。因此非空 = 子回合以工具调用结束、
-  // 模型即将再调（此刻起进入下一轮 TTFT 空白）→ showWaiting 保持/恢复等待指示；
-  // 空 = 纯文本子回合（其后只可能接 agent_end）→ hideWaiting。
-  // 旧版无条件 hideWaiting 把指示器恰好在 TTFT 空白开始前移除（任务 c6ue7q 修复）。
-  if (t === "turn_end") {
-    if (o.toolResults && o.toolResults.length > 0) showWaiting();
-    else { hideWaiting(); awaitingAgentEnd = true; }    // 仅清等待指示，不清 turnActive（0830-1029-urgg）；
-                                                        // 纯文本收尾子回合后只剩 agent_end，模型不再被调用，
-                                                        // 收尾窗内间隙静默检测挂起防误导（0c736g）
+  if (t === "agent_settled") {
+    beep("done"); collapseProcessGroups(); turnActive = false;
   }
   if (t === "agent_end") {
     // Not settled: retry, compaction and queued continuation can follow.
-    hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false;
-    collapseProcessGroups();                            // agent run 结束 → 自动折叠过程组（0830-1039-a6vy）
+    collapseProcessGroups();
   }
   if (t === "response") { handleCmdResponse(o); }       // 上行命令回执（0829-2115-zvti）
   renderEvent(o);
   paintChatStatus();
-  // 块间间隙续接（任务 0c736g）：每收一个真实事件帧重置静默计时（保活 `: ping`
-  // 注释帧在 drainFrames 被跳过不进本函数，不会误重置）；到期且守卫通过 → 复用
-  // waiting 行（见 gapTimerFire）。间隙中偶发的控制帧（queue_update 等）只把指示
-  // 推迟一个窗口，属"有事情发生"语义，无害。
-  if (turnActive) armGapTimer(); else disarmGapTimer();
 }
 
 function renderEvent(o) {
@@ -964,10 +935,8 @@ function renderEvent(o) {
       resolvePendingByMessage(m);             // 待发条目转正（0829-2115-zvti）
       renderUserMessage(m, undefined, true);   // Admit/reposition the optimistic group, never duplicate it.
       curAssistantEl = null; curAssistantBuf = "";
-      turnActive = true; awaitingAgentEnd = false; errorBoxLive = false;   // 回合开始：等模型首个产出（0829-2107-cvdn；收尾窗标志重置，0c736g；红框在场清除，ilznlp）
-      showWaiting();
+      turnActive = true;
     } else if (m.role === "assistant") {
-      hideWaiting(); awaitingAgentEnd = false; errorBoxLive = false;  // 模型已开始输出本轮消息（0829-2107-cvdn；新产出即出收尾窗，0c736g；红框在场清除，ilznlp）
       curAssistantEl = addDiv("role-assistant md", "");
       curAssistantBuf = "";
       lastRenderedErrorMsg = null;              // 新消息开始，重置错误去重键（0829-2131-pdop）
@@ -975,7 +944,6 @@ function renderEvent(o) {
     return;
   }
   if (t === "message_update") {
-    hideWaiting();                              // 任一流式内容帧到达 → 移除等待指示（0829-2107-cvdn）
     const ev = o.assistantMessageEvent || {};
     if (!curAssistantEl) { curAssistantEl = addDiv("role-assistant md", ""); curAssistantBuf = ""; }
     if (ev.type === "text_delta") {
@@ -1039,13 +1007,11 @@ function renderEvent(o) {
     }
     if (m.role === "toolResult" && m.toolCallId) {
       seenToolIds.add("r:" + m.toolCallId);
-      showWaiting();                            // 工具结果落盘后等下一轮模型响应（0829-2107-cvdn）
     }
     curAssistantEl = null; curAssistantBuf = "";
     return;
   }
   if (t === "tool_execution_start") {
-    hideWaiting();                              // 工具开始执行 = 有产出，隐藏等待（0829-2107-cvdn）
     const id = o.toolCallId;
     let blk = id ? toolBlocks[id] : null;               // toolcall_end 先建过 → 复用
     if (!blk) {
@@ -1081,7 +1047,6 @@ function renderEvent(o) {
     blk.outPre.textContent = resultText(o.result);
     if (blk.t0 != null) setToolDur(blk, Date.now() - blk.t0);   // 耗时
     setToolStatus(blk, o.isError ? "err" : "done");
-    showWaiting();                              // 工具执行完成 → 等下一轮模型响应（0829-2107-cvdn）
     scrollStream(); return;
   }
   if (t === "extension_ui_request") {
@@ -1116,8 +1081,6 @@ function renderErrorBox(text) {
   const s = String(text || "").trim();
   if (!s || s === lastRenderedErrorMsg) return;
   lastRenderedErrorMsg = s;
-  errorBoxLive = true;                              // 红框在场：抑制间隙静默的"等模型"误导（ilznlp，见 gapTimerFire）
-  hideWaiting();                                  // 与 waiting 行同现时优先展示错误（0829-2107-cvdn 协调）
   const d = addDiv("errbox", "");
   d.textContent = "Error: " + s;
   scrollStream();
@@ -1125,9 +1088,6 @@ function renderErrorBox(text) {
 // Retrying 警告框：auto_retry_start → 聊天流末橙/黄框；
 // auto_retry_end success → 移除（+ flash 恢复提示），failure → 原地转红框常驻。
 function showRetryBox(o) {
-  hideWaiting();
-  errorBoxLive = false;                           // 重试框接管代言，红框在场抑制移交（ilznlp）
-  // 重试等待期间由警告框代言，不与 waiting 行重叠
   const sec = (typeof o.delayMs === "number") ? Math.max(1, Math.round(o.delayMs / 1000)) : null;
   let msg = "Retrying (" + (o.attempt || 1) + "/" + (o.maxAttempts || "?") + ")"
     + (sec != null ? " in " + sec + "s" : "") + "\u2026";
@@ -1154,56 +1114,7 @@ function endRetryBox(o) {
     d.textContent = txt;
   }
   lastRenderedErrorMsg = null;                    // 后续同文错误帧仍可出框（语义已不同）
-  errorBoxLive = true;                            // 转红框常驻 = 错误红框在场，同口径抑制（ilznlp）
   scrollStream();
-}
-
-// ---------------- Waiting for model 指示（任务 0829-2107-cvdn） ----------------
-function showWaiting() {
-  if (!turnActive || waitingEl || chatState !== "busy" || chatPhase !== "generating"
-      || statusTools.size || Object.keys(pendingDialogs).length) return;
-  const d = document.createElement("div");
-  d.className = "ev waiting";
-  d.textContent = "Waiting for model\u2026";
-  $("stream").appendChild(d);
-  waitingEl = d;
-  scrollStream();
-}
-function hideWaiting() {
-  if (waitingEl) { waitingEl.remove(); waitingEl = null; }
-}
-// 块间间隙静默检测（任务 0c736g）：回合进行中模型响应块间无真实事件帧流动
-// （thinking 流结束 → 下一块开始的间隙、provider 侧慢生成等）时，上方事件驱动的
-// show/hide 没有触发点 → 页面观感像对话已结束。handleEvent 末尾每收一帧重置计时，
-// 到期且守卫通过 → 复用 showWaiting（同一元素同一文案，与 reasoning「Thinking · N 字」
-// chip 天然区分）。误导态抑制：工具执行中（.tool-block.run 蓝色态本身即进行指示）、
-// 重试框在场（警告框代言等待）、有未决 dialog（等的是用户不是模型）。
-// 陈旧定时器双保险：到期回调全量复查守卫；所有 turnActive=false 重置点同步 disarm。
-// 收尾窗标志（0c736g）：turn_end 空 toolResults → 其后只可能接 agent_end，模型不再被调用，
-// 此窗内静默不应出"等模型"指示；下一轮产出（user/assistant message_start）或终态重置清除。
-let awaitingAgentEnd = false;
-// 错误红框在场标志（任务 ilznlp）：renderErrorBox 仅 hideWaiting 未抑制间隙检测——
-// stopReason=error 的 message_end 后、agent_end/auto_retry_start 前的静默窗会在红框下
-// 误示"等模型"。红框渲染时置位，随 awaitingAgentEnd 同款生命周期重置点清除。
-let errorBoxLive = false;
-let gapTimer = null;
-const GAP_MS = 2500;
-function armGapTimer() {
-  if (gapTimer) clearTimeout(gapTimer);
-  gapTimer = setTimeout(gapTimerFire, GAP_MS);
-}
-function disarmGapTimer() {
-  if (gapTimer) { clearTimeout(gapTimer); gapTimer = null; }
-}
-function gapTimerFire() {
-  gapTimer = null;
-  if (!turnActive || waitingEl || retryBoxEl) return;
-  if (awaitingAgentEnd) return;                            // 收尾窗：只等 agent_end，非等模型
-  if (errorBoxLive) return;                                // 错误红框在场：错误即当前态，不误导"等模型"（ilznlp）
-  if (chatState !== "busy" || chatPhase !== "generating" || statusTools.size) return;
-  // Timers never infer a phase from historical tool/error DOM or imply generation in finalization.
-  if (Object.keys(pendingDialogs).length) return;          // 等用户应答 dialog，非等模型
-  showWaiting();
 }
 
 // ---------------- thinking/工具调用折叠块 ----------------
@@ -1711,7 +1622,6 @@ async function refreshChatStatus(controller) {
     // Snapshot busy has no phase. Only a live structured wait in this connection
     // survives it; disconnect/new run/terminal clears that wait, never restore from DOM.
     setChatStatus(r.busy ? "busy" : r.state);
-    if (!r.busy) { hideWaiting(); disarmGapTimer(); awaitingAgentEnd = false; errorBoxLive = false; }
   } catch (_) { if (current()) setChatStatus("unknown"); }
 }
 function updateChatStatus(o) {

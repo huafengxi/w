@@ -435,9 +435,8 @@ function status(h, label, active) {
 test('run hooks remain starting until an assistant message actually starts or updates', () => {
   const h = harness();
   for (const type of ['message_start', 'before_agent_start', 'agent_start']) {
-    h.run(`handleEvent({type:'${type}',message:{role:'user',content:'fixture'}});gapTimerFire();`);
+    h.run(`handleEvent({type:'${type}',message:{role:'user',content:'fixture'}});`);
     status(h, '启动中', true);
-    assert.equal(h.run('waitingEl'), null, 'hooks are not model generation');
   }
   h.run("handleEvent({type:'message_start',message:{role:'assistant'}});");
   status(h, '模型生成中', true);
@@ -451,12 +450,8 @@ test('pure text turn_end and agent_end retain indicator finalization until settl
   status(h, '模型生成中', true);
   h.run("handleEvent({type:'message_end',message:{role:'assistant',content:'answer',stopReason:'stop'}});handleEvent({type:'turn_end',toolResults:[]});");
   status(h, '收尾中', true);
-  assert.equal(h.run('waitingEl'), null, 'status does not depend on body Waiting');
-  h.run('gapTimerFire();');
+  h.run("handleEvent({type:'agent_end'});");
   status(h, '收尾中', true);
-  h.run("handleEvent({type:'agent_end'});gapTimerFire();");
-  status(h, '收尾中', true);
-  assert.equal(h.run('waitingEl'), null);
   h.run("handleEvent({type:'agent_settled'});");
   status(h, '已成功完成', false);
 });
@@ -465,15 +460,15 @@ test('current tools, long silence, ask/answer and notify never use old DOM as a 
   const h = harness();
   h.run(`handleEvent({type:'agent_start'});
     handleEvent({type:'tool_execution_start',toolCallId:'a',toolName:'bash'});
-    handleEvent({type:'tool_execution_start',toolCallId:'b',toolName:'bash'});gapTimerFire();`);
+    handleEvent({type:'tool_execution_start',toolCallId:'b',toolName:'bash'});`);
   status(h, '工具执行中', true);
-  h.run("handleEvent({type:'tool_execution_end',toolCallId:'a',result:{content:[]}});gapTimerFire();");
+  h.run("handleEvent({type:'tool_execution_end',toolCallId:'a',result:{content:[]}});");
   status(h, '工具执行中', true);
-  h.run("handleEvent({type:'extension_ui_request',id:'ask',method:'confirm',title:'Continue?'});collapseDialog();gapTimerFire();");
+  h.run("handleEvent({type:'extension_ui_request',id:'ask',method:'confirm',title:'Continue?'});collapseDialog();");
   status(h, '等待用户回答', true);
   h.run("handleEvent({type:'sessiond.dialog_resolved',id:'ask'});");
   status(h, '处理中（阶段未知）', true);
-  h.run("handleEvent({type:'tool_execution_end',toolCallId:'b',result:{content:[]}});gapTimerFire();");
+  h.run("handleEvent({type:'tool_execution_end',toolCallId:'b',result:{content:[]}});");
   status(h, '处理中（阶段未知）', true);
   h.run("handleEvent({type:'extension_ui_request',method:'notify',message:'notice'});");
   assert.equal(h.run('Object.keys(pendingDialogs).length'), 0);
@@ -491,13 +486,13 @@ test('structured current ask_dispatcher wait lasts until its tool ends, not a hi
   status(h, '工具执行中', true);
   h.run(`handleEvent({type:'tool_execution_update',toolName:'ask_dispatcher',toolCallId:'ask-call',
     partialResult:{details:{agentdWait:{askId:'current-ask',question:'Which option?',recipient:'queue/dispatcher',since:1,deadline:null}}}});
-    handleEvent({type:'tool_execution_update',toolName:'bash',toolCallId:'other',partialResult:{}});gapTimerFire();`);
+    handleEvent({type:'tool_execution_update',toolName:'bash',toolCallId:'other',partialResult:{}});`);
   status(h, '等待协调者答复', true);
   await h.run(`(async()=>{api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});await refreshChatStatus();})()`);
   status(h, '等待协调者答复', true);
   h.run("handleEvent({type:'tool_execution_end',toolName:'bash',toolCallId:'other',result:{}});");
   status(h, '等待协调者答复', true);
-  h.run("handleEvent({type:'tool_execution_end',toolName:'ask_dispatcher',toolCallId:'ask-call',result:{}});gapTimerFire();");
+  h.run("handleEvent({type:'tool_execution_end',toolName:'ask_dispatcher',toolCallId:'ask-call',result:{}});");
   status(h, '处理中（阶段未知）', true);
   h.run("handleEvent({type:'agent_settled'});handleEvent({type:'agent_start'});");
   status(h, '启动中', true);
@@ -511,11 +506,11 @@ test('retry, compression, errors and queued continuation are phases, not termina
     handleEvent({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'old error'}});
     handleEvent({type:'agent_end',errorMessage:'old error'});`);
   status(h, '收尾中', true);
-  h.run("handleEvent({type:'auto_retry_start',attempt:1,maxAttempts:3,errorMessage:'old error'});gapTimerFire();");
+  h.run("handleEvent({type:'auto_retry_start',attempt:1,maxAttempts:3,errorMessage:'old error'});");
   status(h, '自动重试中', true);
   h.run("handleEvent({type:'auto_retry_end',success:true});");
   status(h, '处理中（阶段未知）', true);
-  h.run("handleEvent({type:'auto_compaction_start'});gapTimerFire();");
+  h.run("handleEvent({type:'auto_compaction_start'});");
   status(h, '上下文压缩中', true);
   h.run("handleEvent({type:'auto_compaction_end'});");
   status(h, '处理中（阶段未知）', true);
@@ -530,7 +525,7 @@ test('retry, compression, errors and queued continuation are phases, not termina
   status(h, '最终失败', false);
   h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_end',message:{role:'assistant',stopReason:'aborted'}});handleEvent({type:'agent_settled'});");
   status(h, '已停止', false);
-  h.run("handleEvent({type:'agent_start'});gapTimerFire();");
+  h.run("handleEvent({type:'agent_start'});");
   status(h, '启动中', true);
 });
 
@@ -647,18 +642,27 @@ test('SSE disconnect/reconnect calibrates phase unknown, restores live dialogs a
     await Promise.resolve();await Promise.resolve();})()`);
   status(h, '最终失败', false);
   assert.equal(h.run('statusTools.size + Object.keys(pendingDialogs).length'), 0);
-  h.run('gapTimerFire();');
   status(h, '最终失败', false);
 });
 
 test('busy-only snapshot does not borrow an old error or tool phase; missing authority stays unknown', async () => {
   const h = harness();
   await h.run(`(async()=>{attached='/test.jsonl';handleEvent({type:'agent_start'});
-    handleEvent({type:'tool_execution_start',toolCallId:'historical'});lastRenderedErrorMsg='old';errorBoxLive=true;
-    api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});await refreshChatStatus();gapTimerFire();})()`);
+    handleEvent({type:'tool_execution_start',toolCallId:'historical'});lastRenderedErrorMsg='old';
+    api=async()=>({ok:true,state:'busy',busy:true,pendingDialogs:[]});await refreshChatStatus();})()`);
   status(h, '处理中（阶段未知）', true);
   await h.run(`(async()=>{api=async()=>({ok:true});await refreshChatStatus();})()`);
   status(h, '连接状态未知');
+});
+
+test('silent generation keeps process status without a standalone model-waiting line', () => {
+  const h = harness();
+  h.run("handleEvent({type:'agent_start'});handleEvent({type:'message_start',message:{role:'assistant'}});");
+  h.drainTimers();
+  status(h, '模型生成中', true);
+  assert.equal(h.run('currentProcessGroup.label.textContent'), '过程 · 模型生成中');
+  assert.equal(h.elements.get('stream').children.some(n => /(?:^|\s)waiting(?:\s|$)/.test(n.className || '')), false);
+  assert.equal(h.run('typeof gapTimerFire'), 'undefined', 'obsolete waiting timer was removed');
 });
 
 require('./chat_process_headers.cjs')({test, harness, assert, html, emptyBaseline});

@@ -121,12 +121,21 @@ module.exports = async ({browser, html, source, assert, errors}) => {
   await page.evaluate(()=>scrollStream(true));
   const layout=await page.evaluate(()=>{
    const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+   const input=$('promptInput'),style=getComputedStyle(input),canvas=document.createElement('canvas');
+   const ctx=canvas.getContext('2d');
+   ctx.font=`${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+   const placeholder=input.getAttribute('placeholder');
    return {viewport:innerWidth,docWidth:document.documentElement.scrollWidth,
+    placeholder,placeholderWidth:ctx.measureText(placeholder).width,
+    placeholderAvailable:input.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight),
     stream:rect($('stream')),input:rect($('promptInput')),icon:rect($('chatStatus')),
     groups:[...document.querySelectorAll('.process-group')].map(e=>({box:rect(e),summary:rect(e.querySelector('summary')),label:e.querySelector('.pg-label').textContent})),
     answers:[...document.querySelectorAll('.role-assistant')].map(rect)};
   });
   assert(layout.docWidth<=viewport.width,'no document horizontal overflow');
+  assert.equal(layout.placeholder,'输入消息或 /命令');
+  assert(layout.placeholderWidth<=layout.placeholderAvailable,'placeholder fits one line, including narrow Android-sized viewports');
+  assert.equal(await page.locator('#stream > .waiting').count(),0,'process header is the only in-stream lifecycle hint');
   for(const g of layout.groups) {
    assert(g.box.left>=layout.stream.left && g.box.right<=layout.stream.right+1);
    assert(g.summary.height<=36,'short header is at most two small lines on 320px');

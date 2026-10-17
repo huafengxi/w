@@ -130,15 +130,17 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await statusPage.locator('.process-group .pg-body').evaluate(e=>e.getBoundingClientRect().height),0,'empty header has no shell');
   await statusPage.locator('.process-group > summary').click();
   assert.equal(await statusPage.locator('.process-group').evaluate(e=>e.open),false,'no meaningless empty expansion');
-  await statusPage.evaluate(()=>gapTimerFire());await current('启动中',true);
   await emit({type:'message_start',message:{role:'assistant'}});await current('模型生成中',true);
+  await statusPage.waitForTimeout(2700); // Longer than the removed 2.5s waiting-line timer.
+  await current('模型生成中',true);
+  assert.equal(await statusPage.locator('#stream > .waiting').count(),0,'silent generation has no standalone waiting line');
+  assert.equal(await statusPage.locator('#stream').innerText().then(t=>t.includes('Waiting for model')),false);
   await emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'Plain answer'}});
   await emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:' more'}});
   await current('模型生成中',true);
   await emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'Plain answer'}],stopReason:'stop'}});
   await emit({type:'turn_end',toolResults:[]});await current('收尾中',true);
-  assert.equal(await statusPage.locator('.waiting-model').count(),0);
-  await statusPage.evaluate(()=>gapTimerFire());await current('收尾中',true);
+  assert.equal(await statusPage.locator('#stream > .waiting').count(),0);
   await emit({type:'agent_end'});await current('收尾中',true);
   await emit({type:'agent_settled'});await current('已成功完成',false);
   assert.equal(await statusPage.locator('.mdtext').innerText(),'Plain answer more','answer text is unchanged');
@@ -157,7 +159,6 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await current('工具执行中',true);
   assert.equal(await statusPage.locator('.process-group').last().evaluate(e=>e.open),false,'tool does not override manual collapse');
   assert.equal(await statusPage.locator('.pg-label').first().innerText(),'过程 · 已成功完成','previous terminal freezes');
-  await statusPage.evaluate(()=>gapTimerFire());await current('工具执行中',true);
   await emit({type:'extension_ui_request',id:'question',method:'input',title:'Fixture question'});
   await current('等待用户回答',true);
   await statusPage.locator('#dialogCollapse').click();await current('等待用户回答',true);
@@ -174,7 +175,6 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await emit({type:'tool_execution_update',toolCallId:'coord-ask',toolName:'ask_dispatcher',partialResult:{
    content:[{type:'text',text:'fixture wait'}],details:{agentdWait:{askId:'fixture-ask',question:'Which option?',recipient:'queue/dispatcher',since:1,deadline:null}}}});
   await current('等待协调者答复',true);
-  await statusPage.evaluate(()=>gapTimerFire());await current('等待协调者答复',true);
   await emit({type:'tool_execution_end',toolCallId:'coord-ask',toolName:'ask_dispatcher',result:{content:[]}});
   await current('处理中（阶段未知）',true);
   await emit({type:'message_end',message:{role:'assistant',stopReason:'error',errorMessage:'fixture error'}});
@@ -211,7 +211,6 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await emit({type:'agent_start'});await current('启动中',true);
   await emit({type:'message_end',message:{role:'assistant',stopReason:'aborted'}});
   await emit({type:'agent_settled'});await current('已停止',false);
-  await statusPage.evaluate(()=>gapTimerFire());await current('已停止',false);
   if(process.env.CHAT_SCREENSHOT) await statusPage.screenshot({path:process.env.CHAT_SCREENSHOT});
   await require('./chat_process_browser.cjs')({browser,html,source,assert,errors});
   assert.deepEqual(errors,[]);
