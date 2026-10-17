@@ -16,6 +16,7 @@
     #tab-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
     #tab-bar .tab { flex: 0 1 auto; min-width: 2em; max-width: 240px; padding: 1px 6px; margin-right: 2px; border: none; font-size: 12px; color: #666; cursor: pointer; white-space: nowrap; overflow: hidden; }
     #tab-bar .tab.selected { background: #dce6f2; color: #111; font-weight: bold; }
+    #tab-scroll .tab-separator { flex: 0 0 0; align-self: stretch; border-left: 1px solid #bbb; margin: 3px 6px; pointer-events: none; }
     /* 全屏钮：不参与等分/收缩，恒占最右 */
     #tab-bar #fs-toggle { flex: 0 0 auto; min-width: 0; max-width: none; margin-right: 0; }
     /* 窄屏：单 tab 上限/下限与内边距都压低 —— 一枚长会话名不得吃掉整条，收缩后
@@ -308,6 +309,15 @@
          for(var i in links) {
              var s = links[i];
              if (!s || s.startsWith('#')) continue;
+             if (s.trim() === '@separator') {
+                 if (layoutMode == 'tab') {
+                     var separator = document.createElement('span');
+                     separator.className = 'tab-separator';
+                     separator.setAttribute('aria-hidden', 'true');
+                     tabbar.appendChild(separator);
+                 }
+                 continue; // Visual only: no item, checkbox, iframe or tab index.
+             }
              var row = parseRow(s);
              if (!row.name) continue; // 纯空白行跳过
              var name = row.name;

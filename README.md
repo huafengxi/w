@@ -37,6 +37,16 @@ feature-free `core/` 加 `ext/<feature>/`：mime、vmap、shell rc 和 bin 按�
 
 `.itab` / `.iframe` 的 `@dynamic <站内路径>` 行在加载时 fetch 一次，把端点返回的 `名字 URL [k=v …]` 行原位展开。失败展开零行，超时上界 10s，不轮询、不递归。fetch 自动保留页面代理前缀，保证经代理打开时仍请求原机器。示例：`demo/dyn.itab`、`demo/dyn-rows.py`。
 
+独立一行 `@separator`（无参数）在该位置添加 tab 栏竖向分隔线，可放在静态行与 `@dynamic` 之间。纯视觉元素，不可点击、不占 tab 序号、不创建 iframe；flow 模式忽略此行。
+
+```text
+概览 /overview.md
+@separator
+@dynamic /session-tabs.py
+```
+
+分隔线回归：`PLAYWRIGHT_MODULE=/path/to/playwright CHROMIUM_BIN=/path/to/chromium node test/frame_separator_browser.cjs`，使用隔离路由检查静态／动态顺序、切换索引、空态／失败、窄屏与 flow 模式。
+
 ## Tests
 
 从仓根执行 `python test/smoke.py`、`python test/proxy_unix_test.py`、`bash test/proxy_test.sh`、`node test/chat_frontend.cjs`。代理测试自建临时配置/上游和隔离 WSGI 实例，不覆盖部署配置。
