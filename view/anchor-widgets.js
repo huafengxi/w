@@ -58,10 +58,9 @@
   function changed() { options.onChange(connected()); }
   function setVisible(w, visible) {
     w.output.hidden = !visible;
-    w.toggle.textContent = visible ? '▾' : '▸';
-    w.toggle.setAttribute('aria-expanded', String(visible));
-    w.toggle.title = visible ? '隐藏结果（不停止执行）' : '显示已有结果（不重新加载）';
-    w.toggle.setAttribute('aria-label', w.toggle.title);
+    w.status.setAttribute('aria-expanded', String(visible));
+    w.status.title = visible ? '隐藏结果（不停止执行）' : '显示已有结果（不重新加载）';
+    w.status.setAttribute('aria-label', w.status.title);
     if (visible && w.fit) w.fit();
   }
   function fitFrame(w) {
@@ -132,7 +131,7 @@
   }
   function run(w) {
     if (w.running) return w.running;
-    w.toggle.disabled = false;
+    w.status.disabled = false;
     setVisible(w, true);
     w.anchor.setAttribute('aria-busy', 'true');
     w.status.textContent = '加载中…';
@@ -180,9 +179,8 @@
     if (w.manual) anchor.classList.add('aw-manual');
     anchor.title = w.body + (w.manual ? '\n仅手动，不参与自动加载或全部刷新' : '') + '\n点击执行／重新加载';
     const controls = element('span', 'aw-controls');
-    w.toggle = element('button', '', '▸'); w.toggle.type = 'button'; w.toggle.disabled = true;
-    w.status = element('small', 'aw-status');
-    controls.append(w.toggle, w.status);
+    w.status = element('button', 'aw-status'); w.status.type = 'button'; w.status.disabled = true;
+    controls.append(w.status);
     anchor.after(controls);
     w.output = element('div', 'aw-output'); w.output.id = 'anchor-output-' + ++nextId;
     // Renderer-produced anchors may be enhanced, but never automatically execute.
@@ -198,9 +196,9 @@
     let tail = block;
     while (tail.nextElementSibling && tail.nextElementSibling.classList.contains('aw-output')) tail = tail.nextElementSibling;
     tail.after(w.output);
-    w.toggle.setAttribute('aria-controls', w.output.id);
+    w.status.setAttribute('aria-controls', w.output.id);
     setVisible(w, false);
-    w.toggle.addEventListener('click', () => setVisible(w, w.output.hidden));
+    w.status.addEventListener('click', () => setVisible(w, w.output.hidden));
     anchor.addEventListener('click', event => {
       event.preventDefault(); run(w);
     });
@@ -237,8 +235,10 @@
   function configure(config) { Object.assign(options, config); }
   function boot() {
     const style = element('style');
-    style.textContent = '.aw-controls{white-space:nowrap;margin-left:.35em}.aw-controls button{margin-right:.25em}' +
-      '.aw-label[aria-busy="true"]{opacity:.65}.aw-manual{color:#b35900}.aw-status{color:#888;font-size:11px}' +
+    style.textContent = '.aw-controls{white-space:nowrap;margin-left:.35em}' +
+      '.aw-label[aria-busy="true"]{opacity:.65}.aw-manual{color:#b35900}' +
+      '.aw-status{color:#888;font-family:inherit;font-size:11px;border:0;padding:0;background:none;cursor:pointer}' +
+      '.aw-status:disabled{cursor:default}.aw-status:not(:disabled):hover{text-decoration:underline}' +
       '.aw-output{margin:.4em 0 .8em}.aw-output[hidden],.aw-diagnostics[hidden],.aw-error[hidden]{display:none!important}' +
       '.aw-result{white-space:pre-wrap}.aw-result:has(>*){white-space:normal}' +
       '.aw-output iframe{display:block;width:100%;height:24em;max-height:80vh;box-sizing:border-box}' +

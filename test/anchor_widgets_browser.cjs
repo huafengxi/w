@@ -52,7 +52,9 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     await page.addScriptTag({content: library});
     assert.equal(await page.evaluate(() => typeof marked), 'undefined', 'no Markdown dependency');
     assert.equal(await page.locator('.aw-label').count(), 3);
-    assert.equal(await page.locator('.aw-controls button').count(), 3, 'one visibility button per widget');
+    assert.equal(await page.locator('.aw-controls button').count(), 3, 'only the timestamp control per widget');
+    assert.equal(await page.locator('.aw-controls button:not(.aw-status)').count(), 0, 'no separate triangle button');
+    assert(!/[▾▸]/.test(await page.locator('body').innerText()));
     assert.equal(await page.locator('.aw-diagnostics:visible, .aw-error:visible').count(), 0);
     assert.equal(await page.evaluate(() => calls.length), 0, 'enhancement does not execute by default');
     assert.equal(await page.locator('#td + .aw-controls, #th + .aw-controls').count(), 0);
@@ -72,11 +74,22 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     assert.equal(await autoOutput.locator('.aw-log').isVisible(), false);
     await autoOutput.locator('summary').click();
     assert.equal(await page.evaluate(() => calls.length), 1, 'diagnostic folding does not execute');
-    await page.locator('#auto + .aw-controls button').first().click();
+    const timestamp = page.locator('#auto + .aw-controls .aw-status');
+    const generatedAt = await timestamp.innerText();
+    assert.match(generatedAt, /^\d{2}:\d{2}:\d{2}$/);
+    assert.equal(await timestamp.getAttribute('aria-controls'), await autoOutput.getAttribute('id'));
+    await timestamp.click();
     assert.equal(await autoOutput.isVisible(), false);
-    await page.locator('#auto + .aw-controls button').first().click();
+    assert.equal(await timestamp.getAttribute('aria-expanded'), 'false');
+    assert.equal(await timestamp.innerText(), generatedAt, 'timestamp retained while hidden');
+    await timestamp.focus(); await page.keyboard.press('Enter');
     assert.equal(await autoOutput.isVisible(), true);
-    assert.equal(await page.evaluate(() => calls.length), 1, 'toggle never runs');
+    await page.keyboard.press('Space');
+    assert.equal(await autoOutput.isVisible(), false);
+    await timestamp.click();
+    assert.equal(await autoOutput.isVisible(), true);
+    assert.equal(await timestamp.getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.evaluate(() => calls.length), 1, 'timestamp and keyboard never run commands');
     await page.click('#auto');
     await page.waitForFunction(() => calls.length === 2 && !document.querySelector('#auto').hasAttribute('aria-busy'));
     await page.evaluate(() => AnchorWidgets.runAll());
@@ -132,10 +145,13 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     });
     await page.waitForSelector('#hold.aw-label'); await page.click('#hold'); await page.click('#hold');
     assert.equal(await page.evaluate(() => calls.filter(c => c.cmd === 'hold').length), 1);
-    await page.locator('#hold + .aw-controls button').first().click();
+    const loadingStatus = page.locator('#hold + .aw-controls .aw-status');
+    assert.equal(await loadingStatus.innerText(), '加载中…');
+    await loadingStatus.click();
     await page.evaluate(() => release());
     await page.waitForFunction(() => !document.querySelector('#hold').hasAttribute('aria-busy'));
-    assert.equal(await page.locator('#hold + .aw-controls button').first().getAttribute('aria-expanded'), 'false');
+    assert.equal(await loadingStatus.getAttribute('aria-expanded'), 'false');
+    assert.match(await loadingStatus.innerText(), /^\d{2}:\d{2}:\d{2}$/);
 
     for (const cmd of ['http-error', 'bad-stream']) {
       await page.evaluate(cmd => {
@@ -149,6 +165,11 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
       assert.equal(await failedOutput.locator('.aw-error').getAttribute('role'), 'alert');
       assert((await failedOutput.locator('.aw-error').innerText()).includes(cmd === 'http-error' ? 'HTTP 403' : 'Invalid shell stream'));
       assert.equal(await failedOutput.locator('.aw-diagnostics').isVisible(), false, 'errors are direct, not folded');
+      const failedStatus = page.locator('#failure + .aw-controls .aw-status');
+      await failedStatus.click();
+      assert.equal(await failedOutput.isVisible(), false);
+      await failedStatus.click();
+      assert.equal(await failedOutput.isVisible(), true);
     }
 
     await page.evaluate(() => {
@@ -163,8 +184,12 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     await page.waitForFunction(() => !document.querySelector('#preview').hasAttribute('aria-busy'));
     assert.equal(iframeLoads, 1);
     const frame = await page.locator('.aw-output iframe').elementHandle();
-    await page.locator('#preview + .aw-controls button').click();
-    await page.locator('#preview + .aw-controls button').click();
+    const frameTimestamp = page.locator('#preview + .aw-controls .aw-status');
+    assert.match(await frameTimestamp.innerText(), /^\d{2}:\d{2}:\d{2}$/);
+    await frameTimestamp.click();
+    assert.equal(await frame.isVisible(), false);
+    await frameTimestamp.click();
+    assert.equal(await frame.isVisible(), true);
     assert.equal(iframeLoads, 1, 'hide/show never reloads iframe');
     assert(await frame.evaluate(f => f.isConnected), 'same iframe retained');
     assert((await frame.getAttribute('src')).includes('?q=%2F#part'), 'URL encoding preserved');
@@ -261,7 +286,13 @@ const view = fs.readFileSync(path.join(root, 'ext/markdown/view/markdown.html'),
     await mdPage.waitForSelector('#doc .aw-result table');
     assert.equal(await mdPage.locator('#doc .aw-label').count(), 2);
     assert.equal(await mdPage.locator('#log-all').count(), 0, 'no global log action');
-    assert.equal(await mdPage.locator('#doc .aw-controls button').count(), 2);
+    assert.equal(await mdPage.locator('#doc .aw-controls .aw-status').count(), 2);
+    assert.equal(await mdPage.locator('#doc .aw-controls button:not(.aw-status)').count(), 0);
+    const mdTimestamp = mdPage.locator('#doc h3 .aw-status');
+    await mdTimestamp.click();
+    assert.equal(await mdPage.locator('#doc h3 + .aw-output').isVisible(), false);
+    await mdTimestamp.click();
+    assert.equal(await mdPage.locator('#doc h3 + .aw-output').isVisible(), true);
     assert.equal(requests.length, 1);
     assert.equal(await mdPage.locator('#doc h3 .aw-output').count(), 0);
     assert.equal(await mdPage.locator('#doc h3 + .aw-output table').count(), 1);
