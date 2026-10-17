@@ -110,6 +110,9 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
    assert.equal(await statusPage.locator('#chatStatus').isVisible(),true);
    assert.equal(await statusPage.locator('#chatStatus').getAttribute('title'),label);
    assert.equal(await statusPage.evaluate(()=>turnActive),active);
+   const header=await statusPage.evaluate(()=>currentProcessGroup && currentProcessGroup.label.textContent);
+   if(header) assert.equal(header,await statusPage.evaluate(expected=>'过程 · '+expected+(currentProcessGroup.nTools?' · '+currentProcessGroup.nTools+'次工具':''),label),
+    'folded process header and indicator use identical lifecycle status');
    const iconBox=await statusPage.locator('#chatStatus').boundingBox();
    const promptBox=await statusPage.locator('#promptInput').boundingBox();
    assert(iconBox.y>=promptBox.y && iconBox.y+iconBox.height<=promptBox.y+promptBox.height+1,
@@ -120,6 +123,13 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await emit({type:'sessiond.session_starting'});await current('启动中',true);
   await emit({type:'before_agent_start'});await current('启动中',true);
   await emit({type:'agent_start'});await current('启动中',true);
+  assert.equal(await statusPage.locator('.process-group').count(),1,'header before first token');
+  await emit({type:'message_start',message:{role:'user',content:'pure text fixture'}});
+  await current('启动中',true);
+  assert.equal(await statusPage.locator('.process-group').count(),1,'real user admission reuses provisional header');
+  assert.equal(await statusPage.locator('.process-group .pg-body').evaluate(e=>e.getBoundingClientRect().height),0,'empty header has no shell');
+  await statusPage.locator('.process-group > summary').click();
+  assert.equal(await statusPage.locator('.process-group').evaluate(e=>e.open),false,'no meaningless empty expansion');
   await statusPage.evaluate(()=>gapTimerFire());await current('启动中',true);
   await emit({type:'message_start',message:{role:'assistant'}});await current('模型生成中',true);
   await emit({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'Plain answer'}});
@@ -131,9 +141,22 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await statusPage.evaluate(()=>gapTimerFire());await current('收尾中',true);
   await emit({type:'agent_end'});await current('收尾中',true);
   await emit({type:'agent_settled'});await current('已成功完成',false);
+  assert.equal(await statusPage.locator('.mdtext').innerText(),'Plain answer more','answer text is unchanged');
   await emit({type:'agent_start'});
+  await emit({type:'message_start',message:{role:'user',content:'multi-tool fixture'}});
+  await current('启动中',true);
+  assert.equal(await statusPage.locator('.process-group').count(),2);
+  await emit({type:'message_start',message:{role:'assistant'}});
+  await emit({type:'message_update',assistantMessageEvent:{type:'thinking_delta',delta:'fixture thought'}});
+  await current('模型生成中',true);
+  assert.equal(await statusPage.locator('.process-group').last().evaluate(e=>e.open),true,'first live block expands once');
+  await statusPage.locator('.process-group > summary').last().click();
+  assert.equal(await statusPage.locator('.process-group').last().evaluate(e=>e.open),false);
+  await emit({type:'message_update',assistantMessageEvent:{type:'thinking_delta',delta:' continued'}});
   await emit({type:'tool_execution_start',toolCallId:'long',toolName:'bash',args:{command:'fixture only'}});
   await current('工具执行中',true);
+  assert.equal(await statusPage.locator('.process-group').last().evaluate(e=>e.open),false,'tool does not override manual collapse');
+  assert.equal(await statusPage.locator('.pg-label').first().innerText(),'过程 · 已成功完成','previous terminal freezes');
   await statusPage.evaluate(()=>gapTimerFire());await current('工具执行中',true);
   await emit({type:'extension_ui_request',id:'question',method:'input',title:'Fixture question'});
   await current('等待用户回答',true);
@@ -142,6 +165,11 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   assert.equal(await statusPage.locator('#dialogPill').isVisible(),false);
   await emit({type:'tool_execution_end',toolCallId:'long',toolName:'bash',result:{content:[]}});
   await current('处理中（阶段未知）',true);
+  await emit({type:'message_end',message:{role:'assistant',content:[]}});
+  await emit({type:'turn_end',toolResults:[{}]});
+  await emit({type:'message_start',message:{role:'assistant'}});
+  await current('模型生成中',true);
+  assert.equal(await statusPage.locator('.process-group').count(),2,'tool continuation assistant subturn shares group');
   await emit({type:'tool_execution_start',toolCallId:'coord-ask',toolName:'ask_dispatcher'});
   await emit({type:'tool_execution_update',toolCallId:'coord-ask',toolName:'ask_dispatcher',partialResult:{
    content:[{type:'text',text:'fixture wait'}],details:{agentdWait:{askId:'fixture-ask',question:'Which option?',recipient:'queue/dispatcher',since:1,deadline:null}}}});
@@ -160,7 +188,10 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await emit({type:'agent_start'});await current('启动中',true);
   await emit({type:'agent_end'});await current('收尾中',true);
   await emit({type:'queue_update',steering:[],followUp:['queued next']});await current('收尾中',true);
+  assert.equal(await statusPage.locator('.process-group').count(),2,'queued follow-up has no group yet');
   await emit({type:'message_start',message:{role:'user',content:'queued next'}});await current('启动中',true);
+  assert.equal(await statusPage.locator('.process-group').count(),3,'admitted follow-up starts a new group');
+  assert.equal(await statusPage.locator('.pg-label').nth(1).innerText(),'过程 · 2次工具','unfinished previous turn becomes neutral, not a fabricated terminal');
   // A late idle HTTP result must not erase a newer streaming frame.
   await statusPage.evaluate(()=>{window.deferState=true;window.pendingRefresh=refreshChatStatus(streamCtrl);});
   await emit({type:'tool_execution_start',toolCallId:'new-tool',toolName:'bash'});await current('工具执行中',true);
@@ -182,7 +213,8 @@ const source = html.slice(html.indexOf('"use strict";'), html.indexOf('// ------
   await emit({type:'agent_settled'});await current('已停止',false);
   await statusPage.evaluate(()=>gapTimerFire());await current('已停止',false);
   if(process.env.CHAT_SCREENSHOT) await statusPage.screenshot({path:process.env.CHAT_SCREENSHOT});
+  await require('./chat_process_browser.cjs')({browser,html,source,assert,errors});
   assert.deepEqual(errors,[]);
-  console.log('ALL PASS: Chromium mobile layout, icon-free bubble edit/cancel/busy and image links, batch recall, click-to-send prompt/queue/images/empty; indicator-only lifecycle status without extra text, SSE finalization/tools/ask/retry/compaction/queue/terminal and reconnect/HTTP race fixtures');
+  console.log('ALL PASS: Chromium mobile layout, icon-free bubble edit/cancel/busy and image links, batch recall, click-to-send prompt/queue/images/empty; compact process/indicator lifecycle status without bottom text, SSE finalization/tools/ask/retry/compaction/queue/terminal and reconnect/HTTP race fixtures');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -91,7 +91,10 @@ details summary::-webkit-details-marker { display: none; }
 .process-group { margin: 4px 0; }
 .process-group summary { display: flex; align-items: center; gap: 6px; cursor: pointer;
   color: var(--dim); font-size: 12px; padding: 2px 0; user-select: none; }
-.process-group summary .pg-arrow { display: inline-block; font-size: 10px;
+.process-group .pg-label { min-width: 0; overflow-wrap: anywhere; }
+.process-group.pg-empty > summary { cursor: default; }
+.process-group.pg-empty > summary .pg-arrow { visibility: hidden; }
+.process-group summary .pg-arrow { display: inline-block; flex-shrink: 0; font-size: 10px;
   transition: transform .15s; }
 .process-group[open] summary .pg-arrow { transform: rotate(90deg); }
 /* 展开内容区无左侧竖线与左缩进（0830-1124-ysiy：Android 窄屏回收横向空间） */
@@ -394,7 +397,10 @@ let pendingSends = {};
 let pendingDialogs = {};      // id -> request
 let curAssistantEl = null;    // 当前 assistant 消息渲染节点（实时流式）
 let turnGroup = null;         // turn 级过程组引用：一个来回（turn）一个组，同回合多条 assistant 消息共享（0830-1047-ehzc）
-let lastProcessGroup = null;  // 最近的组级折叠容器（工具块无明确归属时的兜底挂点，0830-1039-a6vy；指向 turnGroup）
+let lastProcessGroup = null;  // 最近的组级折叠容器（工具块无明确归属时的兜底挂点）
+// Rendering cursor and live ownership are separate: replay never paints lifecycle state.
+let currentProcessGroup = null, processAwaitingUser = false;
+let turnAnchor = null, baselineProcessTurn = null;
 let curAssistantBuf = "";     // 累积文本（用于 message_end 时 markdown 渲染）
 // 流状态（两层锚定：entries 基线 + 事件 ID 游标）
 let streamCtrl = null;        // AbortController
@@ -547,6 +553,7 @@ function beep(kind) {
 // ---------------- 挂接（基线 → 记水位 → 续流） ----------------
 async function attach(name) {
   if (attached === name && streamAlive) return true;
+  resetProcessBinding();
   stopStream();
   setChatStatus("busy", "starting"); // Explicit attach may be starting the process.
   clearPendingDialogs();
@@ -578,6 +585,7 @@ async function attach(name) {
 
 // 基线落盘：渲染活跃分支、记游标/水位、开流（任务 bw333x 改分片渲染）
 function applyBaseline(doc, initial) {
+  statusEpoch++; resetProcessBinding();
   lastGen = doc.gen !== undefined ? doc.gen : lastGen;
   curLeafId = doc.leafId || null;
   const branch = activeBranch(doc.entries || [], curLeafId);
@@ -607,6 +615,10 @@ function renderBranchSliced(branch, doc) {
   batchDepth++;
   let i = 0;
   const finish = () => {
+    // Save only the last replayed user turn, including a text-only turn's anchor.
+    // No status is assigned until a fresh authoritative busy snapshot binds it.
+    baselineProcessTurn = turnAnchor ? {group: turnGroup, anchor: turnAnchor} : null;
+    turnGroup = null; lastProcessGroup = null; turnAnchor = null; curAssistantEl = null;
     // 重建悬空 dialog（0830-0956-vk20 bug2）：extension_ui_request 不在 entries 里，
     // 离线/刷新期间触发的 ask_user 仅凭事件环收不到（续流游标在其后）——后端随基线
     // 下发权威快照，逐个重建（showDialog 同 id 幂等，不会叠框）。
@@ -950,7 +962,7 @@ function renderEvent(o) {
     const m = o.message || {};
     if (m.role === "user") {
       resolvePendingByMessage(m);             // 待发条目转正（0829-2115-zvti）
-      renderUserMessage(m);                     // 流式渲染：文本 + 图片缩略图（同一入口，内含 turnGroup 重置）
+      renderUserMessage(m, undefined, true);   // Admit/reposition the optimistic group, never duplicate it.
       curAssistantEl = null; curAssistantBuf = "";
       turnActive = true; awaitingAgentEnd = false; errorBoxLive = false;   // 回合开始：等模型首个产出（0829-2107-cvdn；收尾窗标志重置，0c736g；红框在场清除，ilznlp）
       showWaiting();
@@ -1218,14 +1230,13 @@ function thinkingDetails(text) {
 // turn 级组级折叠容器（0830-1039-a6vy 引入；0830-1047-ehzc 粒度修订：从每条
 // assistant 消息一组 → 一个来回（turn）一组）：同一回合内所有 assistant 消息的
 // thinking + 工具块收进同一个组，最终回答文本留在各自 assistant div 内（组外）。
-// 组是 stream 顶层元素，懒创建：首个过程块到达才建组（纯文本消息不出空壳），
-// 插入到当前 assistant 元素之前（保证位于该回合所有文本之前；锚点缺失则 append）；
-// header 计数自然累计全回合。turnGroup 在 user message_start（renderUserMessage）
-// 与 attach/heal 清屏点重置。
+// Live turns create a compact empty header immediately; replay stays lazy and statusless.
+// Ownership is explicit, never inferred from historical tool DOM. A baseline candidate
+// can be bound only by authoritative busy, not by an idle snapshot.
 function processGroup(open) {
   if (turnGroup) return turnGroup;
   const d = document.createElement("details");
-  d.className = "process-group";
+  d.className = "process-group pg-empty";
   if (open) d.open = true;                              // 实时处理中展开；基线/自愈回放一律传 false 折叠
   const s = document.createElement("summary");
   const arrow = document.createElement("span");
@@ -1237,24 +1248,55 @@ function processGroup(open) {
   body.className = "pg-body";
   d.appendChild(s); d.appendChild(body);
   // stream 顶层插入：当前 assistant 元素之前 = 该回合所有文本之前（0830-1047-ehzc）
-  if (curAssistantEl) $("stream").insertBefore(d, curAssistantEl);
+  if (turnAnchor) $("stream").insertBefore(d, turnAnchor.nextSibling);
+  else if (curAssistantEl) $("stream").insertBefore(d, curAssistantEl);
   else $("stream").appendChild(d);
-  const grp = {det: d, body: body, label: label, n: 0, nTools: 0};
+  const grp = {det: d, body: body, label: label, n: 0, nTools: 0, statusLabel: "", frozen: false};
+  s.onclick = ev => { if (!grp.n) ev.preventDefault(); };
+  paintProcessGroup(grp);
   turnGroup = grp;
   lastProcessGroup = grp;                               // 孤儿兜底语义保留（0830-1039-a6vy）
   return grp;
 }
 function grpAddBlock(grp, node, isTool) {
+  // Preserve the original live first-block expansion, once only. Empty headers
+  // aren't expandable; after the first block, never override the user's toggle.
+  if (!grp.n && grp === currentProcessGroup && !grp.frozen) grp.det.open = true;
   grp.body.appendChild(node);
   grp.n++; if (isTool) grp.nTools++;
-  // header 文案英文口径（对齐 pi-web en.ts，0830-1047-ehzc）
-  grp.label.textContent = "Process details · " + grp.n + (grp.n === 1 ? " process block" : " process blocks")
-    + (grp.nTools ? " · " + grp.nTools + (grp.nTools === 1 ? " tool call" : " tool calls") : "");
+  grp.det.classList.remove("pg-empty");
+  paintProcessGroup(grp);
+}
+function paintProcessGroup(grp) {
+  grp.label.textContent = "过程" + (grp.statusLabel ? " · " + grp.statusLabel : "")
+    + (grp.nTools ? " · " + grp.nTools + "次工具" : "");
+}
+function resetProcessBinding() {
+  // Admission transfers live ownership, not a fabricated terminal. An unfinished
+  // previous turn becomes neutral; known terminal labels remain frozen.
+  if (currentProcessGroup && !currentProcessGroup.frozen) {
+    currentProcessGroup.statusLabel = "";
+    paintProcessGroup(currentProcessGroup);
+  }
+  currentProcessGroup = null; processAwaitingUser = false; baselineProcessTurn = null;
+  turnGroup = null; lastProcessGroup = null; turnAnchor = null;
+}
+function ensureCurrentProcessGroup(fromBaseline = false) {
+  if (currentProcessGroup && !currentProcessGroup.frozen) return currentProcessGroup;
+  const candidate = fromBaseline && baselineProcessTurn;
+  if (fromBaseline && !candidate) processAwaitingUser = true; // Busy before any persisted user admission.
+  baselineProcessTurn = null;
+  turnGroup = candidate ? candidate.group : null;
+  lastProcessGroup = turnGroup;
+  turnAnchor = candidate ? candidate.anchor : null;
+  // Never use the previous historical assistant as the insertion anchor.
+  curAssistantEl = null;
+  currentProcessGroup = processGroup(false);
+  return currentProcessGroup;
 }
 function collapseProcessGroups() {
-  // 回合完成（agent_end/agent_settled）自动折叠；幂等，可点 header 再手动展开。
-  // 自愈/重挂接的全量重渲染不走这里——基线重建时组一律默认折叠。
-  document.querySelectorAll(".process-group").forEach(d => { d.open = false; });
+  // Only the current turn auto-collapses; don't change a manually expanded historical group.
+  if (currentProcessGroup) currentProcessGroup.det.open = false;
 }
 // 工具调用整段（tool_execution_start→result，含其间 update 流式行）折叠为一块；
 // 块级折叠独立于组级折叠（展开组后仍可单独展开看详情）；
@@ -1622,6 +1664,10 @@ function paintChatStatus() {
   const el = $("chatStatus"); el.textContent = icon; el.title = label;
   el.setAttribute("aria-label", label); el.dataset.state = state;
   el.dataset.phase = state === "busy" ? chatPhase : state;
+  if (currentProcessGroup && !currentProcessGroup.frozen) {
+    currentProcessGroup.statusLabel = label;
+    paintProcessGroup(currentProcessGroup);
+  }
   $("editSubmit").disabled = editSubmitting || turnActive || !["ready", "success", "failed", "stopped"].includes(state);
   $("editCancel").disabled = editSubmitting;
   $("editStop").disabled = editSubmitting || !turnActive;
@@ -1631,8 +1677,18 @@ function setChatStatus(state, phase = "unknown") {
   chatState = state; chatPhase = phase;
   if (state !== "busy") { statusTools.clear(); statusCoordinatorWaits.clear(); }
   paintChatStatus();
+  // A known terminal belongs to this turn forever, including through disconnects.
+  if (currentProcessGroup && ["success", "failed", "stopped", "ready"].includes(state))
+    currentProcessGroup.frozen = true;
 }
-function beginChatRun(phase) {
+function beginChatRun(phase, admitted = false) {
+  if (admitted) {
+    if (!processAwaitingUser) resetProcessBinding();
+    processAwaitingUser = false;
+  } else if (!turnActive || (currentProcessGroup && currentProcessGroup.frozen)) {
+    resetProcessBinding(); processAwaitingUser = true;
+  }
+  ensureCurrentProcessGroup();
   statusEpoch++; turnActive = true; runOutcome = "success"; statusTools.clear(); statusCoordinatorWaits.clear();
   setChatStatus("busy", phase);
 }
@@ -1649,6 +1705,8 @@ async function refreshChatStatus(controller) {
     if (!r.busy) statusCoordinatorWaits.clear();
     for (const id of statusCoordinatorWaits) statusTools.add(id);
     runOutcome = r.busy ? "unknown" : r.state;
+    if (r.busy) ensureCurrentProcessGroup(true);
+    else baselineProcessTurn = null; // Idle cannot attach a terminal to historical content.
     syncPendingDialogs(r.pendingDialogs || []);
     // Snapshot busy has no phase. Only a live structured wait in this connection
     // survives it; disconnect/new run/terminal clears that wait, never restore from DOM.
@@ -1658,10 +1716,10 @@ async function refreshChatStatus(controller) {
 }
 function updateChatStatus(o) {
   const t = o.type, m = o.message || {};
-  const phase = p => { statusEpoch++; turnActive = true; setChatStatus("busy", p); };
+  const phase = p => { ensureCurrentProcessGroup(true); statusEpoch++; turnActive = true; setChatStatus("busy", p); };
   if ((t === "message_start" && m.role === "user") || ["agent_start", "before_agent_start", "sessiond.session_starting", "sessiond.session_restarted"].includes(t)) {
     // Hooks can still be running; only assistant message_start/update proves generation.
-    beginChatRun("starting");
+    beginChatRun("starting", t === "message_start" && m.role === "user");
   }
   if ((t === "message_start" && m.role === "assistant") || t === "message_update") phase("generating");
   if (t === "tool_execution_start" || t === "tool_execution_update") {
@@ -2552,13 +2610,19 @@ function renderAttachBar() {
 }
 
 // ---------------- 用户消息渲染（文本 + 图片缩略图；流式与基线共用） ----------------
-function renderUserMessage(m, entryId) {
-  turnGroup = null;                             // 回合起点 → turn 组重置（基线/实时共用此入口，0830-1047-ehzc）
+function renderUserMessage(m, entryId, live = false) {
+  if (!live) { turnGroup = null; lastProcessGroup = null; turnAnchor = null; }
   const txt = msgText(m);
   const imgs = (Array.isArray(m.content) ? m.content : [])
     .filter(p => p && p.type === "image" && p.data && p.mimeType);
   if (!txt && !imgs.length) return;
   const d = addDiv("role-user", txt);
+  turnAnchor = d;
+  if (live && currentProcessGroup) {
+    // Local prompt / agent_start may precede the real user message. Move, don't recreate.
+    $("stream").appendChild(currentProcessGroup.det);
+    turnGroup = currentProcessGroup; lastProcessGroup = currentProcessGroup;
+  }
   // Text/bubble click edits; image links retain their existing open-image action.
   d.onclick = ev => { if (ev.target === d) beginHistoryEdit(m, entryId); };
   d.title = "点击编辑并重新生成";

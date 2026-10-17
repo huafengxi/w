@@ -23,7 +23,14 @@ function harness() {
       set innerHTML(value) { this._html = value; this.children = []; },
       classList: {add(c) { classes.add(c); }, remove(c) { classes.delete(c); },
         contains(c) { return classes.has(c); }, toggle(c, on) { on ? classes.add(c) : classes.delete(c); }},
-      appendChild(n) { this.children.push(n); n.parentNode = this; return n; },
+      get nextSibling() { const a = this.parentNode?.children || []; return a[a.indexOf(this) + 1] || null; },
+      appendChild(n) { return this.insertBefore(n, null); },
+      insertBefore(n, anchor) {
+        if (n.parentNode) n.parentNode.removeChild(n);
+        const i = anchor ? this.children.indexOf(anchor) : -1;
+        if (i < 0) this.children.push(n); else this.children.splice(i, 0, n);
+        n.parentNode = this; return n;
+      },
       removeChild(n) { this.children = this.children.filter(x => x !== n); n.parentNode = null; },
       remove() { if (this.parentNode) this.parentNode.removeChild(this); },
       setAttribute(k, v) { this[k] = v; },
@@ -653,6 +660,8 @@ test('busy-only snapshot does not borrow an old error or tool phase; missing aut
   await h.run(`(async()=>{api=async()=>({ok:true});await refreshChatStatus();})()`);
   status(h, '连接状态未知');
 });
+
+require('./chat_process_headers.cjs')({test, harness, assert, html, emptyBaseline});
 
 (async () => {
   for (const [name, fn] of tests) { await fn(); console.log('PASS ' + name); }
