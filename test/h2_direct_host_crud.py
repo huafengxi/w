@@ -78,6 +78,17 @@ class Registry:
         if (not isinstance(doc, dict) or not isinstance(doc.get('h2Registration'), str)
                 or len(doc['h2Registration']) != 32):
             raise ValueError('missing/incomplete candidate registration; unknown ownership')
+        # The token is published only AFTER inbox creation succeeds. Validate
+        # the completed identity on every resolution and cached supervisor
+        # check; never mkdir here or silently repair a partial registration.
+        inbox = Path(P.WS) / 'agents/bot' / name / 'inbox'
+        try:
+            st = inbox.lstat()
+        except OSError as e:
+            raise ValueError('candidate inbox absent/unreadable; unknown ownership: %s' % e) from e
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid()
+                or inbox.resolve() != inbox):
+            raise ValueError('missing/incomplete candidate inbox; unknown ownership')
         prof, pd = P.profile_spec(doc.get('profile'))
         cwd = P.profile_cwd(prof, pd)
         if (doc.get('name') != name or doc.get('cwd') != cwd
@@ -129,12 +140,14 @@ class Registry:
             name = result['name']
             a, _ = self.files(name)
             doc = json.loads(a.read_text())
-            doc['h2Registration'] = uuid.uuid4().hex
-            H.atomic(a, doc)
             a.chmod(0o600)
             # Inbox-only ordinary identity. No spec/pid/enable/watcher/task.
             inbox = Path(P.WS) / 'agents/bot' / name / 'inbox'
             inbox.mkdir(mode=0o700, parents=True, exist_ok=False)
+            # Completion fence, not a transaction: any preceding failure leaves
+            # the original declaration unknown and unusable by startup paths.
+            doc['h2Registration'] = uuid.uuid4().hex
+            H.atomic(a, doc)
             return dict(result, registration=doc['h2Registration'])
 
     def rows(self):
@@ -150,7 +163,11 @@ class Registry:
                     key = hashlib.sha256(os.fsencode(str(history))).hexdigest()[:16]
                     parent = self.root / key
                     if not parent.exists():
-                        r.update(state='dormant')  # registered, never started
+                        # Missing runtime facts alone do not prove never-started.
+                        # Existing history (even empty/aliased) is contrary evidence;
+                        # do not scan pi processes or infer a safely dead host.
+                        if not os.path.lexists(history):
+                            r.update(state='dormant')  # complete, no history/runtime
                         continue
                     life = self.life(r['name'], doc, history)
                     obs = life.status()

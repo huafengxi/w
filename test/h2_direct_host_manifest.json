@@ -1,6 +1,12 @@
 {
-  "taskId": "bllzca",
-  "parent_candidate": "8f38c82a9c304bd8f1a8a31c6d5c9cbe71b6bae6",
+  "taskId": "W-ordinary-CRUD-B1-B2-repair-r1",
+  "parent_candidate": "e8078e82a9c4ae1785a5bc44f74e56f24b0ec738",
+  "repair_countercontrols": {
+    "suite": "test/h2_direct_host_repair_test.py",
+    "B1": "registration completion published after real inbox mkdir; revalidated at cached startup/send/change",
+    "B2": "absent runtime plus existing history is unknown, not never-started",
+    "original_suites": "unchanged CRUD8 and lifecycle13 assertions"
+  },
   "crud": {
     "factory": "test/h2_direct_host_crud.py:installed",
     "caller_cli_sha256": "ff764d811732c007cdc23c6c1354e01c2d61d6b9740f8ed4b277078d90ae4f87",
@@ -9,7 +15,7 @@
     "fences": ["captured registration UUID", "captured actual host instance or explicit unstarted"]
   },
   "W_base": "1c3775c3be70bee8f6b8efe23a9310424a575922",
-  "candidate_ref": "refs/heads/candidate/w-ordinary-crud-bllzca",
+  "candidate_ref": "refs/heads/candidate/w-ordinary-crud-fix-W-ordinary-CRUD-B1-B2-repair-r1",
   "contract": "Linux private stable runtime root, cooperative foreground local tree; no receiver/model/production PASS",
   "P": {
     "revision": "89f40cc235e4e9e51b2b489124031697a3e23222",

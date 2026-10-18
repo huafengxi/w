@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,13 +21,26 @@ import h2_direct_host_crud as C
 options = json.loads(Path(sys.argv[1]).read_text())
 store = RootStore([('/', DirStore(os.environ['W_WORKSPACE']))])
 streams = {}
+spawn_attempts = []
+
+
+def audit(event, args):
+    # Observe actual subprocess launches, without substituting Popen or results.
+    if event == 'subprocess.Popen':
+        executable, argv, cwd, _env = args
+        spawn_attempts.append(dict(executable=executable, argv=argv, cwd=cwd, time=time.time()))
+
+
+sys.addaudithook(audit)
 with C.installed(options) as registry:
     for line in sys.stdin:
         req = json.loads(line)
         try:
             special = req.pop('special', None)
             session = req.get('session', '')
-            if special == 'create':
+            if special == 'spawn_audit':
+                result = list(spawn_attempts)
+            elif special == 'create':
                 names = req.get('names')
                 with patch.object(C, '_NEW_NAME', side_effect=names) if names else contextlib.nullcontext():
                     result = P.create_cc_session(req['profile'])
@@ -61,6 +75,22 @@ with C.installed(options) as registry:
                 key = str(Path(P.WS) / session.lstrip('/').replace('.agent', '.jsonl'))
                 b = B._BRIDGES[key]
                 result = dict(frames=frames, terminated=b.terminated, subscribers=b.subscribers)
+            elif special == 'cache_unstarted':
+                # Construct the real Bridge/Supervisor without get_bridge's
+                # immediate ensure_started, then test its cached start entry.
+                with registry.lock():
+                    meta, body = B.resolve_agent(store, session)
+                    declaration = json.loads(body)
+                    if not declaration.get('ok'):
+                        raise ValueError(declaration)
+                    b = B.Bridge(declaration['session'], cwd=declaration['cwd'], profile=declaration['profile'])
+                    key = P.resolve_session_path(declaration['session'])
+                    with B._BRIDGES_LOCK:
+                        B._BRIDGES[key] = b
+                    result = dict(gen=b.sup.gen, state=b.sup.state, handles=list(b.sup.life.handles))
+            elif special == 'cached_change':
+                key = str(Path(P.WS) / session.lstrip('/').replace('.agent', '.jsonl'))
+                result = B._BRIDGES[key].sup.change(req['operation'], req.get('expected_instance'))
             elif special == 'cached':
                 # Do NOT resolve the deleted declaration: exercise the old object.
                 key = str(Path(P.WS) / session.lstrip('/').replace('.agent', '.jsonl'))

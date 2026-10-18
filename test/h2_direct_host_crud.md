@@ -1,6 +1,8 @@
-# Ordinary CRUD candidate — bllzca (unwired)
+# Ordinary CRUD candidate — B1/B2 repair (unwired)
 
-This is an additive W-only candidate above `8f38c82a9c304bd8f1a8a31c6d5c9cbe71b6bae6`.
+This bounded W-only repair appends to the bllzca candidate
+`e8078e82a9c4ae1785a5bc44f74e56f24b0ec738`, itself above the original lifecycle
+candidate `8f38c82a9c304bd8f1a8a31c6d5c9cbe71b6bae6`.
 P remains `89f40cc235e4e9e51b2b489124031697a3e23222`; its tool A remains
 `b40e0d027b1ebbe072b0edc0929e0411da3c37af`. No default module imports this
 factory, and no production CLI, HTTP route, UI or service is changed. The older
@@ -38,8 +40,9 @@ The old 13-test suite remains intact and runs separately, not renamed as CRUD.
 ```
 
 Runner records env/cwd/argv/times/rc and copies the supplied caller source to its
-new root, checks its hash and the P/A hashes, then runs 8 CRUD tests, old 13
-lifecycle tests, original W regressions and P generic/dependency tests. Use short
+new root, checks its hash and the P/A hashes, then runs the original 8 CRUD tests,
+old 13 lifecycle tests, 3 B1/B2 countercontrols, original W regressions and
+P generic/dependency tests. The original test assertions are not replaced. Use short
 outer TMPDIR and short canonical private runtime roots. Original full H1 runner
 remains available for double-layout agent/socket/native-mock regressions; its
 skip/unknown boundaries in HOST.md still apply. All roots are retained. Cleanup
@@ -57,7 +60,11 @@ registry daemon, spool, auto recovery, rund owner or agentd registration exists.
 
 The `.agent` is still the declaration: only an opaque `h2Registration` UUID is
 added, not a task/spec/pid or fabricated runtime generation. A Supervisor captures
-that UUID; every potential start/send/change revalidates it and the declaration.
+that UUID; every potential start/send/change revalidates it and the declaration,
+including the real canonical, owned, non-symlink inbox directory. The UUID is
+published only after inbox mkdir succeeds; failures before that point leave no
+valid completion token. Removing the inbox after caching also denies startup,
+send and change. Validation never creates an inbox or repairs a failed create.
 Profile, exact cwd, canonical JSONL, name and local host stay bound. After envscrub,
 SESSIOND_SESSION_FILE, W_WORKSPACE, AGENTD_DIR, AGENTD_ROOT and interactive profile
 are explicitly bound to this fixture's exact roots. Rename uses the original
@@ -80,12 +87,33 @@ opening a P socket, starting a host or obtaining an old web handle:
 
 | Observation | list state |
 |---|---|
-| valid registered declaration, never-started runtime absent | dormant |
+| complete registration + real inbox, no runtime parent AND no history path | dormant (never-started) |
 | strongly identified live host+pi, no unknown members | running (host PID) |
 | confirmed closure plus real P child_wait and W wait, rc0 | dormant |
 | same natural closure with actual nonzero child wait | failed |
 | explicit fenced/failed operation | failed, not safe-to-delete proof |
 | missing/incomplete record, unreadable/reused identity, missing real waits or invalid ownership | unknown |
+
+An absent runtime parent with existing history is **unknown**, even if the host
+is still alive. This is a state-reporting repair, not evidence that the prior
+candidate actually deleted history or duplicated a host. No process scan or new
+owner is added; the existing delete history/instance gate stays unchanged.
+
+`h2_direct_host_repair_test.py` adds three real countercontrols through separate
+web OS processes and the original API/CLI/registry paths:
+- A harmless regular-file blocker makes actual inbox mkdir fail after the
+  declaration writer. The residual declaration lists unknown, attach refuses,
+  no host/pi current record is created and no inbox repair occurs. Explicit
+  harness removal of its own injection permits a separate normal CLI creation;
+  that complete registration is dormant, starts normally and deletes normally.
+- A real unstarted Bridge/Supervisor is cached, then its own inbox is parked.
+  Cached ensure/send/change and a second web attach refuse without spawning.
+  The harness restores its injection explicitly, not via candidate recovery.
+- Only a live session's runtime parent is parked within its own new fixture.
+  The host's strong identity is actually alive, history is retained, and list
+  returns unknown. The unstarted delete gate refuses; after harness restoration,
+  exact instance deletion works. Fresh no-history creation still lists dormant;
+  history without runtime also remains unknown.
 
 Listing does not authorize deletion. Unreadable/non-object declarations may be
 skipped by the original enumerator, but cannot become a safe dead process.
@@ -147,11 +175,11 @@ separate. This candidate does not close those gates. Runtime-root must be stable
 and local/private across all callers; no cross-root/host/global arbitration or
 noncooperative daemonize guarantee is claimed.
 
-## 不做面（本任务原文）
+## 不做面（本轮修复任务原文）
 
-1. 仅W test/h2_direct_host*未接线CRUD/registry候选；不改活动~/m/w、默认模块/路由/CLI、默认refs/bare HEAD/保全历史refs，不改P/A/S/C/平台或主仓/lore/服务profile/Makefile/部署配置。
+1. 仅W test/h2_direct_host*未接线CRUD/registry候选；不改活动~/m/w、默认模块/路由/CLI、默认refs/bare HEAD/前代candidate refs，不改P/A/S/C/平台或主仓/lore/服务profile/Makefile/部署配置。
 2. 不新增rund长期owner/控制RPC/编排器/命令spool/跨机接管/自动pi重启或续回合，不让普通会话依赖agentd登记，不双控agentd task/bot，不恢复旧设计的rund强owner前提。
 3. 不削弱强启动身份/同canonical稳定root锁/实例fence/精确停确认/unknown拒破坏；不凭裸PID/PGID/名字盲杀，不伪造退出码、Sgen、任务状态、spec/pid/watcher或强ack，不造直接reaper活性桥、不读ack职位信箱。
 4. 不删除现有真实历史/会话，不连接生产或他人socket，不以生产根作harness/清理/拒删实验；本件无真实模型/HTTP/browser/服务启停/真实同步/GC/下载或安装，无电源策略修改。
 5. 不把本件PASS外推完整H2、native/profile/receiver/caller/真实浏览器/macOS或生产；原P14/marked HTML/S58⑤skip、F-A/S34/F-C S41未知、ResourceWarning、native内部signal限制和旧claim弱语义分别保留。
-6. 不回退/暂存/吞并/提交他人改动，不hard/stash/无pathspec amend；origin只merge，显式自家pathspec提交+push，commit message含bllzca；不再分发、不代写协议终态。
+6. 不回退/暂存/吞并/提交他人改动，不hard/stash/无pathspec amend；origin只merge，显式自家pathspec提交+push，commit message含本任务id；不再分发、不代写协议终态。

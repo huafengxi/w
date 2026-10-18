@@ -74,6 +74,7 @@ run('root-guard', [sys.executable, '-B', '-c',
     "assert not safe_rmtree(b,authorized_root=a)[0];assert (b/'keep').read_text()=='harmless'", str(A), str(allowed), str(outside)])
 run('h2-acceptance', [sys.executable, '-B', str(W / 'test/h2_direct_host_test.py')])
 run('h2-crud', [sys.executable, '-B', str(W / 'test/h2_direct_host_crud_test.py')])
+run('h2-repair-countercontrols', [sys.executable, '-B', str(W / 'test/h2_direct_host_repair_test.py')])
 for name in ('resolve_agent_edge', 'session_lifecycle', 'dormant_send_revive', 'session_ops_edge', 'chat_backend'):
     run('W-' + name, [sys.executable, '-B', str(W / ('test/' + name + '.py'))])
 if node:
