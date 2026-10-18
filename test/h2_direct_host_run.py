@@ -18,6 +18,7 @@ import time
 ap = argparse.ArgumentParser()
 ap.add_argument('--p-source', required=True)
 ap.add_argument('--a-source', required=True)
+ap.add_argument('--cli-source', required=True, help='read-only original caller session-ctl.py')
 a = ap.parse_args()
 W = Path(__file__).resolve().parents[1]
 P, A = Path(a.p_source).resolve(), Path(a.a_source).resolve()
@@ -25,13 +26,18 @@ ROOT = Path(tempfile.mkdtemp(prefix='h2run-'))
 for n in ('home', 'tmp', 'cwd', 'workspace'):
     (ROOT / n).mkdir(mode=0o700)
 node = shutil.which('node')
+cli = ROOT / 'caller-session-ctl.py'
+cli.write_bytes(Path(a.cli_source).resolve().read_bytes())
+cli.chmod(0o444)
 env = dict(HOME=str(ROOT / 'home'), TMPDIR=str(ROOT / 'tmp'),
            PATH=os.pathsep.join([str(Path(sys.executable).parent), str(Path(node).parent) if node else '/usr/bin', '/usr/bin', '/bin']),
            H2_P_SOURCE=str(P), H2_A_SOURCE=str(A), W_AGENTD_DIR=str(A),
+           H2_CLI_SOURCE=str(cli), H2_NODE=node or '',
            W_WORKSPACE=str(ROOT / 'workspace'), AGENTD_DIR=str(A),
            PYTHONDONTWRITEBYTECODE='1', LANG='C.UTF-8')
 results = []
 manifest = json.loads((W / 'test/h2_direct_host_manifest.json').read_text())
+assert hashlib.sha256(cli.read_bytes()).hexdigest() == manifest['crud']['caller_cli_sha256']
 for project, base in (('P', P), ('A', A)):
     for name, expected in manifest[project]['files'].items():
         actual = hashlib.sha256((base / name).read_bytes()).hexdigest()
@@ -67,6 +73,7 @@ run('root-guard', [sys.executable, '-B', '-c',
     "a,b=map(Path,sys.argv[2:]);assert not safe_rmtree(a,authorized_root=a)[0];"
     "assert not safe_rmtree(b,authorized_root=a)[0];assert (b/'keep').read_text()=='harmless'", str(A), str(allowed), str(outside)])
 run('h2-acceptance', [sys.executable, '-B', str(W / 'test/h2_direct_host_test.py')])
+run('h2-crud', [sys.executable, '-B', str(W / 'test/h2_direct_host_crud_test.py')])
 for name in ('resolve_agent_edge', 'session_lifecycle', 'dormant_send_revive', 'session_ops_edge', 'chat_backend'):
     run('W-' + name, [sys.executable, '-B', str(W / ('test/' + name + '.py'))])
 if node:

@@ -1,5 +1,11 @@
 # H2 direct-host lifecycle candidate — task/4aqn6z
 
+**Additive bllzca CRUD successor:** see [h2_direct_host_crud.md](h2_direct_host_crud.md)
+for the explicitly installed registry/CLI/API/Bridge CRUD factory and its new tests.
+The lifecycle-only factory and historical scope below remain available, including
+its deliberate delete rejection; they are not the new CRUD entry point. Neither
+factory is imported by default production modules.
+
 **Unwired offline candidate, not a default W implementation, complete H2 PASS or deployment.**
 Only `test/h2_direct_host*` files are added. Tests explicitly patch the original
 Supervisor factory and Bridge class; original declaration, profile whitelist,
@@ -20,7 +26,8 @@ With existing Python/Node and new fixed P/A exports only:
 
 ```sh
 /absolute/miniconda3/bin/python -B test/h2_direct_host_run.py \
-  --p-source /new/readonly/P-export --a-source /new/readonly/A-export
+  --p-source /new/readonly/P-export --a-source /new/readonly/A-export \
+  --cli-source /readonly/original/session-ctl.py
 ```
 
 The runner verifies the listed input hashes, creates and retains a new outer
@@ -29,7 +36,8 @@ HOME/TMPDIR/cwd/workspace, records commands/env/cwd/times/rc and warnings/skips 
 regressions, and original P generic/dependency tests. No installed pi, model,
 browser, HTTP server, production socket, sync, GC or service is used. All socket
 paths, declarations, JSONL, logs, registry, locks and child environments are in
-new roots. Native H1 double-layout/shared-agent/socket regressions can separately
+new roots. The runner additionally executes the bllzca CRUD suite; its original
+CLI input hash is recorded in the updated manifest. Native H1 double-layout/shared-agent/socket regressions can separately
 be run using unchanged P `recovery/h1-run-tests.py`; see P HOST.md.
 
 The fakepi and client are actual independent OS processes. The fixture's Popen
@@ -175,7 +183,7 @@ is a separate full-H2 follow-on. No default route uses this factory.
 | Ordinary instance/old-request fence | real lock-allocated token; not S runtime gen |
 | Natural zero/nonzero/host crash/unknown/explicit recovery | real fakepi and known-identity collection; stale/unreadable identity explicitly injected |
 | reload/clear running/concurrent/duplicate/failures | original API results and actual state/history; no receiver exactly-once contract |
-| create/list/rename/delete migration and UI tab refresh | NOT migrated; original regression only; title/name does not change address |
+| create/list/rename/delete migration and UI tab refresh | lifecycle-only factory NOT migrated; bllzca explicit CRUD successor covers offline fakepi and actual UI functions, NOT real browser/HTTP |
 | Full profile/persona/assets, inspect and public edit on real pi | original modules only, not new real-pi proof |
 | followUp/steer receiver durable strong ack and isolation | NOT tested; no fake ack; inbox-only fixture is not delivery |
 | real caller dispatch/ask/reply/explicit queue reaper | NOT tested; I0=A preserved, no fake registration |

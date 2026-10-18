@@ -32,7 +32,10 @@ for line in sys.stdin:
     t = cmd['type']
     if t == 'effect':
         with session.open('a') as f:
-            f.write(json.dumps(dict(type='message', id=cmd['value'], value=cmd['value'])) + '\n')
+            entry = dict(type='message', id=cmd['value'], value=cmd['value'])
+            if 'text' in cmd:
+                entry['message'] = dict(role='user', content=cmd['text'])
+            f.write(json.dumps(entry) + '\n')
         with (root / 'effects').open('a') as f:
             f.write(cmd['value'] + '\n')
     elif t == 'flood':
