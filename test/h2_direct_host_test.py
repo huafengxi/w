@@ -119,7 +119,7 @@ class Fixture:
         return dict(HOME=str(BASE / 'home'), TMPDIR=str(BASE / 'tmp'), PATH='/usr/bin:/bin',
                     W_WORKSPACE=str(self.ws), W_AGENTD_DIR=os.environ['H2_A_SOURCE'],
                     W_HOST_ID_FILE=str(self.hostmap), W_SESSION_PI_BIN=str(self.fake),
-                    AGENTD_ROOT=str(self.root / 'agentd-root'), PYTHONDONTWRITEBYTECODE='1')
+                    AGENTD_ROOT=str(self.ws), PYTHONDONTWRITEBYTECODE='1')
 
     def remember(self):
         d = self.life.load()
@@ -487,6 +487,10 @@ class Acceptance(unittest.TestCase):
             cfg = json.loads((self.f.life.local / d['instance'] / 'declaration.json').read_text())
             self.assertEqual(cfg['env']['DISPATCH_PROFILE'], 'good')
             self.assertEqual(cfg['sessionName'], 'chat-a')
+            self.assertEqual(cfg['env']['SESSIOND_SESSION_FILE'], str(self.f.ws / 'chat-a.jsonl'))
+            self.assertEqual(cfg['env']['W_WORKSPACE'], str(self.f.ws))
+            self.assertEqual(cfg['env']['AGENTD_DIR'], self.f.options['agentd'])
+            self.assertTrue((Path(cfg['env']['AGENTD_ROOT']) / 'agents/bot/chat-a/inbox').is_dir())
             self.assertFalse((self.f.ws / 'agents/bot/chat-a/spec.json').exists())
             before = (self.f.ws / 'chat-a.jsonl').read_bytes()
             def fail(_):

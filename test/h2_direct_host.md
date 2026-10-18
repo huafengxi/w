@@ -55,7 +55,8 @@ alias and recovery caller**. The canonical JSONL SHA maps to one fixed short
 parent and socket `s`. Parent does not vary with web or instance. Binding freezes
 canonical session, legal participant short name and cwd. `title` is presentation
 only; `.agent` / JSONL / pi name / `bot/<name>/inbox` remain the same identity.
-The fixture supplies inbox-only; it creates no spec/pid/enable/watcher/queue
+The fixture supplies inbox-only and explicitly sets AGENTD_ROOT to the synthetic
+workspace containing that agents directory; it creates no spec/pid/enable/watcher/queue
 registration. Real receiver/caller injection and queue reaper round trips are
 not exercised by this lifecycle candidate (I0=A remains).
 
@@ -74,6 +75,11 @@ record, stdout/stderr. Instance token is real lock-allocated startup identity,
 The original API's `gen` slot carries this ordinary instance string in the
 candidate only, for equality/fencing, not ordering. `pid` is explicitly host PID;
 `child.pid` is pi. No task pid is written.
+
+After original envscrub, the adapter explicitly reinstates the original probe/edit
+binding SESSIOND_SESSION_FILE (canonical JSONL), W_WORKSPACE and fixed AGENTD_DIR;
+profile is injected only after its original whitelist check. This preserves the
+existing inspect/public edit contract, not proof of real native extension loading.
 
 P starts with `start_new_session=True`, stdin=DEVNULL, stdout/stderr regular files
 independent of web lifetime. W calls no pi PIPE constructor; all ordinary data
@@ -154,9 +160,10 @@ process-tree supervisor or lease replacement.
 Only the test-only adapter is callable. Default create/list/delete still use
 old implementation, and are **not** migrated or safe to expose as candidate
 control APIs. `shutdown` in this injected supervisor means web detach, not a
-lifecycle stop; explicit stop requires its token. In particular candidate
-`bridge.drop_session`/delete must not be used as migrated delete: that is a
-separate full-H2 follow-on. No default route uses this factory.
+lifecycle stop; explicit stop requires its token. The test-only api_call returns
+501 for delete_session and shutdown(delete_session) returns an error, so original
+bridge.drop_session cannot misreport a detach as a verified kill. Delete migration
+is a separate full-H2 follow-on. No default route uses this factory.
 
 ## Retained original H2 matrix / nonclaims
 

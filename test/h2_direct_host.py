@@ -418,6 +418,11 @@ class DirectSupervisor(_ORIGINAL_SUPERVISOR):
         if profile:
             P.profile_spec(profile)
         env = P.clean_env()
+        # Original probe/edit contract: bind the exact canonical JSONL after
+        # scrubbing, and explicitly select this candidate's fixed tool source.
+        env[P.HOST_MARKER] = self.session_file
+        env['W_WORKSPACE'] = P.WS
+        env['AGENTD_DIR'] = options['agentd']
         if profile:
             env['DISPATCH_PROFILE'] = profile
         ext = ['-e', P.PROBE_EXT] if os.path.exists(P.PROBE_EXT) else []
