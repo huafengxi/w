@@ -1,0 +1,23 @@
+{
+  "taskId": "4aqn6z",
+  "W_base": "1c3775c3be70bee8f6b8efe23a9310424a575922",
+  "candidate_ref": "refs/heads/candidate/h2-direct-host-4aqn6z",
+  "contract": "Linux private stable runtime root, cooperative foreground local tree; no receiver/model/production PASS",
+  "P": {
+    "revision": "89f40cc235e4e9e51b2b489124031697a3e23222",
+    "files": {
+      "pi_host.py": "e7eab7328826d9f60598204e1ddd811e57b73b7d2be5d3a80797ef69f9d6f2fc",
+      "transport.py": "d35c3d6feb21b448f6e6c541a114a8ec1867a27bafd1c87645f3efb9e7606e5c",
+      "agentd_dependency.py": "a2119ca74bf51647d261f07bb082024791892ba9cc90bca2387c8c65d83d6451"
+    }
+  },
+  "A": {
+    "revision": "b40e0d027b1ebbe072b0edc0929e0411da3c37af",
+    "files": {
+      "proto.py": "0b83766e7d0a1b0a6acd2aa09c28132b36af3a34de27f5840a307d6f5caa3cae",
+      "wait_state.py": "8d257673d159b85199b9461fb09ed4155663b2f21ccaab125c0e8ebb5e607fef",
+      "envscrub.py": "4f4845e49b889f41bfd8e950e9313dcb1b3146377927cd339c4805735bb31f4a",
+      "safe_delete.py": "8d53e5f696d6735e8b1156d256fd51acfd02ed38682f311d4876952ec6cef754"
+    }
+  }
+}
