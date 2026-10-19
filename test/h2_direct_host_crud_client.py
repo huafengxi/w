@@ -99,6 +99,14 @@ with C.installed(options) as registry:
                 b.sup.ensure_started()
                 result = dict(before=before, after=b.sup.gen, sent=b.sup.send({'type':'effect','value':'forbidden'}),
                               status=b.sup.status_doc(), terminated=b.terminated)
+            elif special == 'history_appears_during_stop':
+                original_stop = H.Lifecycle._stop
+                def stop_then_create(life, d):
+                    original_stop(life, d)  # real identity-scoped close and wait
+                    Path(life.session).write_bytes(b'late unknown file' + bytes([10]))
+                with patch.object(H.Lifecycle, '_stop', stop_then_create):
+                    meta, body = C.api_call(store, **req)
+                result = dict(meta=meta, body=json.loads(body))
             elif special == 'inject_identity_denial':
                 with patch.object(H, 'identity', side_effect=PermissionError('injected identity denial')):
                     meta, body = C.api_call(store, **req)

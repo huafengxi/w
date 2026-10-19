@@ -306,5 +306,15 @@ class CRUD(unittest.TestCase):
         self.assertEqual(rc,0,(self.f.root/'ui.log').read_text())
         record(uiCommand=cmd,rc=rc,env=self.f.env(),cwd=str(BASE/'cwd'),wire=str(self.f.root/'ui-wire.jsonl'))
 
+    def test_I_lazy_history_new_file_is_not_deleted(self):
+        c=Client(self.f);doc=self.create(c);attached=self.attach(c,doc)
+        history=Path(doc['session_path']);history.unlink()
+        result=self.delete(c,doc,attached['gen'],special='history_appears_during_stop')
+        self.assertFalse(result['ok'],result)
+        self.assertIn('file identity changed',result['error'])
+        self.assertEqual(history.read_text(),'late unknown file\n')
+        self.assertTrue(Path(doc['agent_path']).exists())
+        record(lazyHistoryCountercontrol=result,historyRetained=True)
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -38,10 +38,15 @@ first=a['gen'];b=B.get_bridge(site,store=store)
 assert b.sup.status_doc()['mode']=='ordinary-direct-host'
 assert b.sup.life.load()['startupAcceptance']['success'] is True
 assert 'AGENTD_DIR' not in json.loads((b.sup.life.local/first/'declaration.json').read_text())['env']
+bad=call(op='reload',session=site,expected_instance=first,expected_registration='0'*32)
+assert not bad['ok'] and 'registration fence' in bad['error'],bad
 r=call(op='reload',session=site,expected_instance=first);assert r['ok'],r
 assert r['gen']!=first
 stale=call(op='clear',session=site,expected_instance=first);assert not stale['ok'],stale
 r=call(op='clear',session=site,expected_instance=r['gen']);assert r['ok'],r
+# Native pi defers disk JSONL until the first assistant response. Simulate its
+# model-free attached state without manufacturing an assistant/history entry.
+pathlib.Path(P.session_files(name)[1]).unlink()
 r=call(op='delete_session',session=site,confirm='1',expected_instance=r['gen']);assert r['ok'] and r['process']['settled'],r
 assert not pathlib.Path(P.session_files(name)[0]).exists()
 unstarted=P.create_cc_session('good')

@@ -237,14 +237,26 @@ class Registry:
                     if not d or not expected or d['instance'] != expected or d.get('fence'):
                         raise ValueError('instance fence mismatch or duplicate delete')
                     life.observe(d)  # unknown identity must not even write fence
-                    before = {str(p): (p.stat().st_dev, p.stat().st_ino) for p in (agent, history)}
+                    def file_identity(p):
+                        try:
+                            st = p.lstat()
+                        except FileNotFoundError:
+                            return None
+                        if p.is_symlink() or not p.is_file():
+                            raise ValueError('not a regular deletion target')
+                        return st.st_dev, st.st_ino
+                    # Native pi defers JSONL persistence until its first assistant
+                    # response. A started, empty session may legitimately lack it.
+                    before = {str(p): file_identity(p) for p in (agent, history)}
+                    if before[str(agent)] is None:
+                        raise ValueError('registration disappeared before stop')
                     d.update(fence='delete', phase='fenced')
                     life.save(d)
                     life._stop(d)  # host + pi + known cooperative descendants
                     if not life.observe(d)['settled']:
                         raise RuntimeError('stop not confirmed')
                     for p in (agent, history):
-                        if p.is_symlink() or (p.stat().st_dev, p.stat().st_ino) != before[str(p)]:
+                        if file_identity(p) != before[str(p)]:
                             raise RuntimeError('file identity changed during stop')
                     d['phase'] = 'stopped'
                     life.save(d)
@@ -318,6 +330,9 @@ def build(options):
         def change(self, operation, expected):
             with registry.lock():
                 try:
+                    requested = _EXPECTED_REGISTRATION.get()
+                    if requested is not None and (not self.registered or requested != self.registration):
+                        raise ValueError('registration fence mismatch')
                     self.check()
                 except (OSError, ValueError, KeyError, RuntimeError, TypeError) as e:
                     return dict(ok=False, error=str(e))
