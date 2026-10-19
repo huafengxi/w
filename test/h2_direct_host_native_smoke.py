@@ -44,14 +44,18 @@ life = H.Lifecycle(str(ROOT / 'history.jsonl'), 'native-smoke', str(ROOT / 'cwd'
                    str(ROOT / 'runtime'), str(Path(os.environ['H2_P_SOURCE']) / 'pi_host.py'),
                    os.environ['H2_A_SOURCE'], env, str(wrapper), claim=lambda path: None)
 known = []
-result = dict(root=str(ROOT), pi=str(pi), modelRequests=0,
-              scope='startup/start-facts/peer/two read-only RPCs/stop only')
+result = dict(root=str(ROOT), pi=str(pi), submittedPrompt=False,
+              scope='post-launch get_state acceptance, two read-only RPCs and stop')
 print('NATIVE_SMOKE_ROOT=' + str(ROOT), flush=True)
 try:
     d = life.ensure()
     known.extend(d['known'])
     facts, _ = life.facts(d)
-    result.update(instance=d['instance'], host=d['host'], child=d['child'], facts=facts)
+    proof = d['startupAcceptance']
+    assert proof['peerPid'] == d['host']['pid'] and proof['success'] is True
+    assert list((ROOT / 'runtime').rglob('*.lock')) == []
+    result.update(instance=d['instance'], host=d['host'], child=d['child'], facts=facts,
+                  startupAcceptance=proof, fileLocks=0)
     assert str(facts['hostProcStart']) == d['host']['start']
     assert str(facts['childProcStart']) == d['child']['start']
     with socket.socket(socket.AF_UNIX) as sock:
@@ -79,7 +83,7 @@ try:
     stopped = life.operate('stop', d['instance'])
     obs = life.status()
     assert obs['state'] == 'stopped' and obs['settled'], obs
-    result.update(stopped=obs, ok=True)
+    result.update(stopped=obs, startupAndStopPassed=True)
 finally:
     # Only this invocation's exact recorded identities; retain all file evidence.
     current = life.load()
@@ -106,6 +110,7 @@ finally:
             break
         time.sleep(.02)
     result['remainingLive'] = remaining
+    result['ok'] = result.get('startupAndStopPassed') is True and not remaining
     (ROOT / 'result.json').write_text(json.dumps(result, indent=2))
     assert not remaining, remaining
 print('PASS native P/pi start facts, socket peer, RPC and checked stop; no model request', flush=True)

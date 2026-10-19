@@ -181,9 +181,10 @@ class CRUD(unittest.TestCase):
         self.assertEqual((inbox/'keep').read_text(),'preexisting inbox payload')
         self.assertEqual(c2.request(op='session_tabs')['body']['rows'],[])
         self.assertFalse(self.delete(c2,doc,a['gen'])['ok'])
-        record(crossWeb=dict(first=ident,second=a2,config=cfg,identity=before,delete=deleted))
+        self.assertEqual(list(self.f.runtime.rglob('*.lock')), [])
+        record(crossWeb=dict(first=ident,second=a2,config=cfg,identity=before,delete=deleted), noFileLocks=True)
 
-    def test_B_delete_race_attach_cached_web_and_late_old_instance(self):
+    def test_B_delete_cached_web_and_late_old_instance(self):
         c1,c2=Client(self.f),Client(self.f);doc=self.create(c1);a=self.attach(c1,doc)
         self.attach(c2,doc)
         c2.request(special='stream_open',session=doc['agent_site'])
@@ -191,10 +192,9 @@ class CRUD(unittest.TestCase):
         self.assertTrue(reload['ok'],reload);self.f.remember()
         old=self.delete(c2,doc,a['gen']);self.assertFalse(old['ok'])
         self.assertEqual(json.loads(self.f.current(doc['name']).read_text())['instance'],reload['gen'])
-        with concurrent.futures.ThreadPoolExecutor(2) as pool:
-            f1=pool.submit(self.delete,c1,doc,reload['gen'])
-            f2=pool.submit(c2.request,op='attach',session=doc['agent_site'])
-            deleted,attached=f1.result(),f2.result()['body']
+        # Ordered deletion and late access, not cross-Web linearizability.
+        deleted=self.delete(c1,doc,reload['gen'])
+        attached=c2.request(op='attach',session=doc['agent_site'])['body']
         self.assertTrue(deleted['ok'],deleted)
         cached=c2.request(special='cached',session=doc['agent_site']);self.assertFalse(cached['sent'])
         current=json.loads(self.f.current(doc['name']).read_text());self.assertEqual(current['phase'],'deleted')

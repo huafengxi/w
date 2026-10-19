@@ -496,7 +496,7 @@ def create_cc_session(profile=CC_PROFILE):
                      ⛔ 不覆盖同名 `.agent`）
       `createdAt`  = UTC ISO 时刻
     ⛔ **无 `command` 键**：spawn argv 的单点是 `Supervisor._spawn`，声明者不可控。
-    落盘 = 临时文件 + `os.replace` 原子写，目录 0700 / 文件 0600（宿主本地运行时区）。
+    落盘 = 同目录临时文件 + `link` 无覆盖原子发布，目录 0700 / 文件 0600。
     返回 dict(name, profile, cwd, host, agent_site, session_site, agent_path, session_path)。"""
     prof, pdoc = profile_spec(profile)
     cwd = profile_cwd(prof, pdoc)
@@ -508,8 +508,7 @@ def create_cc_session(profile=CC_PROFILE):
     sdir = os.path.realpath(sessions_dir())
     if not _within_roots(sdir):
         raise ValueError("sessions dir escapes the workspace roots: %s" % sdir)
-    # 撞名收口：重取（有界）→ 用尽即拒。⛔ 不覆盖 —— `os.replace` 对同名 `.agent` 是静默
-    # 覆盖，而短名把撞名概率从「秒级时间戳」提到 36^4 空间 ⇒ 判据落在写盘前。
+    # 有界选名；最后以同目录link原子无覆盖发布，不能只靠此前exists检查。
     for _ in range(SESSION_NAME_TRIES):
         name = new_session_name()
         agent_path = os.path.join(sdir, name + ".agent")
@@ -531,9 +530,12 @@ def create_cc_session(profile=CC_PROFILE):
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, 0o600)
-        os.replace(tmp, agent_path)
+        try:
+            os.link(tmp, agent_path)  # no overwrite if a concurrent creator won
+        finally:
+            os.unlink(tmp)
     except OSError as e:
-        raise ValueError("cannot write agent declaration %s: %s" % (agent_path, e))
+        raise ValueError("cannot write agent declaration %s: %s" % (agent_path, e)) from e
     agent_site = site_path_of(agent_path)
     session_site = site_path_of(jsonl_path)
     if not agent_site or not session_site:

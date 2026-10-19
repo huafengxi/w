@@ -30,6 +30,24 @@ hold_eof = False
 for line in sys.stdin:
     cmd = json.loads(line)
     t = cmd['type']
+    if t == 'get_state':
+        with (root / 'startup-requests').open('a') as log:
+            log.write(json.dumps(dict(pid=os.getpid(), id=cmd.get('id'))) + '\n')
+        mode_path = root / 'startup-mode'
+        mode = mode_path.read_text().strip() if mode_path.exists() else 'ok'
+        if mode == 'eof':
+            sys.exit(0)
+        if mode == 'silent':
+            continue
+        if mode == 'wrong-id':
+            emit(dict(type='response', id='not-' + str(cmd.get('id')), command=t, success=True))
+            continue
+        if mode == 'rejected':
+            emit(dict(type='response', id=cmd.get('id'), command=t, success=False, error='fixture rejection'))
+            continue
+        if mode == 'wrong-command':
+            emit(dict(type='response', id=cmd.get('id'), command='get_entries', success=True))
+            continue
     if t == 'effect':
         with session.open('a') as f:
             entry = dict(type='message', id=cmd['value'], value=cmd['value'])
@@ -40,12 +58,14 @@ for line in sys.stdin:
             f.write(cmd['value'] + '\n')
     elif t == 'flood':
         if cmd.get('waitForGate'):
+            (root / 'flood.armed').write_text('command received')
             while not (root / 'flood.go').exists():
                 time.sleep(.01)
         for n in range(7000):
             emit(dict(type='load', n=n, payload='x' * 4096))
         (root / 'flood.done').write_text('done')
     elif t == 'exit':
+        (root / 'exit.requested').write_text(str(cmd.get('code', 0)))
         sys.exit(cmd.get('code', 0))
     elif t == 'hold_eof':
         hold_eof = True

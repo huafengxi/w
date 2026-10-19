@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[1]
@@ -50,6 +51,21 @@ def wait_for(fn, timeout=8):
             return value
         time.sleep(.02)
     raise TimeoutError('condition not reached')
+
+
+def socket_rpc(s, command):
+    # Startup now contributes a real get_state response to the ordinary ring.
+    # Match this request, rather than mistaking replayed success for its receipt.
+    request_id = 'fixture-' + uuid.uuid4().hex
+    s.settimeout(5)
+    s.sendall(json.dumps(dict(type=command, id=request_id)).encode() + b'\n')
+    with s.makefile('rb') as reader:
+        for line in reader:
+            response = json.loads(line)
+            if response.get('type') == 'response' and response.get('id') == request_id:
+                assert response.get('success'), response
+                return response
+    raise RuntimeError('socket closed before matching command response')
 
 
 class Client:
@@ -233,14 +249,11 @@ class Acceptance(unittest.TestCase):
         self.assertTrue(c2.request(op='attach')['body']['ok'])
         record(reconnectedReload=reload_result, harnessOnlyOrphanWait=waits)
 
-    def test_B_pump_replacement_and_concurrent_webs(self):
-        # Two independent processes race through original declaration + Bridge.
+    def test_B_pump_replacement_and_multiple_webs(self):
+        # Two independent Webs attach in order. Cross-process simultaneous
+        # startup uniqueness is deliberately outside the no-file-lock contract.
         c1, c2 = Client(self.f), Client(self.f)
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(2) as pool:
-            # Status ensures get_bridge starts the candidate, but does not wait
-            # for a replaceable client's RPC response during the connection race.
-            rs = list(pool.map(lambda c: c.request(op='status'), (c1, c2)))
+        rs = [c1.request(op='status'), c2.request(op='status')]
         ids = [r['body']['instance'] for r in rs]
         self.assertIsNotNone(ids[0])
         self.assertEqual(ids[0], ids[1])
@@ -252,6 +265,7 @@ class Acceptance(unittest.TestCase):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.f.life.sock)
         s.sendall(b'{"type":"flood","waitForGate":true}\n')
+        wait_for(lambda: (self.f.ws / 'flood.armed').exists())
         s.close()
         (self.f.ws / 'flood.go').write_text('client already closed')
         wait_for(lambda: (self.f.ws / 'flood.done').exists())
@@ -260,13 +274,13 @@ class Acceptance(unittest.TestCase):
         c3 = Client(self.f)
         self.assertTrue(c3.request(op='attach')['body']['ok'])
         self.assertEqual(c3.request(op='status')['body']['instance'], d['instance'])
-        # Direct H1 starts at the same parent, canonical and symlink aliases,
-        # as well as a different socket name, must all refuse a second host.
+        # An already-live fixed endpoint still refuses a sequential second P.
+        # Alternate socket names for one session are no longer supported.
         config = json.loads((self.f.life.local / d['instance'] / 'declaration.json').read_text())
         alias = self.f.ws / 'alias.jsonl'
         alias.symlink_to(self.f.ws / 'chat-a.jsonl')
         for n, (session, sock) in enumerate(((config['sessionFile'], config['socketPath']),
-                 (str(alias), config['socketPath']), (str(alias), str(self.f.life.local / 'other')))):
+                 (str(alias), config['socketPath']))):
             cfg = dict(config, sessionFile=session, socketPath=sock)
             p = self.f.root / ('duplicate%d.json' % n)
             atomic(p, cfg)
@@ -299,6 +313,7 @@ class Acceptance(unittest.TestCase):
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(self.f.life.sock)
             s.sendall(json.dumps(dict(type='exit', code=code)).encode() + b'\n')
+            wait_for(lambda: (self.f.ws / 'exit.requested').exists())
             s.close()
             obs = wait_for(lambda: (o if (o := self.f.life.status()).get('settled') else None))
             self.assertEqual(obs['state'], 'dormant', obs)
@@ -319,8 +334,7 @@ class Acceptance(unittest.TestCase):
         d = self.start()
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.f.life.sock)
-        s.sendall(b'{"type":"hold_eof"}\n')
-        self.assertIn(b'"success": true', s.recv(10000)); s.close()
+        socket_rpc(s, 'hold_eof'); s.close()
         signal_identity(d['host'], signal.SIGKILL)
         wait_for(lambda: not live(identity(d['host']['pid'])))
         obs = self.f.life.status()
@@ -339,8 +353,7 @@ class Acceptance(unittest.TestCase):
         history = (self.f.ws / 'chat-a.jsonl').read_bytes()
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.f.life.sock)
-        s.sendall(b'{"type":"descendant"}\n')
-        self.assertIn(b'"success": true', s.recv(10000)); s.close()
+        socket_rpc(s, 'descendant'); s.close()
         self.f.remember()
         descendant = identity(json.loads((self.f.ws / 'descendant.json').read_text())['pid'])
         signal_identity(d['host'], signal.SIGKILL)
@@ -382,9 +395,7 @@ class Acceptance(unittest.TestCase):
         self.assertTrue(live(identity(d['child']['pid'])))
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.f.life.sock)
-        s.sendall(b'{"type":"ignore_term"}\n')
-        self.assertIn(b'"success": true', s.recv(10000))
-        s.close()
+        socket_rpc(s, 'ignore_term'); s.close()
         before = (self.f.ws / 'chat-a.jsonl').read_bytes()
         with self.assertRaises(TimeoutError):
             self.f.life.operate('clear', d['instance'])
@@ -397,8 +408,7 @@ class Acceptance(unittest.TestCase):
         d = self.start()
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.f.life.sock)
-        s.sendall(b'{"type":"descendant"}\n')
-        self.assertIn(b'"success": true', s.recv(10000)); s.close()
+        socket_rpc(s, 'descendant'); s.close()
         self.f.remember()
         self.f.life.operate('stop', d['instance'])
         obs = self.f.life.status()
@@ -436,16 +446,15 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(self.f.life.load()['instance'], latest)
         self.assertEqual((self.f.ws / 'effects').read_text(), 'history-before-reload\n')
 
-    def test_D_concurrent_old_token_only_one_reload(self):
+    def test_D_late_old_token_rejected_after_reload(self):
         d = self.start()
         c1, c2 = Client(self.f), Client(self.f)
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(2) as pool:
-            results = list(pool.map(lambda c: c.request(op='reload', expected_instance=d['instance']), (c1, c2)))
+        results = [c1.request(op='reload', expected_instance=d['instance']),
+                   c2.request(op='reload', expected_instance=d['instance'])]
         self.assertEqual(sum(r['body']['ok'] for r in results), 1, results)
         self.assertNotEqual(self.f.life.load()['instance'], d['instance'])
         self.f.remember()
-        record(concurrentReload=results)
+        record(lateReload=results)
 
     def test_D_truncate_claim_failure_fenced_not_success(self):
         d = self.start()

@@ -1,12 +1,11 @@
 """Unwired ordinary CRUD factory, bllzca. No default consumer imports this.
 
 Original proc CLI helpers / declaration / Bridge / API remain the entry points.
-A private flock serializes them across web processes; per-session op locks and
-strong host identities remain in h2_direct_host.Lifecycle. See contract .md.
+Only process-local thread serialization remains. Human-triggered cross-Web
+operations are best effort; startup is accepted by socket peer plus native RPC.
 """
 from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
-import fcntl
 import hashlib
 import json
 import os
@@ -34,28 +33,12 @@ class Registry:
         self.options = dict(options)
         self.root = H.private_dir(options['runtime'])
         self.mutex = threading.RLock()
-        self.local = threading.local()
 
     @contextmanager
     def lock(self):
-        # One fd per outer operation. A second flock fd in a nested original
-        # Bridge/CLI call would deadlock against this same process's first fd.
+        # Protect process-local adapters/threads, not different Web processes.
         with self.mutex:
-            if getattr(self.local, 'depth', 0):
-                self.local.depth += 1
-                try:
-                    yield
-                finally:
-                    self.local.depth -= 1
-                return
-            fd = os.open(self.root / 'registry.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                self.local.depth = 1
-                yield
-            finally:
-                self.local.depth = 0
-                os.close(fd)  # stable inode, never unlink
+            yield
 
     def files(self, name):
         a, h, base = P.session_files(name)
@@ -135,6 +118,10 @@ class Registry:
                     break
                 except NameCollision:
                     continue
+                except ValueError as e:
+                    if isinstance(e.__cause__, FileExistsError):
+                        continue  # another creator published this name first
+                    raise
             else:
                 raise ValueError('cannot allocate a free session name (history/inbox/runtime collision)')
             name = result['name']
@@ -211,14 +198,14 @@ class Registry:
                     d = life.load()
                     if d is None and expected == 'unstarted' and not history.exists():
                         entries = {p.name for p in life.local.iterdir()}
-                        if entries != {'binding.json', 'op.lock'}:
+                        if entries - {'binding.json', 'op.lock'}:
                             raise ValueError('incomplete runtime; unknown ownership')
                         # No process ever launched: declaration fence plus an
                         # explicit unstarted capture, not an invented host token.
                         result = _DELETE_FILES(name)
                         H.atomic(life.local / 'deleted-registration.json', dict(registration=expected_reg))
                         return dict(result, ok=True, process=dict(neverStarted=True), registration=expected_reg,
-                                    retained=['inbox', 'runtime facts and stable locks'])
+                                    retained=['inbox', 'runtime facts'])
                     if not d or not expected or d['instance'] != expected or d.get('fence'):
                         raise ValueError('instance fence mismatch or duplicate delete')
                     life.observe(d)  # unknown identity must not even write fence
@@ -247,7 +234,7 @@ class Registry:
                         b.terminated = True
                         b.cond.notify_all()
                 return dict(result, ok=True, process=dict(instance=expected, settled=True),
-                            registration=expected_reg, retained=['inbox', 'runtime facts and stable locks'])
+                            registration=expected_reg, retained=['inbox', 'runtime facts'])
             except (OSError, ValueError, KeyError, RuntimeError, TypeError) as e:
                 return dict(ok=False, error=str(e))
 
@@ -309,8 +296,8 @@ def installed(options):
                 return super().change(operation, expected)
 
     class RegisteredBridge(H.DirectBridge):
-        # Uniform registry -> web op -> lifecycle lock order, also for queries
-        # that call ensure_started within the original Bridge implementation.
+        # These are only process-local thread locks, including original queries
+        # that call ensure_started. No cross-Web atomicity is promised.
         def get_entries(self, *a, **kw):
             with registry.lock():
                 return super().get_entries(*a, **kw)

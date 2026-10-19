@@ -1,5 +1,8 @@
 # Ordinary CRUD candidate — B1/B2 repair (unwired)
 
+**Current successor:** [fixed socket startup acceptance](h2_direct_host_socket.md)
+removes ordinary file locks and the cross-Web atomicity promises below.
+
 This bounded W-only repair appends to the bllzca candidate
 `e8078e82a9c4ae1785a5bc44f74e56f24b0ec738`, itself above the original lifecycle
 candidate `8f38c82a9c304bd8f1a8a31c6d5c9cbe71b6bae6`.

@@ -6,7 +6,6 @@ See h2_direct_host.md for the cooperative local-process contract and exclusions.
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 import ctypes
-import fcntl
 import hashlib
 import importlib.util
 import json
@@ -31,6 +30,7 @@ from ext.sessiond.rpc import api
 _EXPECTED = ContextVar('h2_expected_instance', default=None)
 _LIBC = ctypes.CDLL(None, use_errno=True)
 _PROCESS_TOOLS = None
+_SESSION_MUTEXES = {}  # process-local thread serialization, not file locks
 
 
 def configure_process_tools(host_entry):
@@ -55,12 +55,15 @@ _ORIGINAL_BRIDGE = B.Bridge
 
 
 def atomic(path, obj):
-    temp = Path(str(path) + '.tmp')
-    with temp.open('w') as f:
-        json.dump(obj, f, sort_keys=True)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temp, path)
+    temp = Path(str(path) + '.tmp-' + uuid.uuid4().hex)
+    try:
+        with temp.open('x') as f:
+            json.dump(obj, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def identity(pid):
@@ -135,7 +138,7 @@ class Lifecycle:
     """Finite syscall operations, not a server, supervisor or command spool."""
     def __init__(self, session, name, cwd, runtime, host_entry, agentd, env,
                  pi_binary, extensions=(), claim=P._claim_origin, truncate=None,
-                 prepare=None, stop_timeout=3):
+                 prepare=None, stop_timeout=3, startup_timeout=5):
         configure_process_tools(host_entry)
         self.session = str(Path(session).resolve())
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9._-]+', name) or name in ('.', '..'):
@@ -147,8 +150,10 @@ class Lifecycle:
         self.prepare = prepare
         self.truncate = truncate or self._truncate
         self.stop_timeout = stop_timeout
+        self.startup_timeout = startup_timeout
         root = private_dir(runtime)
         self.local = private_dir(root / hashlib.sha256(os.fsencode(self.session)).hexdigest()[:16])
+        self._mutex = _SESSION_MUTEXES.setdefault(str(self.local), threading.RLock())
         self.sock = str(self.local / 's')
         if len(os.fsencode(self.sock)) > 100:
             raise ValueError('socket path too long; supply a short stable runtime root')
@@ -165,12 +170,9 @@ class Lifecycle:
 
     @contextmanager
     def lock(self):
-        fd = os.open(self.local / 'op.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+        # Human-triggered operations; no cross-process file-lock guarantee.
+        with self._mutex:
             yield
-        finally:
-            os.close(fd)  # lock inode is never unlinked
 
     def load(self):
         if not self.current.exists():
@@ -180,14 +182,15 @@ class Lifecycle:
             raise RuntimeError('metadata binding mismatch')
         return d
 
-    def save(self, d):
+    def save(self, d, *, publish=True):
         path = self.local / d['instance'] / 'record.json'
         if path.exists() and 'hostWait' not in d:
             previous = json.loads(path.read_text())
             if 'hostWait' in previous:
                 d['hostWait'] = previous['hostWait']
         atomic(path, d)
-        atomic(self.current, d)
+        if publish:
+            atomic(self.current, d)
 
     def facts(self, d):
         rows = [json.loads(line) for line in (self.local / d['instance'] / 'stdout').read_text().splitlines()]
@@ -237,7 +240,8 @@ class Lifecycle:
         natural = (settled and wait is not None and d.get('hostWait') is not None
                    and d['hostWait']['returncode'] == (wait['returncode'] if wait['returncode'] >= 0
                                                        else 128 - wait['returncode']))
-        state = 'running' if live(h) and live(c) and not unknown else ('dormant' if natural else 'unknown')
+        state = ('running' if d['phase'] == 'running' and live(h) and live(c) and not unknown
+                 else ('dormant' if natural else 'unknown'))
         if d.get('fence'):
             state = 'stopped' if settled and d.get('phase') == 'stopped' else 'fenced'
         return dict(state=state, instance=d['instance'], host=d['host'], child=d['child'],
@@ -265,14 +269,82 @@ class Lifecycle:
             else:
                 atomic(path, d)
 
-    def _start(self):
-        previous = self.load()
-        if previous and previous.get('host'):
-            end = time.monotonic() + 1
-            while identity(previous['host']['pid']) is not None and time.monotonic() < end:
+    def _accept_start(self, d):
+        """One post-launch connection: our P's kernel peer AND a real pi RPC.
+
+        Not pre-launch arbitration, a command replay, or a uniqueness promise.
+        Never send even the probe to a socket owned by another host.
+        """
+        request_id = 'w-start-' + uuid.uuid4().hex
+        deadline = time.monotonic() + self.startup_timeout
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(self.startup_timeout)
+            s.connect(self.sock)
+            peer, uid, _gid = _PROCESS_TOOLS.peer_credentials(s)
+            if (peer != d['host']['pid'] or uid != os.getuid()
+                    or not same(identity(peer), d['host'])):
+                raise RuntimeError('startup socket peer is not the launched host')
+            s.sendall(json.dumps(dict(type='get_state', id=request_id)).encode() + b'\n')
+            with s.makefile('rb') as stream:
+                while time.monotonic() < deadline:
+                    s.settimeout(max(.001, deadline - time.monotonic()))
+                    line = stream.readline(P.LINE_LIMIT + 1)
+                    if not line:
+                        raise RuntimeError('startup socket EOF before get_state response')
+                    if len(line) > P.LINE_LIMIT:
+                        raise RuntimeError('startup socket response exceeds line limit')
+                    response = json.loads(line)
+                    if response.get('type') != 'response' or response.get('id') != request_id:
+                        continue
+                    if response.get('command') != 'get_state' or response.get('success') is not True:
+                        raise RuntimeError('startup get_state rejected or invalid response')
+                    return dict(peerPid=peer, requestId=request_id, command='get_state', success=True)
+        raise TimeoutError('startup get_state response timeout')
+
+    def _reject_start(self, d, handle, error):
+        """Discard only identities from this invocation; never unlink its path.
+
+        If another P owns the pathname, its process and endpoint are untouched.
+        This is failed-start cleanup, not retry or automatic recovery.
+        """
+        known = [i for i in (d.get('child'), d.get('host')) if i]
+        errors = []
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for i in known:
+                try:
+                    actual = identity(i['pid'])
+                    if same(actual, i) and live(actual):
+                        signal_identity(i, sig)
+                except (OSError, RuntimeError) as e:
+                    errors.append(str(e))
+            try:
+                rc = handle.wait(timeout=max(.1, self.stop_timeout))
+                d['hostWait'] = dict(source='W failed-start Popen.wait', returncode=rc)
+            except subprocess.TimeoutExpired:
+                continue
+        remaining = list(known)
+        deadline = time.monotonic() + max(.1, self.stop_timeout)
+        while remaining and time.monotonic() < deadline:
+            pending = []
+            for i in remaining:
+                try:
+                    actual = identity(i['pid'])
+                    if same(actual, i) and live(actual):
+                        pending.append(i)
+                except (OSError, RuntimeError) as e:
+                    if str(e) not in errors:
+                        errors.append(str(e))
+                    pending.append(i)
+            remaining = pending
+            if remaining:
                 time.sleep(.01)
-            if identity(previous['host']['pid']) is not None:
-                raise RuntimeError('prior host not reaped; do not launch into H1 live-owner gate')
+        d.update(phase='startup_failed', fence='startup_failed', error=str(error),
+                 startupCleanup=dict(remainingLive=remaining, errors=errors,
+                                     childIdentityUnknown=d.get('child') is None))
+        current = self.load()
+        self.save(d, publish=bool(current and current['instance'] == d['instance']))
+
+    def _start(self):
         if os.path.exists(self.session):
             self.claim(self.session)
             if self.prepare:
@@ -294,36 +366,38 @@ class Lifecycle:
                                       cwd=self.cwd, env=hostenv, stdin=subprocess.DEVNULL,
                                       stdout=out, stderr=err, start_new_session=True, close_fds=True)
         self.handles[token] = handle
-        # Start waiting only after record identity is complete; launch failure
-        # paths still reap their own Popen via poll/wait, with evidence retained.
-        d['host'] = identity(handle.pid)
-        if not d['host'] or d['host']['sid'] != handle.pid or d['host']['pgid'] != handle.pid:
-            raise RuntimeError('host did not acquire independent session/group')
-        self.save(d)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            try:
-                f, _ = self.facts(d)
-                child = identity(f['childPid'])
-                if not child or child['start'] != str(f['childProcStart']):
-                    raise RuntimeError('child identity unavailable')
-                if child['pgid'] != d['host']['pgid'] or child['sid'] != d['host']['sid']:
-                    raise RuntimeError('noncooperative child group')
-                d.update(child=child, known=[d['host'], child], phase='running')
-                self.save(d)
-                threading.Thread(target=self._reap, args=(handle, token), daemon=True,
-                                 name='h2-own-child-wait').start()
-                return d
-            except (ValueError, KeyError, RuntimeError):
-                if handle.poll() is not None:
+        try:
+            d['host'] = identity(handle.pid)
+            if not d['host'] or d['host']['sid'] != handle.pid or d['host']['pgid'] != handle.pid:
+                raise RuntimeError('host did not acquire independent session/group')
+            self.save(d)
+            deadline = time.monotonic() + self.startup_timeout
+            while time.monotonic() < deadline:
+                try:
+                    f, _ = self.facts(d)
+                    child = identity(f['childPid'])
+                    if not child or child['start'] != str(f['childProcStart']):
+                        raise RuntimeError('child identity unavailable')
+                    if child['pgid'] != d['host']['pgid'] or child['sid'] != d['host']['sid']:
+                        raise RuntimeError('noncooperative child group')
                     break
-                time.sleep(.01)
-        if handle.poll() is not None:
-            handle.wait()
-        else:
-            threading.Thread(target=self._reap, args=(handle, token), daemon=True,
-                             name='h2-own-child-wait').start()
-        raise RuntimeError('host launch facts unavailable; unknown, no blind retry')
+                except (ValueError, KeyError, RuntimeError):
+                    if handle.poll() is not None:
+                        raise RuntimeError('host exited before launch facts')
+                    time.sleep(.01)
+            else:
+                raise TimeoutError('host launch facts unavailable')
+            d.update(child=child, known=[d['host'], child], phase='verifying')
+            self.save(d)
+            d['startupAcceptance'] = self._accept_start(d)
+            d['phase'] = 'running'
+            self.save(d)
+        except Exception as e:
+            self._reject_start(d, handle, e)
+            raise RuntimeError('host startup acceptance failed: %s' % e) from e
+        threading.Thread(target=self._reap, args=(handle, token), daemon=True,
+                         name='h2-own-child-wait').start()
+        return d
 
     def ensure(self):
         with self.lock():

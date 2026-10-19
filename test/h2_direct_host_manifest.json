@@ -1,29 +1,32 @@
 {
-  "taskId": "w-mac-01a151c5",
-  "parent_candidate": "ae9465b8e5d0789984cbcdabc39b64db239720f9",
+  "taskId": "w-socket-01a151c5",
+  "parent_candidate": "5e3447f0788b1096706c288a064bcf052130d889",
+  "startup_acceptance": "post-launch kernel peer matches our Popen, then one matching successful get_state response",
+  "startup_tests": "test/h2_direct_host_startup_test.py",
+  "ordinary_file_locks": 0,
   "platform_tests": "test/h2_direct_host_platform_test.py",
   "darwin_stop": "identity check then PID kill; accepted check-to-kill reuse race, not atomic targeting",
   "repair_countercontrols": {
     "suite": "test/h2_direct_host_repair_test.py",
     "B1": "registration completion published after real inbox mkdir; revalidated at cached startup/send/change",
     "B2": "absent runtime plus existing history is unknown, not never-started",
-    "original_suites": "unchanged CRUD8 and lifecycle13 assertions"
+    "original_suites": "adapted CRUD8/lifecycle13; cross-Web arbitration and alternate-socket guarantees removed by user decision"
   },
   "crud": {
     "factory": "test/h2_direct_host_crud.py:installed",
     "caller_cli_sha256": "ff764d811732c007cdc23c6c1354e01c2d61d6b9740f8ed4b277078d90ae4f87",
     "delete_files": ["exact .agent", "exact .jsonl"],
-    "retained": ["inbox", "runtime facts", "stable lock inodes"],
+    "retained": ["inbox", "runtime facts", "legacy lock files untouched but not acquired"],
     "fences": ["captured registration UUID", "captured actual host instance or explicit unstarted"]
   },
   "W_base": "1c3775c3be70bee8f6b8efe23a9310424a575922",
-  "candidate_ref": "refs/heads/candidate/w-mac-01a151c5",
-  "contract": "Linux/Darwin private stable runtime root, cooperative foreground local tree; no receiver/model/production PASS",
+  "candidate_ref": "refs/heads/candidate/w-socket-01a151c5",
+  "contract": "Linux/Darwin fixed private local endpoint; human-triggered starts, no cross-Web atomicity or simultaneous-start uniqueness; no receiver/model/production PASS",
   "P": {
-    "revision": "4b6ca1bb9fefe894f8d3245abda7f9ce87370eeb",
+    "revision": "1d2bd6bd0420afdf31bd6399b91a55c5608f7c04",
     "files": {
-      "pi_host.py": "8efc03ec8796cbcc87f1596653e419868f45b7f4809761462c9913ee3d8aa841",
-      "transport.py": "9d9124e63ae4acff2691269d80c81aa932f38890c0f89d3f11e524a7f4dcd294",
+      "pi_host.py": "7033e4ce46107026dc3af7d584709a262075fd5908365662bc940ed0e920b13c",
+      "transport.py": "22331e6fd5045107a013c05f70098b557d03d4134c1f23736595cb254a191220",
       "ordinary_process.py": "f296713b93ade252f8773d30e102f7e063c93bdeb64f773b32d5b44f3281d5db",
       "agentd_dependency.py": "a2119ca74bf51647d261f07bb082024791892ba9cc90bca2387c8c65d83d6451"
     }

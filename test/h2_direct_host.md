@@ -1,5 +1,8 @@
 # H2 direct-host lifecycle candidate — task/4aqn6z
 
+**Current successor:** [fixed socket startup acceptance](h2_direct_host_socket.md)
+replaces the historical file-lock and cross-Web arbitration contract below.
+
 **Additive bllzca CRUD successor:** see [h2_direct_host_crud.md](h2_direct_host_crud.md)
 for the explicitly installed registry/CLI/API/Bridge CRUD factory and its new tests.
 The lifecycle-only factory and historical scope below remain available, including
