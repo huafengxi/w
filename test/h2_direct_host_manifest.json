@@ -25,7 +25,7 @@
   "candidate_ref": "refs/heads/candidate/w-independent-01a151c5",
   "contract": "Linux/Darwin fixed private local endpoint; human-triggered starts, no cross-Web atomicity or simultaneous-start uniqueness; no receiver/model/production PASS",
   "P": {
-    "revision": "1efec6343312dc00c63f9306d7cf5e8587bc4ae8",
+    "revision": "68acaa732b4971d5a82835fd0a44f28491422663",
     "subdirectory": "pi-wrap",
     "files": {
       "pi_host.py": "e087a60a3249bf742b789c73feebf1cf1ef71dfa7119ce462256f791bc826efd",
@@ -36,7 +36,7 @@
     }
   },
   "A": {
-    "revision": "1efec6343312dc00c63f9306d7cf5e8587bc4ae8",
+    "revision": "68acaa732b4971d5a82835fd0a44f28491422663",
     "subdirectory": "agentd",
     "files": {
       "proto.py": "583f5f4af17ecd4f45bae32faac74027275b94f19e58508e0634499df4faa2eb",
