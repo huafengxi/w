@@ -7,14 +7,14 @@ import signal
 import subprocess
 import sys
 import time
+from ordinary_process import starttime
 
 session = Path(sys.argv[sys.argv.index('--session') + 1])
 name = sys.argv[sys.argv.index('-n') + 1]
 root = session.parent
 
 def ident():
-    raw = Path('/proc/self/stat').read_text().split(') ', 1)[1].split()
-    return dict(pid=os.getpid(), start=raw[19], name=name,
+    return dict(pid=os.getpid(), start=str(starttime(os.getpid())), name=name,
                 stdio=[os.fstat(i).st_ino for i in (0, 1, 2)])
 
 
@@ -55,8 +55,7 @@ for line in sys.stdin:
     elif t == 'descendant':
         p = subprocess.Popen([sys.executable, '-c',
                               'import time; time.sleep(120)'], stdin=subprocess.DEVNULL)
-        raw = Path('/proc/%d/stat' % p.pid).read_text().split(') ', 1)[1].split()
-        (root / 'descendant.json').write_text(json.dumps(dict(pid=p.pid, start=raw[19])))
+        (root / 'descendant.json').write_text(json.dumps(dict(pid=p.pid, start=str(starttime(p.pid)))))
     elif t == 'get_entries':
         data = dict(entries=[json.loads(x) for x in session.read_text().splitlines()], leafId='leaf')
         emit(dict(type='response', id=cmd.get('id'), command=t, success=True, data=data))

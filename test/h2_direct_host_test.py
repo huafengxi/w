@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[1]
-BASE = Path(tempfile.mkdtemp(prefix='h24-'))
+BASE = Path(tempfile.mkdtemp(prefix='h24-')).resolve()
 for part in ('home', 'tmp', 'cwd', 'workspace', 'runtime'):
     (BASE / part).mkdir(mode=0o700)
 os.environ.update(HOME=str(BASE / 'home'), TMPDIR=str(BASE / 'tmp'),
@@ -31,7 +31,8 @@ from stores.dir_store import DirStore
 
 # Adopt only our own orphan fakepi/hosts to obtain real cleanup waits. This is
 # harness containment, not product supervision or a fabricated web wait fact.
-assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
+if sys.platform.startswith('linux'):
+    assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
 EVIDENCE = BASE / 'wire.jsonl'
 print('H2_ROOT=' + str(BASE), flush=True)
 
@@ -103,7 +104,9 @@ class Fixture:
         self.hostmap.write_text(socket.gethostname() + ' test\n')
         self.fake = self.root / 'fakepi'
         # Absolute existing interpreter; not /usr/bin/env and no real pi fallback.
-        self.fake.write_text('#!' + sys.executable + '\n' + (SOURCE / 'test/h2_direct_host_fakepi.py').read_text())
+        self.fake.write_text('#!' + sys.executable + '\nimport sys; sys.path.insert(0, ' +
+                             repr(os.environ['H2_P_SOURCE']) + ')\n' +
+                             (SOURCE / 'test/h2_direct_host_fakepi.py').read_text())
         self.fake.chmod(0o700)
         self.options = dict(runtime=str(BASE / 'runtime'), host_entry=str(Path(os.environ['H2_P_SOURCE']) / 'pi_host.py'),
                             agentd=os.environ['H2_A_SOURCE'], stop_timeout=.25)
@@ -226,6 +229,7 @@ class Acceptance(unittest.TestCase):
         self.assertTrue(c2.request(op='attach')['body']['ok'])
         record(reconnectedReload=reload_result, harnessOnlyOrphanWait=waits)
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'harness requires Linux subreaper wait for orphan P')
     def test_B_pump_replacement_and_concurrent_webs(self):
         # Two independent processes race through original declaration + Bridge.
         c1, c2 = Client(self.f), Client(self.f)
@@ -383,6 +387,7 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(self.f.life.load()['phase'], 'fenced')
         record(timeout=self.f.life.status(), injection='stale start and PermissionError are explicit injections')
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'harness requires Linux subreaper wait for orphan descendant')
     def test_C_known_descendants_stop_and_missing_wait(self):
         d = self.start()
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

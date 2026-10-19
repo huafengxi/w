@@ -1,4 +1,4 @@
-"""Unwired Linux ordinary-host candidate, task/4aqn6z.
+"""Unwired Linux/Darwin ordinary-host candidate, task/w-mac-01a151c5.
 
 Only tests explicitly install this factory. No default module imports this file.
 See h2_direct_host.md for the cooperative local-process contract and exclusions.
@@ -8,6 +8,7 @@ from contextvars import ContextVar
 import ctypes
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -29,7 +30,26 @@ from ext.sessiond.rpc import api
 
 _EXPECTED = ContextVar('h2_expected_instance', default=None)
 _LIBC = ctypes.CDLL(None, use_errno=True)
-_BOOT = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+_PROCESS_TOOLS = None
+
+
+def configure_process_tools(host_entry):
+    """Load the process tools beside the explicitly selected ordinary P.
+
+    One fixed P tool source per web process, never a PATH/platform fallback.
+    The caller's manifest pins both host_entry and ordinary_process.py.
+    """
+    global _PROCESS_TOOLS
+    source = Path(host_entry).resolve().with_name('ordinary_process.py')
+    if _PROCESS_TOOLS is not None:
+        if Path(_PROCESS_TOOLS.__file__).resolve() != source:
+            raise RuntimeError('conflicting ordinary process tool source')
+        return
+    spec = importlib.util.spec_from_file_location('_w_ordinary_process', source)
+    tools = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tools)
+    tools.boot_id()  # unsupported platform/errors fail before any launch
+    _PROCESS_TOOLS = tools
 _ORIGINAL_SUPERVISOR = P.Supervisor
 _ORIGINAL_BRIDGE = B.Bridge
 
@@ -45,15 +65,9 @@ def atomic(path, obj):
 
 def identity(pid):
     """Missing is exited; unreadable/malformed is an error, never 'dead'."""
-    try:
-        raw = Path('/proc/%d/stat' % pid).read_text()
-        uid = os.stat('/proc/%d' % pid).st_uid
-    except FileNotFoundError:
-        return None
-    fields = raw[raw.rfind(')') + 2:].split()
-    return dict(pid=int(pid), start=fields[19], boot=_BOOT, uid=uid,
-                pgid=int(fields[2]), sid=int(fields[3]),
-                ppid=int(fields[1]), state=fields[0])
+    if _PROCESS_TOOLS is None:
+        raise RuntimeError('ordinary process tool source not configured')
+    return _PROCESS_TOOLS.identity(pid)
 
 
 def same(a, b):
@@ -66,7 +80,7 @@ def live(i):
 
 
 def pidfd_open(pid):
-    if platform.machine() not in ('x86_64', 'aarch64'):
+    if not sys.platform.startswith('linux') or platform.machine() not in ('x86_64', 'aarch64'):
         raise RuntimeError('unverified Linux pidfd ABI')
     n = _LIBC.syscall(434, int(pid), 0)
     if n < 0:
@@ -80,8 +94,14 @@ def pidfd_signal(fd, sig):
 
 
 def signal_identity(expected, sig):
-    if expected['boot'] != _BOOT:
+    if expected['boot'] != _PROCESS_TOOLS.boot_id():
         raise RuntimeError('boot identity mismatch')
+    if sys.platform == 'darwin':
+        # Explicitly accepted check-then-kill race; not an atomic object handle.
+        if not same(identity(expected['pid']), expected):
+            raise RuntimeError('process identity mismatch')
+        os.kill(expected['pid'], sig)
+        return
     fd = pidfd_open(expected['pid'])
     try:
         if not same(identity(expected['pid']), expected):
@@ -92,14 +112,7 @@ def signal_identity(expected, sig):
 
 
 def group_members(host):
-    # Fail closed on unreadable proc entries; races with exit are normal.
-    members = []
-    for p in Path('/proc').iterdir():
-        if p.name.isdecimal():
-            i = identity(int(p.name))
-            if live(i) and i['pgid'] == host['pgid'] and i['sid'] == host['sid']:
-                members.append(i)
-    return members
+    return _PROCESS_TOOLS.group_members(host)
 
 
 def private_dir(path):
@@ -117,6 +130,7 @@ class Lifecycle:
     def __init__(self, session, name, cwd, runtime, host_entry, agentd, env,
                  pi_binary, extensions=(), claim=P._claim_origin, truncate=None,
                  prepare=None, stop_timeout=3):
+        configure_process_tools(host_entry)
         self.session = str(Path(session).resolve())
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9._-]+', name) or name in ('.', '..'):
             raise ValueError('ordinary name must remain a legal participant short name')
@@ -452,7 +466,7 @@ class DirectSupervisor(_ORIGINAL_SUPERVISOR):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             s.connect(self.life.sock)
-            peer, uid, _gid = struct.unpack('3i', s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            peer, uid, _gid = _PROCESS_TOOLS.peer_credentials(s)
             with self.life.lock():
                 now = self.life.load()
                 if (now['instance'] != d['instance'] or now.get('fence') or uid != os.getuid()

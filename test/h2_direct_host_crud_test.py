@@ -16,7 +16,7 @@ import time
 import unittest
 
 W = Path(__file__).resolve().parents[1]
-BASE = Path(tempfile.mkdtemp(prefix='hc-'))
+BASE = Path(tempfile.mkdtemp(prefix='hc-')).resolve()
 for n in ('home', 'tmp', 'cwd', 'rt'):
     (BASE / n).mkdir(mode=0o700)
 os.environ.update(HOME=str(BASE/'home'), TMPDIR=str(BASE/'tmp'), W_WORKSPACE=str(BASE),
@@ -24,7 +24,9 @@ os.environ.update(HOME=str(BASE/'home'), TMPDIR=str(BASE/'tmp'), W_WORKSPACE=str
 os.chdir(BASE/'cwd')
 sys.path[:0] = [str(W), str(W/'test')]
 import h2_direct_host as H
-assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
+H.configure_process_tools(Path(os.environ['H2_P_SOURCE']) / 'pi_host.py')
+if sys.platform.startswith('linux'):
+    assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
 print('CRUD_ROOT='+str(BASE), flush=True)
 
 
@@ -84,7 +86,7 @@ class Fixture:
                       ('task',dict(form='task')),('escape',dict(form='interactive',cwd='../escape'))]:
             (p/(n+'.json')).write_text(json.dumps(doc))
         self.hostmap=self.root/'host-id';self.hostmap.write_text(socket.gethostname()+' test\n')
-        self.fake=self.root/'fakepi';self.fake.write_text('#!'+sys.executable+'\n'+(W/'test/h2_direct_host_fakepi.py').read_text());self.fake.chmod(0o700)
+        self.fake=self.root/'fakepi';self.fake.write_text('#!'+sys.executable+'\nimport sys; sys.path.insert(0, '+repr(os.environ['H2_P_SOURCE'])+')\n'+(W/'test/h2_direct_host_fakepi.py').read_text());self.fake.chmod(0o700)
         self.runtime=BASE/'rt'/__import__('hashlib').sha256(key.encode()).hexdigest()[:4];self.runtime.mkdir(mode=0o700)
         self.options=dict(runtime=str(self.runtime),host_entry=str(Path(os.environ['H2_P_SOURCE'])/'pi_host.py'),
                           agentd=os.environ['H2_A_SOURCE'],stop_timeout=.3)

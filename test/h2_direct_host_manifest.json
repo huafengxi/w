@@ -1,6 +1,8 @@
 {
-  "taskId": "W-ordinary-CRUD-B1-B2-repair-r1",
-  "parent_candidate": "e8078e82a9c4ae1785a5bc44f74e56f24b0ec738",
+  "taskId": "w-mac-01a151c5",
+  "parent_candidate": "ae9465b8e5d0789984cbcdabc39b64db239720f9",
+  "platform_tests": "test/h2_direct_host_platform_test.py",
+  "darwin_stop": "identity check then PID kill; accepted check-to-kill reuse race, not atomic targeting",
   "repair_countercontrols": {
     "suite": "test/h2_direct_host_repair_test.py",
     "B1": "registration completion published after real inbox mkdir; revalidated at cached startup/send/change",
@@ -15,13 +17,14 @@
     "fences": ["captured registration UUID", "captured actual host instance or explicit unstarted"]
   },
   "W_base": "1c3775c3be70bee8f6b8efe23a9310424a575922",
-  "candidate_ref": "refs/heads/candidate/w-ordinary-crud-fix-W-ordinary-CRUD-B1-B2-repair-r1",
-  "contract": "Linux private stable runtime root, cooperative foreground local tree; no receiver/model/production PASS",
+  "candidate_ref": "refs/heads/candidate/w-mac-01a151c5",
+  "contract": "Linux/Darwin private stable runtime root, cooperative foreground local tree; no receiver/model/production PASS",
   "P": {
-    "revision": "89f40cc235e4e9e51b2b489124031697a3e23222",
+    "revision": "4b6ca1bb9fefe894f8d3245abda7f9ce87370eeb",
     "files": {
-      "pi_host.py": "e7eab7328826d9f60598204e1ddd811e57b73b7d2be5d3a80797ef69f9d6f2fc",
-      "transport.py": "d35c3d6feb21b448f6e6c541a114a8ec1867a27bafd1c87645f3efb9e7606e5c",
+      "pi_host.py": "8efc03ec8796cbcc87f1596653e419868f45b7f4809761462c9913ee3d8aa841",
+      "transport.py": "9d9124e63ae4acff2691269d80c81aa932f38890c0f89d3f11e524a7f4dcd294",
+      "ordinary_process.py": "f296713b93ade252f8773d30e102f7e063c93bdeb64f773b32d5b44f3281d5db",
       "agentd_dependency.py": "a2119ca74bf51647d261f07bb082024791892ba9cc90bca2387c8c65d83d6451"
     }
   },
