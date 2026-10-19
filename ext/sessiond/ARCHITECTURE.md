@@ -182,5 +182,5 @@ frame 容器校验同源与已挂载子 iframe 身份后，重新获取完整列
 | rpc/、view/ | HTTP/SSE 与浏览器界面 |
 
 装配传递显式 client_factory/bridge_factory，不替换导入模块的函数或类。
-旧 proc.py、ordinary_host.py、ordinary_registry.py 与直接 PIPE Supervisor 已删除，无转发兼容壳。
+普通链路由独立 P 唯一持有 pi PIPE；客户端与文件操作层不承接其职责。
 独立 P 由调用方配置宿主入口；不属于 Web 仓，不反向依赖本目录。

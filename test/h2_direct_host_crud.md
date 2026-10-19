@@ -23,7 +23,7 @@ The old 13-test suite remains intact and runs separately, not renamed as CRUD.
   hash-checked (manifest); no caller implementation is copied into W.
 - `api.interp` list_sessions/session_tabs/rename_session/delete_session -> same
   original API validation, result/HTTP shapes and title/tab formatting -> injected
-  proc list/rename or Bridge delete entry. Original `bridge.get_bridge` resolves
+  Registry rows/rename/delete entry. `Registry.get_bridge` resolves
   declarations and creates the same Bridge/RPC channel through an explicit factory.
 - `api_call(... expected_instance=..., expected_registration=...)` captures the
   server-side test fences. This is NOT a change to default HTTP arguments, and

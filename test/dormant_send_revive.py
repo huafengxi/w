@@ -24,7 +24,7 @@ def check(name, cond, detail=""):
 
 
 class StubSup:
-    """最小监督员替身：接口面对齐 `proc.Supervisor` 被 `Bridge.send` 用到的三枚
+    """最小监督员替身：接口面对齐 `client.Client` 被 `Bridge.send` 用到的三枚
     （`ensure_started` / `wait_ready` / `send`）+ `state`。
 
     `revive_after` = `ensure_started` 后多少秒翻成 running（None = 永不就位）；
@@ -48,7 +48,7 @@ class StubSup:
 
     def _settle(self):
         """按 revive_after 翻态（模拟监督线程 spawn 完成的时刻）。
-        永久关闭（closed）⇒ 永久关闭、不能再次启动（同 proc.py 口径）。"""
+        永久关闭（closed）⇒ 永久关闭、不能再次启动（同 client.py 口径）。"""
         if self.closed or self.revive_after is None or self._t0 is None:
             return
         if time.monotonic() - self._t0 >= self.revive_after:
@@ -56,7 +56,7 @@ class StubSup:
             self.state = "running"
 
     def wait_ready(self, timeout=1.0):
-        # 缺省窗压到 1s（真实现 = proc.py 的 25s）：只为夹具快，钉的是「等/不等」而非窗口长度。
+        # 缺省窗压到 1s（真实现 = client.py 的 25s）：只为夹具快，钉的是「等/不等」而非窗口长度。
         deadline = time.monotonic() + timeout
         with self._cond:
             while True:

@@ -52,13 +52,13 @@ def pid_identity_ok(pid, expected_start):
 
 
 class AgentClient:
-    """连接透传 socket 的任务会话监督者（接口面对齐 Supervisor 的桥接消费面）。"""
+    """连接透传 socket 的任务会话监督者（接口面对齐普通客户端的桥接消费面）。"""
 
     CONNECT_WINDOW = 25.0    # 首次连接等待窗（对齐 wait_ready 缺省口径）
     CONNECT_RETRY = 0.3
 
     def __init__(self, session_path, on_event, sock_path, participant_id=None):
-        # 路径处理与 Supervisor 同口径（兼容站内路径与已解析绝对路径）。
+        # 路径处理与普通客户端同口径（兼容站内路径与已解析绝对路径）。
         if os.path.isabs(session_path) and session_path.endswith(".jsonl"):
             rp = os.path.realpath(session_path)
             roots = [S.WS_REAL, os.path.realpath(os.path.join(S.WS, "run"))]
@@ -201,7 +201,7 @@ class AgentClient:
             self._sock = None
         log.info("socket supervisor ended (%s): %s", reason, self.name)
         # 先入环广播再摘桥：订阅者能看到终态帧，之后流自然终结（前端重连后
-        # 重新路由——终态任务落入普通复活路径）。
+        # 重新核验登记——终态任务拒绝普通复活）。
         self._broadcast({"type": "agentd.task_ended", "session": self.name,
                          "reason": reason})
         if self.on_lost is not None:
@@ -221,7 +221,7 @@ class AgentClient:
 #
 # 打开 /agents/(task|bot)/<名>/session/session.jsonl 时按 pid.json 判路由；
 # 用户硬约束（2026-09-03）：凡 agentd 登记者（有 spec.json）web/sessiond **零启动**——
-# 只桥接透传、永不 spawn，三态全不落普通 Supervisor：
+# 只桥接透传、永不 spawn，三态均不启动普通宿主：
 #   活 socket 在场（sock 字段 ∧ (pid,procStart) 身份一致 ∧ 可连） → AgentClient 直播
 #   已终态（final）                              → 拒绝并指引（生命周期归 agentd）
 #   缺席（无 pid.json ∨ 进程身份消失 ∧ 无 sock）  → 等待提示（拉起权单点 = agentd）

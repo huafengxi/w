@@ -18,7 +18,7 @@
   },
   "crud": {
     "factory": "test/h2_direct_host_crud.py:installed",
-    "caller_cli_sha256": "de5324b82a1831b0fad8b9b8897db3c529cde9c8cc6fec23f147862a6c48bac0",
+    "caller_cli_sha256": "6b4e3bfff40a415611133f776e4080f6bf5af698ca530107e8d685db62ebb30e",
     "delete_files": [
       "exact .agent",
       "exact .jsonl"

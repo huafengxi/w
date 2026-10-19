@@ -173,7 +173,7 @@ old implementation, and are **not** migrated or safe to expose as candidate
 control APIs. `shutdown` in this injected supervisor means web detach, not a
 lifecycle stop; explicit stop requires its token. The test-only api_call returns
 501 for delete_session and shutdown(delete_session) returns an error, so original
-bridge.drop_session cannot misreport a detach as a verified kill. Delete migration
+bridge.detach_session never reports a detach as a verified kill. Delete migration
 is a separate full-H2 follow-on. No default route uses this factory.
 
 ## Retained original H2 matrix / nonclaims

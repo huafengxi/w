@@ -4,8 +4,8 @@
 The CLI consumes the same caller web profile and configures the same factories.
 Production never imports the H2 test adapters or unittest.mock. Missing/bad
 service configuration fails startup; there is no silent fallback to W-owned pi
-PIPEs. The ordinary Client owns only the socket. There is no retained direct-PIPE
-Supervisor or module-attribute factory replacement.
+PIPEs. The ordinary Client owns only the socket. Registry explicitly passes runtime
+factories to Bridge; the independent P owns pi PIPEs.
 
 Required caller inputs are W_SESSION_HOST_ENTRY (independent P's pi_host.py) and
 W_SESSION_RUNTIME (resolved to a short, canonical, private local directory), plus the existing

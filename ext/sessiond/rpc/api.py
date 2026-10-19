@@ -68,7 +68,7 @@ def _agentd_control_proxy(b, action, reason):
 
 # 服务端恒定/自动生成/由 profile 清单派生的字段：客户端传任一 ⇒ 400 显式拒绝（⛔ 不只是忽略）。
 # 两枚变更 op 只控 `session`/`title`/`confirm`：`profile` 在列 = 人格只在创建时定（而创建不经本层）；
-# `cwd` 在列 = 它由 profile 清单的 `cwd` 字段声明（proc.profile_cwd）；
+# `cwd` 在列 = 它由 profile 清单的 `cwd` 字段声明（sessions.profile_cwd）；
 # `command` 在列 = create_bot 时代的硬约束同族：spawn argv 的单点是
 # pi-host LaunchConfig，声明者不可控（故 .agent 字段集里根本没有这个键）。
 _SERVER_FIXED_FIELDS = ("command", "cwd", "profile", "sessionDir", "name", "host")
