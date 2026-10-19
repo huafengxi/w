@@ -73,6 +73,7 @@ run('root-guard', [sys.executable, '-B', '-c',
     "a,b=map(Path,sys.argv[2:]);assert not safe_rmtree(a,authorized_root=a)[0];"
     "assert not safe_rmtree(b,authorized_root=a)[0];assert (b/'keep').read_text()=='harmless'", str(A), str(allowed), str(outside)])
 run('P-ordinary-process', [sys.executable, '-B', str(P / 'test_ordinary_process.py')])
+run('ordinary-default', [sys.executable, '-B', str(W / 'test/ordinary_default.py')])
 run('h2-platform', [sys.executable, '-B', str(W / 'test/h2_direct_host_platform_test.py')])
 run('h2-startup-acceptance', [sys.executable, '-B', str(W / 'test/h2_direct_host_startup_test.py')])
 run('h2-acceptance', [sys.executable, '-B', str(W / 'test/h2_direct_host_test.py')])

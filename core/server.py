@@ -60,6 +60,10 @@ def main():
     logging.info('web_start: listen=%s dir=%s log=%s(%s) PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, os.getenv('PATH'), os.getenv('PYTHONPATH'))
 
     set_logging(log_file)
+    from ext.sessiond.bootstrap import configure as configure_ordinary
+    registry = configure_ordinary()  # fail before listening; no silent PIPE fallback
+    logging.info('ordinary host configured: entry=%s runtime=%s',
+                 registry.options['host_entry'], registry.options['runtime'])
     root = build_root_store(config_path('W_FSTAB', required=True), required=('/',))
     from ext.proxy.proxy import load_routes
     load_routes()  # validate supplied proxy configuration before listening

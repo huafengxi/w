@@ -19,11 +19,15 @@
 | `RSH_FWD_DIR` | 路由使用 `${RSH_FWD_DIR}` 时必填绝对 socket 目录 |
 | `W_SESSION_PROFILE` | 调用方的缺省交互 profile 名；未设置时新建须显式传 profile，仍验证 manifest 的 interactive 白名单 |
 | `W_AGENTD_DIR` | 使用 sessiond 时必填，提供 `envscrub` 模块的绝对目录；身份洗刷由该模块负责 |
+| `W_SESSION_HOST_ENTRY` | 服务必填，独立 P 的绝对入口文件；普通会话由 P 唯一持 pi PIPE |
+| `W_SESSION_RUNTIME` | 服务必填，短、canonical、0700 的宿主本地 runtime 目录；不跨机同步 |
 | `W_SESSION_PI_BIN` | 可选，sessiond 交互会话的 pi 可执行文件；缺省按 PATH 查找。整批队列操作要求 pi >=0.84.4 的 `clear_queue` RPC，安装与版本由调用方管理 |
 | `W_ORG_LOAD_PATH` | 可选，以路径分隔符连接的 Emacs 包目录 |
 | `W_ORG_AUTHOR` / `W_ORG_EMAIL` / `W_REVEAL_ROOT` | 可选，org 导出元数据和 reveal 资源 URL |
 
 BasicAuth 包裹所有业务请求（含代理）。DEBUG 日志复用 handler 的 secret 脱敏。sessiond 接受站内路径并保留 realpath 根校验：workspace 与其 run 目录是会话白名单，项目 cwd 还须属于顶层 git 项目；软链逃逸拒绝。探针继承 `W_WORKSPACE` 并在 workspace/run 下写侧车。
+
+普通会话默认工厂与 HTTP/CLI 接线、启动后 peer/get_state 验收、无文件锁及历史迁移见 [sessiond/ORDINARY.md](ext/sessiond/ORDINARY.md)。agent task/bot 仍经原 SocketSupervisor 路由，不转给普通生命周期。
 
 ## shell 路由
 

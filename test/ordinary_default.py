@@ -1,0 +1,118 @@
+"""Default HTTP/CLI factory with fake pi, no installed()/patch/test runtime import."""
+import ctypes
+import importlib.util
+import json
+import os
+import signal
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import tempfile
+import unittest
+
+W = Path(__file__).resolve().parents[1]
+CHILD = r'''
+import importlib.util,json,os,pathlib,sys
+sys.path.insert(0,sys.argv[1])
+from ext.sessiond.bootstrap import configure
+from ext.sessiond import proc as P,bridge as B
+from ext.sessiond.rpc import api
+from ext.sessiond import ordinary_host as H,ordinary_registry as C
+from stores.store import RootStore
+from stores.dir_store import DirStore
+assert not pathlib.Path(os.environ['W_SESSION_RUNTIME']).exists()
+registry=configure(required=False)
+assert P.list_cc_sessions()==[]
+assert not pathlib.Path(os.environ['W_SESSION_RUNTIME']).exists(),'CLI list must not create runtime state'
+assert configure() is registry
+assert not any(n in sys.modules for n in ('h2_direct_host','h2_direct_host_crud','unittest.mock'))
+store=RootStore([('/',DirStore(P.WS))])
+def call(**args):
+ meta,body=api.interp(store,**args);return json.loads(body)
+spec=importlib.util.spec_from_file_location('deployment_cli',sys.argv[2]);cli=importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)
+assert cli._proc() is P
+created=P.create_cc_session('good');name=created['name'];site=created['agent_site']
+a=call(op='attach',session=site);assert a['ok'],a
+first=a['gen'];b=B.get_bridge(site,store=store)
+assert b.sup.status_doc()['mode']=='ordinary-direct-host'
+assert b.sup.life.load()['startupAcceptance']['success'] is True
+assert 'AGENTD_DIR' not in json.loads((b.sup.life.local/first/'declaration.json').read_text())['env']
+r=call(op='reload',session=site,expected_instance=first);assert r['ok'],r
+assert r['gen']!=first
+stale=call(op='clear',session=site,expected_instance=first);assert not stale['ok'],stale
+r=call(op='clear',session=site,expected_instance=r['gen']);assert r['ok'],r
+r=call(op='delete_session',session=site,confirm='1',expected_instance=r['gen']);assert r['ok'] and r['process']['settled'],r
+assert not pathlib.Path(P.session_files(name)[0]).exists()
+unstarted=P.create_cc_session('good')
+assert call(op='delete_session',session=unstarted['agent_site'],confirm='1')['ok']
+# Old history without an explicit offline import must remain unknown.
+old=P.create_cc_session('good');doc,path,history=registry.declaration(old['name'])
+raw=(json.dumps(dict(type='session',cwd=P.WS))+'\n'+json.dumps(dict(type='message',id='preserved'))+'\n').encode();history.write_bytes(raw)
+life=registry.life(old['name'],doc,history)
+assert not call(op='attach',session=old['agent_site'])['ok']
+st=history.stat();H.atomic(life.local/'imported-history.json',dict(binding=life.binding,history=[st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns]))
+opened=call(op='attach',session=old['agent_site']);assert opened['ok'],opened
+assert history.read_bytes()==raw
+current=life.load();life.current.unlink()
+assert not C.imported_history(life),'a lost new record must never reuse the import marker'
+H.atomic(life.current,current)
+assert call(op='delete_session',session=old['agent_site'],confirm='1',expected_instance=opened['gen'])['ok']
+assert not list(pathlib.Path(registry.options['runtime']).rglob('*.lock'))
+print(json.dumps(dict(ok=True,defaultMode='ordinary-direct-host',noTestImports=True,startupAcceptance=True,staleFenceRejected=True,historyPreserved=True,lostRecordRemainsUnknown=True)))
+'''
+
+
+class DefaultFactory(unittest.TestCase):
+    def test_default_http_cli_and_explicit_history_import(self):
+        root = Path(tempfile.mkdtemp(prefix='wp-default-', dir='/tmp')).resolve()
+        print('DEFAULT_ROOT=' + str(root), flush=True)
+        ws = root / 'ws'; (ws / 'bots/profiles').mkdir(parents=True)
+        (ws / 'bots/profiles/good.json').write_text(json.dumps(dict(form='interactive', cwd='.')))
+        hostmap = root / 'host-id'; hostmap.write_text(socket.gethostname() + ' test\n')
+        fake = root / 'fakepi'
+        fake.write_text('#!' + sys.executable + '\nimport sys;sys.path.insert(0,' + repr(os.environ['H2_P_SOURCE']) + ')\n' + (W / 'test/h2_direct_host_fakepi.py').read_text())
+        fake.chmod(0o700)
+        home = root / 'home'; home.mkdir()
+        env = dict(HOME=str(home), TMPDIR=str(root), PATH=os.defpath, PYTHONDONTWRITEBYTECODE='1',
+                   W_WORKSPACE=str(ws), W_AGENTD_DIR=os.environ['H2_A_SOURCE'], W_HOST_ID_FILE=str(hostmap),
+                   W_SESSION_PI_BIN=str(fake), W_SESSION_HOST_ENTRY=str(Path(os.environ['H2_P_SOURCE'])/'pi_host.py'),
+                   W_SESSION_RUNTIME=str(root/'runtime'))
+        if sys.platform.startswith('linux'):
+            self.assertEqual(ctypes.CDLL(None).prctl(36,1,0,0,0),0)
+        try:
+            result = subprocess.run([sys.executable,'-B','-c',CHILD,str(W),os.environ['H2_CLI_SOURCE']],
+                                    cwd=root,env=env,text=True,capture_output=True,timeout=25)
+            (root/'stdout').write_text(result.stdout); (root/'stderr').write_text(result.stderr)
+        finally:
+            spec=importlib.util.spec_from_file_location('fixture_process',Path(os.environ['H2_P_SOURCE'])/'ordinary_process.py')
+            tools=importlib.util.module_from_spec(spec);spec.loader.exec_module(tools)
+            known=[]
+            for record in (root/'runtime').glob('*/*/record.json'):
+                d=json.loads(record.read_text())
+                known.extend(d.get('known',[]))
+                known.extend(d[k] for k in ('host','child') if d.get(k))
+            for i in known:
+                now=tools.identity(i['pid'])
+                if now and all(now[k]==i[k] for k in ('pid','start','boot','uid','pgid','sid')) and now['state'] not in ('Z','X'):
+                    sys.path.insert(0,str(W))
+                    from ext.sessiond.ordinary_host import configure_process_tools,signal_identity
+                    configure_process_tools(Path(os.environ['H2_P_SOURCE'])/'pi_host.py')
+                    signal_identity(i,signal.SIGKILL)
+            for pid in {i['pid'] for i in known}:
+                try:os.waitpid(pid,0)
+                except ChildProcessError:pass
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertTrue(json.loads(result.stdout.strip().splitlines()[-1])['ok'])
+
+    def test_server_configuration_missing_is_not_a_pipe_fallback(self):
+        env = dict(HOME='/tmp',PATH=os.defpath,PYTHONDONTWRITEBYTECODE='1')
+        result = subprocess.run([sys.executable,'-B','-c',
+            "import sys;sys.path.insert(0,sys.argv[1]);from ext.sessiond.bootstrap import configure;configure()",str(W)],
+            env=env,text=True,capture_output=True,timeout=5)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('W_SESSION_RUNTIME',result.stderr)
+
+
+if __name__=='__main__':
+    unittest.main(verbosity=2)

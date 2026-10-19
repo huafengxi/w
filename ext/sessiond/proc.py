@@ -484,7 +484,7 @@ def new_session_name():
     return "".join(random.choices(SESSION_NAME_ALPHABET, k=4))
 
 
-def create_cc_session(profile=CC_PROFILE):
+def create_cc_session(profile=CC_PROFILE, *, name_factory=None):
     """新建一枚指挥中心临时会话 = 现场写 `run/sessiond/<name>.agent`。
     字段集（全部服务端恒定 ∨ 自动生成 ∨ 由 profile 清单派生）：
       `host`       = 本机规范名（`env/host-id` 查表；不可得 ⇒ 拒绝，⛔ 不猜）
@@ -510,7 +510,7 @@ def create_cc_session(profile=CC_PROFILE):
         raise ValueError("sessions dir escapes the workspace roots: %s" % sdir)
     # 有界选名；最后以同目录link原子无覆盖发布，不能只靠此前exists检查。
     for _ in range(SESSION_NAME_TRIES):
-        name = new_session_name()
+        name = (name_factory or new_session_name)()
         agent_path = os.path.join(sdir, name + ".agent")
         if not os.path.exists(agent_path):
             break
@@ -597,7 +597,7 @@ def _first_user_text(content):
     return ""
 
 
-def list_cc_sessions():
+def list_cc_sessions(*, scan_hosts=True):
     """枚举本机 `run/sessiond/*.agent`（未删即列）→ 列表页/tab rpc 共用的数据面。
     每项 = {name, title, titleSource, project, cwd, state, pids, mtime, agent_site,
     session_site, profile, host}；坏文件宽容跳过（记 WARN，⛔ 不整页失败）。
@@ -639,7 +639,7 @@ def list_cc_sessions():
             "session_site": site_path_of(jsonl_path),
             "mtime": _mtime(jsonl_path) or _mtime(agent_path) or 0.0,
         })
-    live = host_map([r["jsonl"] for r in rows])
+    live = host_map([r["jsonl"] for r in rows]) if scan_hosts else {}
     out = []
     for r in rows:
         pids = sorted(live.get(r["jsonl"], []))
