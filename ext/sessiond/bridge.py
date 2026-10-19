@@ -56,6 +56,7 @@ class Bridge:
         # 桥接不清理会让 attach 基线向新 tab 重建已死 dialog → 按 deadline 清理）
         self._dialog_deadline = {}
         self.subscribers = 0                 # 当前 SSE 流订阅数
+        self.stream_wakes = set()            # multiplex streams share event notifications
         # 监督员选择（任务 ybzvbn，票 hegipc）：sock_path 在场 = rpc 封装形态任务，
         # SocketSupervisor 连接透传 socket（无杀权、不重拉）；否则普通 Supervisor spawn。
         if sock_path:
@@ -192,7 +193,12 @@ class Bridge:
             eid = "%s:%d" % (self.ns, self.seq)
             self.ring.append((self.seq, eid, obj))
             self.cond.notify_all()
+            for wake in getattr(self, 'stream_wakes', ()):
+                wake.set()
             return self.seq, eid
+
+    def stream_closed(self):
+        return self.terminated
 
     # ---- 上行 ----
 

@@ -426,6 +426,7 @@ let turnAnchor = null, baselineProcessTurn = null;
 let curAssistantBuf = "";     // 累积文本（用于 message_end 时 markdown 渲染）
 // 流状态（两层锚定：entries 基线 + 事件 ID 游标）
 let streamCtrl = null;        // AbortController
+let sharedStreamWorker = null, sharedStreamFailed = false;
 let streamCursor = "";        // 最后收到的事件 ID（<ns>:<seq>），续流游标
 let lastEidNum = 0;           // 事件 ID 数字部分（本地连续性检查用）
 let streamAlive = false;
@@ -782,6 +783,35 @@ function stopStream() {
   streamAlive = false;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (streamCtrl) { try { streamCtrl.abort(); } catch (e) {} streamCtrl = null; }
+  if (sharedStreamWorker) sharedStreamWorker.port.postMessage({type: "unsubscribe"});
+}
+
+function openSharedStream(my) {
+  if (typeof SharedWorker === "undefined" || sharedStreamFailed) return false;
+  try {
+    if (!sharedStreamWorker) {
+      sharedStreamWorker = new SharedWorker(PREFIX + "/w/ext/sessiond/view/stream-worker.js", "sessiond-stream-v1:" + PREFIX);
+      sharedStreamWorker.onerror = () => {
+        sharedStreamFailed = true;
+        if (attached && !sessionGone) openStream(); // Legacy transport for browsers without worker support.
+      };
+      sharedStreamWorker.port.start();
+    }
+    const token = uid();
+    sharedStreamWorker.port.onmessage = ({data}) => {
+      if (data.token !== token || my.signal.aborted || streamCtrl !== my) return;
+      if (data.type === "error") {
+        statusEpoch++; runOutcome = "unknown";
+        setChatStatus("unknown", "unknown", data.error || "事件流已断开");
+        return; // SharedWorker owns network reconnection, independently of page timers.
+      }
+      lastStreamAt = Date.now();
+      if (data.type === "open") refreshChatStatus(my);
+      if (data.type === "frame") drainFrames(data.frame);
+    };
+    sharedStreamWorker.port.postMessage({type: "subscribe", session: attached, since: streamCursor || "", token});
+    return true;
+  } catch (_) { sharedStreamFailed = true; return false; }
 }
 
 function openStream() {
@@ -790,6 +820,7 @@ function openStream() {
   streamAlive = true;
   streamCtrl = new AbortController();
   const my = streamCtrl;                  // 每流身份：本流的 AbortController（任务 0830-1533-56xk）。
+  if (openSharedStream(my)) return;
   // 竞态修复：旧版用全局 streamAlive 判存活，stopStream()+openStream() 序列里旧流的
   // abort reject 进 catch 时 streamAlive 已被新流置回 true → 旧流误判真断线 → 开出并行
   // 第二流，双流消费同一事件环导致消息重复渲染（Android 锁屏/切后台高频触发）。
@@ -828,6 +859,10 @@ function openStream() {
 // 补发错过的事件；环已淘汰则服务端发 webgw.gap 走既有自愈。
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && attached && !healBusy && batchDepth === 0) openStream();
+});
+window.addEventListener("pagehide", stopStream);
+window.addEventListener("pageshow", event => {
+  if (event.persisted && attached && !sessionGone && !healBusy && batchDepth === 0) openStream();
 });
 
 // 静默 watchdog（任务 0830-1452-svok）：服务端每 15s 发 keep-alive ping，前台可见却 40s

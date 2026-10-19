@@ -63,6 +63,14 @@ HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接�
 
 端点：`GET /sessiond/rpc/stream.py?session=<声明者路径>[&since=<事件ID>]`。
 
+支持 SharedWorker 的浏览器按宿主代理前缀共享一个 worker，并以
+`/sessiond/rpc/multiplex.py?subscriptions=<JSON>` 合并该宿主的会话流。
+subscriptions 为至多 32 个不同的 `{session,since}`；每个会话沿用独立游标、缺口检测与订阅限额。
+worker 将事件分发到对应页面，过滤已消费的回放；页面代际 token 丢弃旧订阅消息。
+页签关闭释放订阅，worker 统一重连；浏览器不支持 worker 时保留单会话流。
+这避免同源多个聊天页分别持有 HTTP/1.1 SSE 而占满浏览器连接槽，使状态查询和命令能继续发出。
+多路流由桥接事件唤醒，不另建读取线程或轮询会话状态；1 秒轻量 ping 用于及时发现旧流断开并释放额度。
+
 每个桥接限制订阅数；w 的 HTTP 层还对全部 SSE（包括代理响应）使用共享预算，保留普通请求的工作线程。额度不足返回 503；单桥接额度不足返回 429。
 
 订阅与共享预算由可关闭迭代器持有。正常完成、断开或未开始消费就被拒绝时都释放预约。空闲连接发送 ping 注释。

@@ -357,6 +357,15 @@ def build(options):
             with registry.lock():
                 return super().inspect(*a, **kw)
 
+        def stream_closed(self):
+            if getattr(self.sup, 'registered', False):
+                d = self.sup.life.load()
+                if d and d.get('phase') == 'deleted':
+                    with self.cond:
+                        self.terminated = True
+                        self.cond.notify_all()
+            return super().stream_closed()
+
         def iter_events(self, *args, **kwargs):
             # Reuse the original SSE wait/keepalive, no additional polling loop.
             # Remote webs see durable delete tombstones even after socket EOF.

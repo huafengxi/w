@@ -12,7 +12,7 @@ const end = html.indexOf('// ---------------- 启动：', start);
 assert(start >= 0 && end > start, 'chat script boundaries');
 const source = html.slice(start, end);
 
-function harness(pathname = '/test.jsonl') {
+function harness(pathname = '/test.jsonl', prefix = '') {
   const elements = new Map(), listeners = {}, streams = [], timers = new Map(), intervals = [];
   let timerId = 0;
   function element() {
@@ -47,7 +47,7 @@ function harness(pathname = '/test.jsonl') {
     querySelectorAll() { return []; },
   };
   const context = vm.createContext({
-    document, window: {addEventListener() {}, innerHeight: 800}, location: {pathname, origin: 'http://fixture.test'},
+    document, window: {addEventListener() {}, innerHeight: 800, __PREFIX__:prefix}, location: {pathname, origin: 'http://fixture.test'},
     console, URLSearchParams, AbortController, TextDecoder, Date, Set, Map, Promise,
     setTimeout(cb) { const id = ++timerId; timers.set(id, cb); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -96,6 +96,35 @@ test('repeated openStream aborts every replaced controller', () => {
   assert.equal(activeStreams(h).length, 1);
   h.run('stopStream()');
   assert.equal(activeStreams(h).length, 0);
+});
+
+test('shared worker follows host prefix and fences frames from replaced subscriptions', () => {
+  const names = [];
+  for (const prefix of ['/dev', '/mac']) {
+    const h = harness(prefix + '/test.jsonl', prefix);
+    let port;
+    h.context.SharedWorker = class {
+      constructor(url, name) {
+        names.push(name);
+        assert.equal(url, prefix + '/w/ext/sessiond/view/stream-worker.js');
+        this.port = port = {sent:[], start(){}, postMessage(m){this.sent.push(m);}};
+      }
+    };
+    h.run("attached='/test.jsonl';openStream();");
+    const first = port.sent.at(-1);
+    assert.equal(first.type, 'subscribe');
+    assert.equal(h.streams.length, 0, 'worker replaces the per-page HTTP stream');
+    h.run('openStream();');
+    const second = port.sent.at(-1);
+    assert.notEqual(first.token, second.token);
+    port.onmessage({data:{type:'frame',token:first.token,frame:'data: {"type":"agent_start"}\n\n'}});
+    assert.equal(h.run('chatState'), 'unknown');
+    port.onmessage({data:{type:'frame',token:second.token,frame:'data: {"type":"agent_start"}\n\n'}});
+    assert.equal(h.run('chatState'), 'busy');
+    h.run('stopStream();');
+    assert.equal(port.sent.at(-1).type, 'unsubscribe');
+  }
+  assert.notEqual(names[0], names[1], 'different worker URLs require distinct names on one origin');
 });
 
 test('foreground visibility still reconnects a normal live stream', () => {
