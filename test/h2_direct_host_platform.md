@@ -28,8 +28,9 @@ same-uid peers.
 the Darwin check-then-kill path and a real owned child's stop. Existing lifecycle
 and CRUD fixtures use the selected P helper for fakepi start facts. Only Linux
 uses prctl subreaper containment; Darwin cannot supply an adoptive harness wait
-for a process orphaned by a deliberately killed Web. Those Linux-only harness
-cases must be reported separately, not rewritten into product wait facts.
+for a process orphaned by a deliberately killed Web. Darwin uses observation
+of exit while init reaps orphans, and records no adoptive wait. The product
+assertions remain the same; harness waits must not become product wait facts.
 
 All tests retain their fresh synthetic roots. No existing user history, agent
 registration or production socket is a fixture. Platform/CRUD fakepi results do

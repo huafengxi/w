@@ -217,19 +217,22 @@ class Acceptance(unittest.TestCase):
         waits = []
         def reap_orphan():
             waits.append(os.waitpid(host['pid'], 0))
-        reaper = threading.Thread(target=reap_orphan, daemon=True)
-        reaper.start()
+        reaper = None
+        if sys.platform.startswith('linux'):
+            reaper = threading.Thread(target=reap_orphan, daemon=True)
+            reaper.start()
+        # Darwin init reaps the orphan; the harness cannot claim an adoptive wait.
         reload_result = c2.request(op='reload', expected_instance=token)
         self.assertTrue(reload_result['body']['ok'], reload_result)
-        reaper.join(3)
-        self.assertFalse(reaper.is_alive())
+        if reaper is not None:
+            reaper.join(3)
+            self.assertFalse(reaper.is_alive())
         self.f.remember()
         self.assertNotEqual(reload_result['body']['gen'], token)
         self.assertEqual((self.f.ws / 'effects').read_text(), 'one-only\n')
         self.assertTrue(c2.request(op='attach')['body']['ok'])
         record(reconnectedReload=reload_result, harnessOnlyOrphanWait=waits)
 
-    @unittest.skipUnless(sys.platform.startswith('linux'), 'harness requires Linux subreaper wait for orphan P')
     def test_B_pump_replacement_and_concurrent_webs(self):
         # Two independent processes race through original declaration + Bridge.
         c1, c2 = Client(self.f), Client(self.f)
@@ -351,7 +354,10 @@ class Acceptance(unittest.TestCase):
         # Independent harness owns this exact synthetic descendant; product
         # does not kill it or pretend to wait for pi after leader loss.
         signal_identity(descendant, signal.SIGKILL)
-        os.waitpid(descendant['pid'], 0)
+        if sys.platform.startswith('linux'):
+            os.waitpid(descendant['pid'], 0)
+        else:
+            wait_for(lambda: not live(identity(descendant['pid'])))
         self.assertTrue(self.f.life.status()['settled'])
         self.assertIsNone(self.f.life.status()['childWait'])
         new = self.f.life.operate('recover', d['instance'])
@@ -387,7 +393,6 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(self.f.life.load()['phase'], 'fenced')
         record(timeout=self.f.life.status(), injection='stale start and PermissionError are explicit injections')
 
-    @unittest.skipUnless(sys.platform.startswith('linux'), 'harness requires Linux subreaper wait for orphan descendant')
     def test_C_known_descendants_stop_and_missing_wait(self):
         d = self.start()
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

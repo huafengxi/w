@@ -98,9 +98,15 @@ def signal_identity(expected, sig):
         raise RuntimeError('boot identity mismatch')
     if sys.platform == 'darwin':
         # Explicitly accepted check-then-kill race; not an atomic object handle.
-        if not same(identity(expected['pid']), expected):
+        actual = identity(expected['pid'])
+        if actual is None:
+            return  # already gone; absence is not a reused identity
+        if not same(actual, expected):
             raise RuntimeError('process identity mismatch')
-        os.kill(expected['pid'], sig)
+        try:
+            os.kill(expected['pid'], sig)
+        except ProcessLookupError:
+            pass  # exited after the check; stop observation still confirms closure
         return
     fd = pidfd_open(expected['pid'])
     try:

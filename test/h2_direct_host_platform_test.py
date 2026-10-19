@@ -42,6 +42,17 @@ class PlatformStop(unittest.TestCase):
                 H.signal_identity(self.expected, signal.SIGTERM)
             kill.assert_not_called()
 
+    def test_already_exited_never_kills(self):
+        with patch.object(H.sys, 'platform', 'darwin'), patch.object(H, 'identity', return_value=None), \
+                patch.object(H.os, 'kill') as kill:
+            H.signal_identity(self.expected, signal.SIGTERM)
+            kill.assert_not_called()
+
+    def test_exited_between_check_and_kill_is_harmless(self):
+        with patch.object(H.sys, 'platform', 'darwin'), patch.object(H, 'identity', return_value=self.expected), \
+                patch.object(H.os, 'kill', side_effect=ProcessLookupError):
+            H.signal_identity(self.expected, signal.SIGTERM)
+
     def test_wrong_boot_never_kills(self):
         with patch.object(H.os, 'kill') as kill:
             with self.assertRaisesRegex(RuntimeError, 'boot identity mismatch'):
