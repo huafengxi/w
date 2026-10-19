@@ -8,7 +8,7 @@ import socket
 import unittest
 from unittest.mock import patch
 
-from h2_direct_host_test import Fixture, record
+from h2_direct_host_test import Fixture, record, wait_for
 import h2_direct_host as H
 
 
@@ -76,7 +76,11 @@ class StartupAcceptance(unittest.TestCase):
         (self.f.ws / 'startup-mode').write_text(mode)
         accept = self.life._accept_start
         def bounded(d):
-            self.life.startup_timeout = .2  # facts already obtained before this
+            # Fixture-only: wait until the fake interpreter has initialized so
+            # the short injected RPC timeout tests the chosen response mode,
+            # not platform-dependent Python startup latency after P's facts.
+            wait_for(lambda: (self.f.ws / 'ready.json').exists())
+            self.life.startup_timeout = .5
             return accept(d)
         with patch.object(self.life, '_accept_start', side_effect=bounded):
             with self.assertRaises(RuntimeError):
