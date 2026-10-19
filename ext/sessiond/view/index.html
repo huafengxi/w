@@ -817,7 +817,7 @@ function openStream() {
     .catch(e => {
       if (my.signal.aborted) return;      // 主动 abort（被新流顶替/停止）→ 不重连（防孤儿流，0830-1533-56xk）
       if (streamCtrl !== my) return;      // 双保险：已不是当前这一代流，无权发起重连（0830-1533-56xk）
-      statusEpoch++; runOutcome = "unknown"; setChatStatus("unknown");
+      statusEpoch++; runOutcome = "unknown"; setChatStatus("unknown", "unknown", e.message || "事件流已断开");
       reconnectTimer = setTimeout(openStream, 1500);   // 真断线，静默重连（防刷屏）
     });
 }
@@ -1585,6 +1585,7 @@ function clearPendingDialogs() {
 
 // ---------------- Chat lifecycle / historical editing / batch queue ----------------
 let chatState = "unknown", chatPhase = "unknown", statusEpoch = 0, statusRequest = 0, runOutcome = "success";
+let chatStatusDetail = "";
 // Only current lifecycle events populate this set; never inspect historical tool DOM.
 const statusTools = new Set(), statusCoordinatorWaits = new Set();
 let queueBatchBusy = false, historyEdit = null, editSubmitting = false;
@@ -1601,7 +1602,8 @@ function paintChatStatus() {
   const [icon, fallback] = CHAT_STATES[state] || CHAT_STATES.unknown;
   const label = state === "busy" ? CHAT_PHASES[chatPhase] || fallback : fallback;
   const displayLabel = state === "success" ? "就绪" : label;
-  const el = $("chatStatus"); el.title = displayLabel;
+  const el = $("chatStatus");
+  el.title = state === "unknown" && chatStatusDetail ? displayLabel + "：" + chatStatusDetail : displayLabel;
   const displayIcon = state === "success" ? "○" : icon;
   if ($("chatStatusIcon").textContent !== displayIcon) $("chatStatusIcon").textContent = displayIcon;
   if ($("chatStatusText").textContent !== displayLabel) $("chatStatusText").textContent = displayLabel;
@@ -1625,8 +1627,9 @@ function paintSendButton() {
     || (!!historyEdit && (editSubmitting || turnActive || Object.keys(pendingDialogs).length > 0
       || !["ready", "success", "failed", "stopped"].includes(chatState)));
 }
-function setChatStatus(state, phase = "unknown") {
+function setChatStatus(state, phase = "unknown", detail = "") {
   chatState = state; chatPhase = phase;
+  chatStatusDetail = state === "unknown" ? detail : "";
   if (state !== "busy") { statusTools.clear(); statusCoordinatorWaits.clear(); }
   paintChatStatus();
   // Close live process ownership at a known terminal; history carries no status.
@@ -1663,7 +1666,7 @@ async function refreshChatStatus(controller) {
     // Snapshot busy has no phase. Only a live structured wait in this connection
     // survives it; disconnect/new run/terminal clears that wait, never restore from DOM.
     setChatStatus(r.busy ? "busy" : r.state);
-  } catch (_) { if (current()) setChatStatus("unknown"); }
+  } catch (e) { if (current()) setChatStatus("unknown", "unknown", e.message || "会话状态查询失败"); }
 }
 function updateChatStatus(o) {
   const t = o.type, m = o.message || {};
@@ -1708,6 +1711,7 @@ function updateChatStatus(o) {
   if (t === "response" && o.command === "abort" && o.success) {
     statusEpoch++; runOutcome = "stopped";
     if (!turnActive && chatState !== "unknown") setChatStatus("stopped");
+    else refreshChatStatus(streamCtrl);
   }
   if (t === "agent_settled") {
     statusEpoch++; turnActive = false; clearPendingDialogs(); setChatStatus(runOutcome);

@@ -368,6 +368,35 @@ test('manual compaction stays busy then uses authority; idle abort becomes neutr
   assert.equal(h.run('chatState'), 'stopped');
 });
 
+test('abort receipt restores unknown state without requiring settled or reconnect', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';turnActive=true;setChatStatus('unknown');
+    globalThis.queries=0;api=async(op)=>{if(op==='chat_state')queries++;
+      return {ok:true,state:'stopped',busy:false,pendingDialogs:[]};};
+    handleEvent({type:'response',command:'abort',success:true});
+    await Promise.resolve();await Promise.resolve();})()`);
+  assert.equal(h.run('queries'), 1);
+  assert.equal(h.run('chatState'), 'stopped');
+  assert.equal(h.run('turnActive'), false);
+});
+
+test('abort snapshot cannot overwrite a newer queued run; state failures explain unknown', async () => {
+  const h = harness();
+  await h.run(`(async()=>{attached='/test.jsonl';turnActive=true;
+    api=()=>new Promise(r=>globalThis.resolveState=r);
+    handleEvent({type:'response',command:'abort',success:true});
+    handleEvent({type:'agent_start'});
+    resolveState({ok:true,state:'stopped',busy:false,pendingDialogs:[]});
+    await Promise.resolve();await Promise.resolve();})()`);
+  assert.equal(h.run('chatState'), 'busy');
+  await h.run(`(async()=>{api=async()=>({ok:false,error:'RPC timeout; delivery unknown'});
+    await refreshChatStatus();})()`);
+  assert.equal(h.run('chatState'), 'unknown');
+  assert.match(h.elements.get('chatStatus').title, /RPC timeout/);
+  h.run("setChatStatus('ready');");
+  assert.equal(h.elements.get('chatStatus').title, '就绪');
+});
+
 test('new queue snapshot and new optimistic send survive an in-flight clear', async () => {
   const h = harness();
   await h.run(`(async()=>{attached='/test.jsonl';let resolve;
@@ -428,7 +457,8 @@ test('historical rejection preserves edited payload, no automatic follow-up', as
 function status(h, label, active) {
   if (label === '已成功完成') label = '就绪';
   assert.equal(h.run("$('chatStatusText').textContent"), label, 'footer carries the visible status');
-  assert.equal(h.run("$('chatStatus').title"), label);
+  const detail = label === '连接状态未知' ? h.run('chatStatusDetail') : '';
+  assert.equal(h.run("$('chatStatus').title"), detail ? label + '：' + detail : label);
   assert.equal(h.run("$('chatStatus')['aria-label']"), label);
   if (active !== undefined) assert.equal(h.run('turnActive'), active);
 }
