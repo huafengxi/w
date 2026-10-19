@@ -2,7 +2,6 @@
 import os
 from pathlib import Path
 import threading
-from pathlib import Path
 
 from core.config import path as config_path
 
@@ -23,15 +22,20 @@ def configure(*, required=True):
     if not Path(options['host_entry']).is_file():
         raise ValueError('configured independent P entry does not exist')
     with _LOCK:
-        from ext.sessiond.ordinary_host import private_dir
+        from ext.sessiond.lifecycle import private_dir
         if required:
             private_dir(options['runtime'])  # service startup, not an autorun list request
         if _REGISTRY is not None:
             if _REGISTRY.options != options:
                 raise RuntimeError('ordinary host configuration changed inside one process')
             return _REGISTRY
-        from ext.sessiond.ordinary_host import configure_process_tools
+        from ext.sessiond.lifecycle import configure_process_tools
         configure_process_tools(options['host_entry'])
-        from ext.sessiond.ordinary_registry import configure as install_factories
-        _REGISTRY = install_factories(options)
+        from ext.sessiond.registry import build
+        _REGISTRY = build(options)
         return _REGISTRY
+
+
+def get_registry():
+    """Return the explicitly assembled service; never replace imported module attributes."""
+    return _REGISTRY if _REGISTRY is not None else configure()

@@ -4,7 +4,7 @@ Current ordinary concurrency/startup contract:
 [fixed socket startup acceptance](h2_direct_host_socket.md). Only thread locks
 remain; historical file-lock/fence atomicity statements are superseded.
 
-The explicitly selected P's adjacent `ordinary_process.py` is the single source
+The explicitly selected P's adjacent `local_process.py` is the single source
 of process start facts for P and W. `Lifecycle(host_entry=...)` loads this exact
 file before launching anything; conflicting tool paths in one Web process are
 rejected. The test manifest pins its content with the rest of P. No default

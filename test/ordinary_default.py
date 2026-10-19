@@ -16,14 +16,16 @@ CHILD = r'''
 import importlib.util,json,os,pathlib,sys
 sys.path.insert(0,sys.argv[1])
 from ext.sessiond.bootstrap import configure
-from ext.sessiond import proc as P,bridge as B
+from ext.sessiond import sessions as P,bridge as B
 from ext.sessiond.rpc import api
-from ext.sessiond import ordinary_host as H,ordinary_registry as C
+from ext.sessiond import lifecycle as H,registry as C
 from stores.store import RootStore
 from stores.dir_store import DirStore
 assert not pathlib.Path(os.environ['W_SESSION_RUNTIME']).exists()
+original=(P.create_files,P.list_files,B.Bridge,B.get_bridge)
 registry=configure(required=False)
-assert P.list_cc_sessions()==[]
+assert original==(P.create_files,P.list_files,B.Bridge,B.get_bridge),'assembly must not replace module attributes'
+assert registry.rows()==[]
 assert not pathlib.Path(os.environ['W_SESSION_RUNTIME']).exists(),'CLI list must not create runtime state'
 assert configure() is registry
 assert not any(n in sys.modules for n in ('h2_direct_host','h2_direct_host_crud','unittest.mock'))
@@ -31,8 +33,9 @@ store=RootStore([('/',DirStore(P.WS))])
 def call(**args):
  meta,body=api.interp(store,**args);return json.loads(body)
 spec=importlib.util.spec_from_file_location('deployment_cli',sys.argv[2]);cli=importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)
-assert cli._proc() is P
-created=P.create_cc_session('good');name=created['name'];site=created['agent_site']
+assert cli._sessions() is P
+assert cli._registry() is registry
+created=registry.create('good');name=created['name'];site=created['agent_site']
 a=call(op='attach',session=site);assert a['ok'],a
 first=a['gen'];b=B.get_bridge(site,store=store)
 assert b.sup.status_doc()['mode']=='ordinary-direct-host'
@@ -49,10 +52,10 @@ r=call(op='clear',session=site,expected_instance=r['gen']);assert r['ok'],r
 pathlib.Path(P.session_files(name)[1]).unlink()
 r=call(op='delete_session',session=site,confirm='1',expected_instance=r['gen']);assert r['ok'] and r['process']['settled'],r
 assert not pathlib.Path(P.session_files(name)[0]).exists()
-unstarted=P.create_cc_session('good')
+unstarted=registry.create('good')
 assert call(op='delete_session',session=unstarted['agent_site'],confirm='1')['ok']
 # Old history without an explicit offline import must remain unknown.
-old=P.create_cc_session('good');doc,path,history=registry.declaration(old['name'])
+old=registry.create('good');doc,path,history=registry.declaration(old['name'])
 raw=(json.dumps(dict(type='session',cwd=P.WS))+'\n'+json.dumps(dict(type='message',id='preserved'))+'\n').encode();history.write_bytes(raw)
 life=registry.life(old['name'],doc,history)
 assert not call(op='attach',session=old['agent_site'])['ok']
@@ -91,7 +94,7 @@ class DefaultFactory(unittest.TestCase):
                                     cwd=root,env=env,text=True,capture_output=True,timeout=25)
             (root/'stdout').write_text(result.stdout); (root/'stderr').write_text(result.stderr)
         finally:
-            spec=importlib.util.spec_from_file_location('fixture_process',Path(os.environ['H2_P_SOURCE'])/'ordinary_process.py')
+            spec=importlib.util.spec_from_file_location('fixture_process',Path(os.environ['H2_P_SOURCE'])/'local_process.py')
             tools=importlib.util.module_from_spec(spec);spec.loader.exec_module(tools)
             known=[]
             for record in (root/'runtime').glob('*/*/record.json'):
@@ -102,7 +105,7 @@ class DefaultFactory(unittest.TestCase):
                 now=tools.identity(i['pid'])
                 if now and all(now[k]==i[k] for k in ('pid','start','boot','uid','pgid','sid')) and now['state'] not in ('Z','X'):
                     sys.path.insert(0,str(W))
-                    from ext.sessiond.ordinary_host import configure_process_tools,signal_identity
+                    from ext.sessiond.lifecycle import configure_process_tools,signal_identity
                     configure_process_tools(Path(os.environ['H2_P_SOURCE'])/'pi_host.py')
                     signal_identity(i,signal.SIGKILL)
             for pid in {i['pid'] for i in known}:

@@ -6,25 +6,26 @@ sessiond 是 w 内嵌的聊天传输层。历史由 pi 的会话文件持有，�
 
 | 入口 | 进程所有者 | 访问方式 |
 |---|---|---|
-| `.agent` 声明者 | web 的交互会话宿主 | 本地 stdin/stdout |
+| `.agent` 声明者 | 独立 P 持有 pi；Web 管理显式生命周期操作 | 本机 Unix socket → P → PIPE → pi |
 | `agents/task/<名>/spec.json`、`agents/bot/<名>/spec.json` | agentd | 连接已登记的 RPC socket |
 
 HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接以解析后的会话文件实路径为键；同一会话的多个浏览器共享一条进程通道。
 
 ## 2. 进程生命周期
 
-`proc.Supervisor` 持有一枚交互进程，生命周期操作由同一把操作锁串行执行。
+普通会话的 `client.Client` 只连接独立 P 的 Unix socket，不持有 pi PIPE。
+`lifecycle.Lifecycle` 串行执行有限的实例操作，`registry.Registry` 协调注册与 CRUD。
 
-- 用户打开、发送命令或明确重载时启动一代进程。
-- 自然退出进入 `dormant`；启动失败进入 `failed`。下一次明确访问可以重试。
-- `reload`：停止旧进程、等待 stdout 排空，再从同一历史文件启动。
-- `clear`：停止旧进程、等待 stdout 排空、截断历史并认领本机原件，再启动。截断失败返回错误。
-- `shutdown`：永久关闭当前宿主；排队中的启动操作必须检查关闭状态。删除成功后关闭该桥接的事件流。
-- 停止使用自有 Popen 句柄，先 SIGTERM，超时后 SIGKILL；退出未确认时保留失败结果。
+- 明确访问时启动或连接；启动须核验本次 P 的内核 peer 身份并取得匹配的 `get_state` 成功回执。
+- 浏览器关闭仅释放订阅；Web 客户端 shutdown 只 detach，P/pi 继续运行。Web 重启可依本机实例事实重新连接。
+- 确认的自然退出进入 dormant；下一次明确访问可启动新实例。socket EOF 不证明 pi 退出，不完整或未知身份不自动重试接管。
+- reload：带当前 instance token，确认旧进程树停止，再从同一历史启动。
+- clear：同样确认停止后截断历史，再启动；截断或停止失败不启动替代实例。
+- delete：核验注册/实例身份与文件身份，确认停止后只删除声明和历史；保留 inbox 与运行事实。
 
-启动前清场同文件的残留 web 宿主，保留 environ 标记与进程身份交叉校验。环境清洗单点为调用方的 `agentd/envscrub.py`；声明者的 profile 在清洗后显式注入。
-
-浏览器关闭或断开只释放订阅，交互进程由 web 继续持有。重新打开连接原进程；原进程已退出时，明确访问从历史启动新代。进程停止由删除会话、reload/clear、进程自身退出或 web 宿主结束触发。agentd 进程的生命周期由 agentd 管理。
+普通会话只用进程内线程锁，不承诺多 Web 进程原子仲裁或同时启动唯一性。
+环境清洗由调用方的 agentd/envscrub 提供；profile 与 pi 扩展在清洗后显式注入。
+agentd 会话始终只连接其既有 socket，不借普通生命周期启动或接管。
 
 ## 3. 桥接与请求
 
@@ -111,7 +112,7 @@ host 必填，cwd/sessionDir 缺省为声明者所在目录，profile 可选。p
 
 入口使用 task/bot 的 spec.json。内部目标为该参与方的 session/session.jsonl。
 
-路由读取 spec.json、pid.json，验证声明宿主、进程身份与 RPC socket。未登记、缺席、暂停、终态或通道异常返回指引。直播由 `SocketSupervisor` 连接；其断连终结桥接并使下一次访问重新路由。
+路由读取 spec.json、pid.json，验证声明宿主、进程身份与 RPC socket。未登记、缺席、暂停、终态或通道异常返回指引。直播由 `agent_client.AgentClient` 连接；其断连终结桥接并使下一次访问重新路由。
 
 reload/clear 写入该参与方 control 请求并等待回执；进程操作由 agentd 执行。
 
@@ -151,16 +152,35 @@ select/confirm/input/editor 请求按 id 保留，基线重建尚未结算的问
 
 ### 12.1 创建
 
-调用方 CLI 调用 `proc.create_cc_session(profile)`。声明与历史落本机运行时目录；profile 决定 cwd，短名由服务生成。
+调用方 CLI 调用 `bootstrap.get_registry().create(profile)`。声明与历史落本机运行时目录；profile 决定 cwd，短名由服务生成。
 
 ### 12.2 列表与变更
 
-列表从声明文件读取标题、profile、cwd 与历史活动时间；运行态通过宿主标记扫描取得。标题顺序为 override、首条用户消息、文件名。
+列表从声明文件读取标题、profile、cwd 与历史活动时间；运行态由本机独立 P 的实例事实核验取得，不扫描进程名或 environ 推断宿主。标题顺序为 override、首条用户消息、文件名。
 
-删除与声明解析共用注册表锁，保证停止到文件移除期间不能另建宿主。rename 只改声明标题。路径校验与文件删除在 proc 层执行。
+删除与声明解析共用进程内注册表锁；不把它描述成跨 Web 进程原子事务。rename 只改声明标题。文件路径与 profile 校验归 sessions，注册完成、实例 fence 和停止后删除协调归 registry/lifecycle。
 
 ### 12.3 动态 tab
 
 session_tabs 输出调用方 itab 的动态行；前端加载时取快照。聊天窗内 `/rename`（包括清除标题 override）与 `/delete` 仅在 API 明确返回 `ok: true` 后，向父窗口同源发送一次 `{type: 'frame:tabs-changed'}`；失败不通知。独立打开、没有父级容器时不通知。
 
 frame 容器校验同源与已挂载子 iframe 身份后，重新获取完整列表文件及全部 `@dynamic`，不轮询、不重载整个父页面。改名保留原 iframe 与当前选中项；删除会移除对应 tab 和 iframe，删除当前项时回到首项。协议与机制见 `../../README.md`「iframe show many doc」。
+
+## 13. 源码职责与装配
+
+| 文件 | 职责 |
+|---|---|
+| bootstrap.py | HTTP/CLI 共用配置，显式创建 Registry 和客户端工厂 |
+| sessions.py | 路径、profile/cwd、声明/历史文件操作、标题派生 |
+| declaration.py | 每请求解析 .agent，返回绑定参数 |
+| registry.py | 普通会话注册、CRUD、注册身份检查、客户端/Bridge 装配 |
+| lifecycle.py | 独立 P 的启动验收、实例事实、身份核验、停止和换代 |
+| client.py | 普通 P socket 客户端；断开/销毁连接不表示杀进程 |
+| agent_client.py | agentd 声明路由、既有 socket 客户端、control 请求代理 |
+| bridge.py | RPC 应答配对、历史基线、事件环、dialog 与浏览器广播 |
+| pi-extension.ts | pi 内部检查、聊天状态及同文件重新生成；由调用方显式 -e 注入 |
+| rpc/、view/ | HTTP/SSE 与浏览器界面 |
+
+装配传递显式 client_factory/bridge_factory，不替换导入模块的函数或类。
+旧 proc.py、ordinary_host.py、ordinary_registry.py 与直接 PIPE Supervisor 已删除，无转发兼容壳。
+独立 P 由调用方配置宿主入口；不属于 Web 仓，不反向依赖本目录。

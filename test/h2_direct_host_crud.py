@@ -1,19 +1,17 @@
-"""Test-only scoped factory installation; production uses bootstrap.configure."""
-from contextlib import contextmanager, ExitStack
+"""Test-only scoped service injection; production uses bootstrap.configure."""
+from contextlib import contextmanager
 import sys
 from unittest.mock import patch
 import h2_direct_host as H
-from ext.sessiond import ordinary_registry as C
+from ext.sessiond import registry as C, bootstrap
 from ext.sessiond.rpc import api
 
 
 @contextmanager
 def installed(options):
-    registry = C.build(options)
-    with ExitStack() as stack:
-        for module, name, value in registry.bindings:
-            stack.enter_context(patch.object(module, name, value))
-        yield registry
+    service = C.build(options)
+    with patch.object(bootstrap, '_REGISTRY', service):
+        yield service
 
 
 def api_call(store, *, expected_instance=None, expected_registration=None, **kwargs):

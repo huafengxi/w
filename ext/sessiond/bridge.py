@@ -1,4 +1,5 @@
 """Per-session command channel, bounded event log and browser subscriptions."""
+from contextlib import nullcontext
 import base64
 import json
 import logging
@@ -8,7 +9,8 @@ import time
 import uuid
 from collections import deque
 
-from ext.sessiond import proc as _proc
+from ext.sessiond import sessions as S
+from ext.sessiond import agent_client as A
 from ext.sessiond.declaration import resolve_agent
 
 log = logging.getLogger("sessiond-bridge")
@@ -19,7 +21,7 @@ ENTRIES_TIMEOUT = 20.0      # get_entries 往返超时（秒）
 COMMANDS_TIMEOUT = 10.0     # get_commands 往返超时（秒，任务 a16jpj）
 INSPECT_TIMEOUT = 15.0      # 探针转储往返超时（秒，任务 s0f1la）
 
-# 探针侧车目录：与 probe.ts 共用调用方 workspace/run/sessiond-inspect
+# 探针侧车目录：与 pi-extension.ts 共用调用方 workspace/run/sessiond-inspect
 # （宿主本地运行时区，不入 git；文件即用即删）。
 from core.config import workspace
 INSPECT_DIR = os.path.join(workspace(), "run",
@@ -35,8 +37,8 @@ class Bridge:
     """单个会话路径的进程内事件环 + 命令通道（按路径注册，见 get_bridge）。"""
 
     def __init__(self, session_path, cwd=None, sock_path=None, participant_id=None,
-                 profile=None):
-        # 站内路径（如 /foo/bar/x.jsonl）；解析/校验在 Supervisor 内。
+                 profile=None, *, client_factory=None):
+        # 站内路径（如 /foo/bar/x.jsonl）；解析/校验在客户端内。
         self._site_path = session_path
         self.session = None
         self.terminated = False
@@ -58,27 +60,29 @@ class Bridge:
         self.subscribers = 0                 # 当前 SSE 流订阅数
         self.stream_wakes = set()            # multiplex streams share event notifications
         # 监督员选择（任务 ybzvbn，票 hegipc）：sock_path 在场 = rpc 封装形态任务，
-        # SocketSupervisor 连接透传 socket（无杀权、不重拉）；否则普通 Supervisor spawn。
+        # AgentClient 只连接 agentd socket；普通客户端由显式工厂构造。
         if sock_path:
-            self.sup = _proc.SocketSupervisor(self._site_path,
+            self.sup = A.AgentClient(self._site_path,
                                               on_event=self._ingest,
                                               sock_path=sock_path,
                                               participant_id=participant_id)
             self.terminated = False          # 断连终结标记（iter_events 停流依据）
             self.sup.on_lost = self._socket_lost
         else:
-            self.sup = _proc.Supervisor(self._site_path, on_event=self._ingest,
-                                        cwd=cwd, profile=profile)
+            if client_factory is None:
+                raise ValueError('ordinary Bridge requires an explicit client factory')
+            self.sup = client_factory(self._site_path, on_event=self._ingest,
+                                      cwd=cwd, profile=profile)
         self.session = self.sup.name         # 展示名以监督员解析为准
 
     def _socket_lost(self):
         """透传连接断（任务收敛/被杀，任务 ybzvbn）：标记终结（iter_events 停流 →
-        前端重连）+ 摘除注册表（后续访问重新路由：终态任务落入普通复活路径，
-        任务会话结束无缝转普通会话）。由 SocketSupervisor.on_lost 回调。"""
+        前端重连）+ 摘除注册表（后续访问重新核验 agentd 登记，终态拒绝，不转普通会话）。
+        由 AgentClient.on_lost 回调。"""
         self.terminated = True
         key = None
         try:
-            key = _proc.resolve_session_path(self._site_path)
+            key = S.resolve_session_path(self._site_path)
         except ValueError:
             pass
         if key is not None:
@@ -407,7 +411,7 @@ class Bridge:
     # ---- 探针：系统提示词+工具清单转储（任务 s0f1la） ----
 
     def inspect(self, timeout=INSPECT_TIMEOUT):
-        """探针转储编排：经会话内探针扩展（同目录 probe.ts，proc.py:_spawn
+        """探针转储编排：经会话内探针扩展（同目录 pi-extension.ts，client.py
         以 -e 注入）取当前系统提示词全文 + 工具清单。
 
         握手：生成随机 nonce → 下发 prompt `/sessiond-inspect <nonce>`（pi 对
@@ -517,67 +521,49 @@ class Bridge:
                 return
 
 
+class OrdinaryBridge(Bridge):
+    # Keep each original synchronous query and its captured instance together.
+    # The reader never takes this operation lock, so RPC responses can arrive.
+    # AgentClient is not given ordinary control/locks.
+    def get_entries(self, *a, **kw):
+        with getattr(self.sup, '_op_lock', nullcontext()):
+            return super().get_entries(*a, **kw)
+
+    def request(self, *a, **kw):
+        with getattr(self.sup, '_op_lock', nullcontext()):
+            return super().request(*a, **kw)
+
+    def get_commands(self, *a, **kw):
+        with getattr(self.sup, '_op_lock', nullcontext()):
+            return super().get_commands(*a, **kw)
+
+    def inspect(self, *a, **kw):
+        with getattr(self.sup, '_op_lock', nullcontext()):
+            return super().inspect(*a, **kw)
+
+
 _BRIDGES = {}                     # resolved path -> Bridge（按需多会话）
 _BRIDGES_LOCK = threading.RLock()
 
-def drop_session(session_path):
-    """删除面临时会话（任务 z293ql，调用方 = rpc/api.py op=delete_session）：
-    **绝不建桥**的注册表查表 → 命中则永久停机（`Supervisor.shutdown`：退出不计崩溃、
-    不重拉）+ 摘除登记。与 `get_bridge` 的区别正是这条：删一枚从未打开过的会话时
-    ⛔ 不得为它拉起一个进程。未命中（无桥接 = 未拉起 ∨ 已转懒态 ∨ web 刚重启）⇒
-    found=False，调用方照旧走文件系统删除面（可能仍有旧宿主进程 ⇒ 另行扫
-    `proc.find_hosts` 兼顶）。返回 {found, killed, pid, state, error?}。"""
-    try:
-        key = _proc.resolve_session_path(session_path)
-    except ValueError as e:
-        return {"found": False, "killed": False, "error": str(e)}
+def detach_session(session_path):
+    """Close a local channel, never claim that detaching stopped P or pi."""
+    key = S.resolve_session_path(session_path)
     with _BRIDGES_LOCK:
-        b = _BRIDGES.pop(key, None)
-    if b is None:
-        return {"found": False, "killed": False}
-    sup = b.sup
-    if isinstance(sup, _proc.SocketSupervisor):
-        # 本层无杀权（生命周期属 agentd runner）；临时会话结构上不会是 socket 会话，
-        # 命中即归因异常 ⇒ 只摘登记、不杀，并把事实回给调用方。
-        return {"found": True, "killed": False, "pid": None,
-                "state": sup.status_doc().get("state"),
-                "error": "socket-mode session: lifecycle owned by agentd runner; "
-                         "not killed"}
-    r = sup.shutdown("delete_session")
-    if r.get("ok"):
-        with b.cond:
-            b.terminated = True
-            b.cond.notify_all()
-    else:
-        with _BRIDGES_LOCK:
-            _BRIDGES[key] = b
-    return dict(r, found=True, killed=bool(r.get("ok")))
-
-
-def delete_cc_session(name):
-    """Serialize declaration removal with entry resolution and channel creation."""
-    _, jsonl_path, _ = _proc.session_files(name)
-    site = _proc.site_path_of(jsonl_path)
-    if site is None:
-        raise ValueError("session path escapes the site root")
-    with _BRIDGES_LOCK:
-        process = drop_session(site)
-        if process.get("error"):
-            return {"ok": False, "error": process["error"], "process": process}
-        if not process.get("found"):
-            stale = _proc.kill_hosts(jsonl_path)
-            if stale:
-                process.update(killed=True, staleHosts=stale)
-        doc = _proc.delete_cc_session(name)
-        return dict(doc, ok=True, process=process)
+        channel = _BRIDGES.pop(key, None)
+    if channel is None:
+        return dict(found=False, killed=False)
+    if isinstance(channel.sup, A.AgentClient):
+        return dict(found=True, killed=False, error='agent lifecycle belongs to agentd')
+    result = channel.sup.shutdown()
+    return dict(result, found=True, killed=False)
 
 
 def get_bridge(entry, store=None):
-    with _BRIDGES_LOCK:
-        return _get_bridge_locked(entry, store)
+    from ext.sessiond.bootstrap import get_registry
+    return get_registry().get_bridge(entry, store=store)
 
 
-def _get_bridge_locked(entry, store=None):
+def _get_bridge_locked(entry, store=None, *, client_factory, bridge_factory):
     """Resolve the declaration on every request; share only the live event channel."""
     declaration = None
     if isinstance(entry, str) and entry.endswith(".agent"):
@@ -589,16 +575,16 @@ def _get_bridge_locked(entry, store=None):
             raise ValueError(declaration.get("error", "invalid declaration"))
         session = declaration["session"]
     else:
-        session, error = _proc.agentd_entry(entry)
+        session, error = A.agentd_entry(entry)
         if error:
             raise ValueError(error)
         if session == entry:
             raise ValueError("chat entry must be an .agent declaration or agentd spec.json")
-    key = _proc.resolve_session_path(session)
+    key = S.resolve_session_path(session)
     with _BRIDGES_LOCK:
         b = _BRIDGES.get(key)
         if b is None:
-            route = _proc.agentd_route(session)
+            route = A.agentd_route(session)
             if route is not None:
                 mode, payload = route
                 if mode == "reject":
@@ -606,7 +592,8 @@ def _get_bridge_locked(entry, store=None):
                 b = Bridge(session, sock_path=payload["sock"],
                            participant_id=payload.get("participant_id"))
             elif declaration is not None:
-                b = Bridge(session, cwd=declaration["cwd"], profile=declaration["profile"])
+                b = bridge_factory(session, cwd=declaration["cwd"], profile=declaration["profile"],
+                                   client_factory=client_factory)
             else:
                 raise ValueError("session is not registered with agentd")
             _BRIDGES[key] = b

@@ -5,7 +5,8 @@ import logging as _logging
 import os as _os
 import posixpath as _posixpath
 from ext.sessiond import bridge as _b
-from ext.sessiond import proc as _proc
+from ext.sessiond import sessions as S, agent_client as A
+from ext.sessiond.bootstrap import get_registry
 from ext.sessiond.declaration import resolve_agent as _resolve_agent
 
 _log = _logging.getLogger("sessiond-agent")
@@ -52,105 +53,24 @@ def _baseline_doc(b, r):
 #   op=reload → control/restart（保历史换代）
 # 跨机维持拒绝：建桥咽喉（agentd_route）已拒跨机会话，此处再按 spec.host 纵深防御一道。
 
-AGENTD_CONTROL_TIMEOUT = 30.0   # 等回执超时（杀进程+备份+换代通常秒级）
-AGENTD_CONTROL_POLL = 0.2
-
-
 def _agentd_control_proxy(b, action, reason):
-    """socket 会话代理 control 动词：写 <adir>/control/<id>.req → 轮询 control/ack/<id>。
-    返回响应元组：{ok, session, gen?, outcome?, detail?}。"""
-    sup = b.sup
-    pid_ = getattr(sup, "participant_id", None)
-    if not pid_ or pid_.count("/") != 1:
-        return _j({"ok": False,
-                   "error": "socket session without participant id; cannot "
-                            "proxy control/%s" % action}, '500 Internal Server Error')
-    family, name = pid_.split("/", 1)
-    adir = _os.path.join(_proc.WS, "agents", family, name)
-    # 跨机纵深防御（拉起/生命周期归登记机；建桥咽喉已拦一道）
-    try:
-        with open(_os.path.join(adir, "spec.json")) as f:
-            host = (_json.load(f) or {}).get("host")
-    except (OSError, ValueError):
-        host = None
-    me = _proc._self_host()
-    if isinstance(host, str) and host.strip() and me is not None \
-            and host.strip() != me:
-        return _j({"ok": False,
-                   "error": "该会话宿主=%s，控制面请通过 %s 的服务发起（本机=%s）"
-                            % (host.strip(), host.strip(), me)}, '403 Forbidden')
-    # 不依赖 agentd/proto（w 仓独立）：自拼信封文件名与原子落盘（口径同协议 §4.3/§5.1）
-    import random as _random
-    import string as _string
-    import time as _time
-    ts = _time.strftime("%Y-%m-%d-%H-%M-%S", _time.localtime()) + \
-        (".%03d" % (int(_time.time() * 1000) % 1000))
-    rand = "".join(_random.choices(_string.ascii_lowercase + _string.digits, k=4))
-    rid = ts + "-web.sessiond-" + rand
-    cdir = _os.path.join(adir, "control")
-    req = {"id": rid, "from": "web.sessiond", "ts": ts,
-           "action": action, "reason": reason}
-    try:
-        _os.makedirs(cdir, exist_ok=True)
-        tmp = _os.path.join(cdir, ".tmp-%d-%s" % (_os.getpid(), rand))
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(_json.dumps(req, ensure_ascii=False, indent=1) + "\n")
-            f.flush()
-            _os.fsync(f.fileno())
-        _os.rename(tmp, _os.path.join(cdir, rid + ".req"))
-    except OSError as e:
-        return _j({"ok": False,
-                   "error": "write control/%s request failed: %s" % (action, e)},
-                  '500 Internal Server Error')
-    _log.info("agentd control proxy: %s %s -> %s", pid_, action, rid)
-    ack_path = _os.path.join(cdir, "ack", rid)
-    deadline = _time.monotonic() + AGENTD_CONTROL_TIMEOUT
-    ack = None
-    while _time.monotonic() < deadline:
-        try:
-            with open(ack_path) as f:
-                ack = _json.load(f)
-            break
-        except OSError:
-            _time.sleep(AGENTD_CONTROL_POLL)
-        except ValueError:
-            ack = None
-            _time.sleep(AGENTD_CONTROL_POLL)  # 半截文件下轮重读（协议 §11.6 同口径）
-    if ack is None:
-        return _j({"ok": False,
-                   "error": "control/%s ack not received within %.0fs "
-                            "(req %s)" % (action, AGENTD_CONTROL_TIMEOUT, rid)},
-                  '504 Gateway Timeout')
-    outcome = ack.get("outcome")
-    detail = ack.get("detail", "")
-    if outcome == "rejected":
-        return _j({"ok": False, "session": b.session, "outcome": outcome,
-                   "error": "control/%s rejected: %s" % (action, detail)},
-                  '409 Conflict')
-    gen = None
-    try:
-        with open(_os.path.join(adir, "pid.json")) as f:
-            gen = (_json.load(f) or {}).get("gen")
-    except (OSError, ValueError):
-        pass
-    return _j({"ok": True, "session": b.session, "gen": gen,
-               "outcome": outcome, "detail": detail,
-               "controlReq": rid})
+    doc, status = A.control(b, action, reason)
+    return _j(doc, status)
 
 
 # ---------------- 指挥中心临时会话（任务 z293ql，设计稿 §4.2/§4.3） ----------------
-# 实现面（枚举/校验/写盘/删除纪律）单点在 proc.py；进程面（杀 Supervisor）在
-# bridge.drop_session；本层只做参数面、编排与响应形状。消费方 = `dash/session-ctl.py` 一枚
-# （该文件里 **HTTP 面经本层、CLI 面子进程直调 proc.py** —— 子进程里 run_script 不可用）：
+# 实现面（枚举/校验/写盘/删除纪律）单点在 sessions.py / registry.py；进程面（杀 Supervisor）在
+# registry.delete；本层只做参数面、编排与响应形状。消费方 = `dash/session-ctl.py` 一枚
+# （该文件里 **HTTP 面经本层、CLI 面子进程直调 sessions.py / registry.py** —— 子进程里 run_script 不可用）：
 #   CLI `list` = 每节 widget 的表（⛔ 不经本层）；HTTP interp 不带 `act` = 本层 `op=session_tabs`
 #   ⇒ dash/dash.itab 末行 @dynamic 的 itab 行 rpc；HTTP `?act=rename|delete` = 本层 op；
-#   CLI `profiles`/`new` = 页面手动 widget 与命令行同款，直调 proc.py（⛔ 不经本层）。
+#   CLI `profiles`/`new` = 页面手动 widget 与命令行同款，直调 sessions.py / registry.py（⛔ 不经本层）。
 
 # 服务端恒定/自动生成/由 profile 清单派生的字段：客户端传任一 ⇒ 400 显式拒绝（⛔ 不只是忽略）。
 # 两枚变更 op 只控 `session`/`title`/`confirm`：`profile` 在列 = 人格只在创建时定（而创建不经本层）；
 # `cwd` 在列 = 它由 profile 清单的 `cwd` 字段声明（proc.profile_cwd）；
 # `command` 在列 = create_bot 时代的硬约束同族：spawn argv 的单点是
-# proc.Supervisor._spawn，声明者不可控（故 .agent 字段集里根本没有这个键）。
+# pi-host LaunchConfig，声明者不可控（故 .agent 字段集里根本没有这个键）。
 _SERVER_FIXED_FIELDS = ("command", "cwd", "profile", "sessionDir", "name", "host")
 
 
@@ -169,35 +89,11 @@ def _fixed_field_rejection(kw):
               '400 Bad Request')
 
 
-def _cc_name(session):
-    """op 参数 session（站内 .jsonl ∨ .agent 路径）→ 临时会话名。
-    只认 `run/sessiond/` 下的文件（与 proc.session_files 的名字白名单、realpath 断言
-    组成两道）；非法抛 ValueError（调用方回 400）。"""
-    if not isinstance(session, str) or "\x00" in session \
-            or not session.startswith("/"):
-        raise ValueError("session must be an absolute site path: %r" % (session,))
-    p = _posixpath.normpath(session)
-    base = _posixpath.dirname(p)
-    fn = _posixpath.basename(p)
-    name = None
-    for suf in (".jsonl", ".agent"):
-        if fn.endswith(suf):
-            name = fn[:-len(suf)]
-            break
-    if not name:
-        raise ValueError("session must end with .jsonl or .agent: %r" % (session,))
-    want = _proc.site_path_of(_os.path.realpath(_proc.sessions_dir()))
-    if base != want:
-        raise ValueError("not a command-center session path (expect %s/<name>."
-                         "jsonl|.agent, got %r)" % (want, session))
-    return name
-
-
 def _prefix():
     """机器前缀 = 本机规范名（env/host-id 查表，口径同 agentd/report.py:chat_url 的 host）。
     ⛔ 不从请求路径派生：代理 `strip_prefix: true`（ext/proxy/proxy.py:forward）⇒ 被请求机
     看到的 path 不含 `/dev/` 一类前缀。不可得 → None（调用方吐零行，⛔ 不猜、⛔ 不发无前缀链接）。"""
-    return _proc._self_host()
+    return S._self_host()
 
 
 def _chat_url(agent_site, host):
@@ -207,7 +103,7 @@ def _chat_url(agent_site, host):
 def _list_sessions():
     host = _prefix()
     sessions = []
-    for r in _proc.list_cc_sessions():
+    for r in get_registry().rows():
         sessions.append({
             "name": r["name"], "title": r["title"],
             "titleSource": r["titleSource"], "project": r["project"],
@@ -217,8 +113,8 @@ def _list_sessions():
             "chatUrl": _chat_url(r["agent_site"], host),
         })
     return _j({"ok": True, "host": host, "prefix": host or "",
-               "sessionsDir": _proc.site_path_of(
-                   _os.path.realpath(_proc.sessions_dir())),
+               "sessionsDir": S.site_path_of(
+                   _os.path.realpath(S.sessions_dir())),
                "sessions": sessions})
 
 
@@ -231,7 +127,7 @@ def _session_tabs():
                      "emitting zero rows")
         return _j({"ok": True, "prefix": None, "rows": []})
     rows = []
-    for r in _proc.list_cc_sessions():
+    for r in get_registry().rows():
         url = _chat_url(r["agent_site"], host)
         if not url:
             continue
@@ -244,7 +140,7 @@ def _rename_session(session, kw):
     if rej:
         return rej
     try:
-        doc = _proc.rename_cc_session(_cc_name(session), kw.get("title"))
+        doc = get_registry().rename(S.session_name_from_site(session), kw.get("title"))
     except ValueError as e:
         return _j({"ok": False, "error": str(e)}, '400 Bad Request')
     return _j(dict(ok=True, **doc))
@@ -260,7 +156,7 @@ def _delete_session(session, kw):
                             ".agent 与 jsonl，不可撤销)"},
                   '400 Bad Request')
     try:
-        doc = _b.delete_cc_session(_cc_name(session))
+        doc = get_registry().delete(S.session_name_from_site(session))
     except ValueError as exc:
         return _j({"ok": False, "error": str(exc)}, '400 Bad Request')
     except OSError as exc:
@@ -278,10 +174,10 @@ def interp(store, op='', session='', cmd='', **kw):
             return _j(dict(ok=False, error=field + ' must be a nonempty string'), '400 Bad Request')
     try:
         if 'expected_instance' in kw:
-            from ext.sessiond.ordinary_host import _EXPECTED
+            from ext.sessiond.lifecycle import _EXPECTED
             tokens.append((_EXPECTED, _EXPECTED.set(kw['expected_instance'])))
         if 'expected_registration' in kw:
-            from ext.sessiond.ordinary_registry import _EXPECTED_REGISTRATION
+            from ext.sessiond.registry import _EXPECTED_REGISTRATION
             tokens.append((_EXPECTED_REGISTRATION,
                            _EXPECTED_REGISTRATION.set(kw['expected_registration'])))
         return _interp(store, op=op, session=session, cmd=cmd, **kw)
@@ -332,11 +228,11 @@ def _interp(store, op='', session='', cmd='', **kw):
         # 会话进程的 cwd，任务 8r0tww），读取失败 → null；普通会话 = 会话进程真实在跑
         # （state=running ∧ pid）时 status_doc 的拉起 cwd，未拉起 → null。缺值前端显 `?`。
         # 既有 cwd 字段原样保留（调试口径不变）。
-        doc["host"] = _proc._self_host()
+        doc["host"] = S._self_host()
         sf = doc.get("session_file") or ""
         doc["sessionDir"] = _os.path.dirname(sf) if sf else None
-        if isinstance(b.sup, _proc.SocketSupervisor):
-            doc["workDir"] = _proc.agentd_spec_workdir(b.sup.participant_id)
+        if isinstance(b.sup, A.AgentClient):
+            doc["workDir"] = A.agentd_spec_workdir(b.sup.participant_id)
         else:
             doc["workDir"] = doc.get("cwd") if (doc.get("state") == "running"
                                                 and doc.get("pid")) else None
@@ -388,8 +284,8 @@ def _interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "commands": r["commands"]})
     if op == 'inspect':
-        # socket 会话（agentd 任务/常驻）：探针扩展由封装脚本 pi-wrap/pi-rpc-wrap.py
-        # -e 注入（与 proc.py:_spawn 同款），握手链路复用 b.inspect()——只读转储，
+        # socket 会话（agentd 任务/常驻）：探针扩展由封装脚本 agentd/pi-rpc-wrap.py
+        # -e 注入（与 sessions.py / registry.py:_spawn 同款），握手链路复用 b.inspect()——只读转储，
         # 无生命周期动作，不再拒绝（原 403 口径废除）；探针未加载（存量旧进程）
         # 则回 502「probe dump file missing」。
         r = b.inspect()
@@ -400,7 +296,7 @@ def _interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "inspect": r["doc"]})
     if op == 'reload':
-        if isinstance(b.sup, _proc.SocketSupervisor):
+        if isinstance(b.sup, A.AgentClient):
             # socket 会话：代理 control/restart（保历史换代，任务 dsuqbi）
             return _agentd_control_proxy(
                 b, "restart", "user /reload via socket session")
@@ -412,7 +308,7 @@ def _interp(store, op='', session='', cmd='', **kw):
         return _j({"ok": True, "session": b.session,
                    "gen": r.get("gen"), "pid": r.get("pid")})
     if op == 'clear':
-        if isinstance(b.sup, _proc.SocketSupervisor):
+        if isinstance(b.sup, A.AgentClient):
             # socket 会话：代理 control/clear（弃历史换代：杀进程→备份→截断→空白新代，
             # 任务 dsuqbi）；跨机参与者维持拒绝（建桥咽喉 + 代理内纵深校验）。
             return _agentd_control_proxy(

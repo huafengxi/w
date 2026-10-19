@@ -7,7 +7,7 @@ import signal
 import subprocess
 import sys
 import time
-from ordinary_process import starttime
+from local_process import starttime
 
 session = Path(sys.argv[sys.argv.index('--session') + 1])
 name = sys.argv[sys.argv.index('-n') + 1]

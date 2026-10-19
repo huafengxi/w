@@ -11,7 +11,7 @@ import time
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ext.sessiond import proc as P, bridge as B
+from ext.sessiond import sessions as P, bridge as B
 from ext.sessiond.rpc import stream
 from stores.store import RootStore
 from stores.dir_store import DirStore
@@ -42,8 +42,8 @@ with C.installed(options) as registry:
                 result = list(spawn_attempts)
             elif special == 'create':
                 names = req.get('names')
-                with patch.object(C, '_NEW_NAME', side_effect=names) if names else contextlib.nullcontext():
-                    result = P.create_cc_session(req['profile'])
+                with patch.object(P, 'new_session_name', side_effect=names) if names else contextlib.nullcontext():
+                    result = registry.create(req['profile'])
             elif special == 'cli':
                 # Explicit read-only source copied into this test's workspace.
                 spec = importlib.util.spec_from_file_location('fixture_cli', os.environ['H2_CLI_SOURCE'])
@@ -83,7 +83,8 @@ with C.installed(options) as registry:
                     declaration = json.loads(body)
                     if not declaration.get('ok'):
                         raise ValueError(declaration)
-                    b = B.Bridge(declaration['session'], cwd=declaration['cwd'], profile=declaration['profile'])
+                    b = registry.bridge_factory(declaration['session'], cwd=declaration['cwd'],
+                                                profile=declaration['profile'], client_factory=registry.client_factory)
                     key = P.resolve_session_path(declaration['session'])
                     with B._BRIDGES_LOCK:
                         B._BRIDGES[key] = b

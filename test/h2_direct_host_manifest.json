@@ -1,10 +1,10 @@
 {
-  "taskId": "deploy-independent-01a151c5",
+  "taskId": "pi-host-layout-01a15443",
   "default_factory": "ext/sessiond/bootstrap.py:configure; required at HTTP startup, shared by the CLI",
   "default_tests": "test/ordinary_default.py",
   "parent_candidate": "fcf6cd6242a6e8ac4dae446b68fbd3e38a8bd0bc",
   "platform_repository": "agent-platform",
-  "P_independence": "copy pi-wrap directory alone; stdlib only; no A imports, AGENTD_DIR, persona, task policy or file locks; dependency A -> P",
+  "P_independence": "copy pi-host directory alone; stdlib only; no A imports, AGENTD_DIR, persona, task policy or file locks; dependency A -> P",
   "startup_acceptance": "post-launch kernel peer matches our Popen, then one matching successful get_state response",
   "startup_tests": "test/h2_direct_host_startup_test.py",
   "ordinary_file_locks": 0,
@@ -18,33 +18,43 @@
   },
   "crud": {
     "factory": "test/h2_direct_host_crud.py:installed",
-    "caller_cli_sha256": "a4997d4f9d2452b0f02e004d423982d48ed359b1dbe07786905c59b492492807",
-    "delete_files": ["exact .agent", "exact .jsonl"],
-    "retained": ["inbox", "runtime facts", "legacy lock files untouched but not acquired"],
-    "fences": ["captured registration UUID", "captured actual host instance or explicit unstarted"]
+    "caller_cli_sha256": "de5324b82a1831b0fad8b9b8897db3c529cde9c8cc6fec23f147862a6c48bac0",
+    "delete_files": [
+      "exact .agent",
+      "exact .jsonl"
+    ],
+    "retained": [
+      "inbox",
+      "runtime facts",
+      "legacy lock files untouched but not acquired"
+    ],
+    "fences": [
+      "captured registration UUID",
+      "captured actual host instance or explicit unstarted"
+    ]
   },
   "W_base": "1c3775c3be70bee8f6b8efe23a9310424a575922",
   "candidate_ref": "refs/heads/deploy/w-independent-01a151c5",
   "contract": "Linux/Darwin fixed private local endpoint; human-triggered starts, no cross-Web atomicity or simultaneous-start uniqueness; no receiver/model/production PASS",
   "P": {
-    "revision": "280ed7f20fab83df776e618e797d36a3deebf72d",
-    "subdirectory": "pi-wrap",
+    "revision": "1986c0d38299139e343ca178f2f5649caa562f40",
+    "subdirectory": "pi-host",
     "files": {
-      "pi_host.py": "e087a60a3249bf742b789c73feebf1cf1ef71dfa7119ce462256f791bc826efd",
-      "transport.py": "96087ab04d4648c3b5dd8c25a1d1743033cc32d08f68fd3f647cd8953ae7e151",
-      "ordinary_process.py": "f296713b93ade252f8773d30e102f7e063c93bdeb64f773b32d5b44f3281d5db",
+      "pi_host.py": "1cb3f0a1985e1de15a0cd053907e22d024dffa0a2148480bdbc16204809cd491",
+      "transport.py": "4c88ee67934ace11afc47f1e292b4b139edc763bccb8f26982be7547e49c348f",
+      "local_process.py": "4ef565c99bda77a635d174ad5a30b826be587ce48042995bf14d97396a80bf3f",
       "host_io.py": "6ea7c8126a744cad90d4218a21f49a5aa6d6072bd1ad1d0a558804d9ebb5b5c3",
-      "rpc_dialogs.py": "8d257673d159b85199b9461fb09ed4155663b2f21ccaab125c0e8ebb5e607fef"
+      "rpc_dialogs.py": "4e354ab5817967542ed75adf683a002c8dd8a88a0787f3f97d4ddfd8b09d09de"
     }
   },
   "A": {
-    "revision": "280ed7f20fab83df776e618e797d36a3deebf72d",
+    "revision": "1986c0d38299139e343ca178f2f5649caa562f40",
     "subdirectory": "agentd",
     "files": {
-      "proto.py": "583f5f4af17ecd4f45bae32faac74027275b94f19e58508e0634499df4faa2eb",
-      "pi-rpc-wrap.py": "78b1d0d485406de435b904601c009d44b73bde9210765130ee2d4cae862ec1c6",
-      "persona.py": "3371d266c2f01124ee80ea559b22f62391fee6263f0ce3c26666d8d518157fd7",
-      "envscrub.py": "4f4845e49b889f41bfd8e950e9313dcb1b3146377927cd339c4805735bb31f4a",
+      "proto.py": "cc73767eee53d2b4a2ea5960a84c7a393f2ceb94fce204e8c38aaf6330172a92",
+      "pi-rpc-wrap.py": "81fe3bf6f37ed86987eed186df5d2cab9a8bcddfae68d48e6756ebf300866254",
+      "persona.py": "d5442ddffd12b92d87d511ebd4993ce53997ccf5e2356e665cdcaf1ec7fcc9c1",
+      "envscrub.py": "ba224dec6437bcdee2bb7ceb099fbb5fe760833790f1174cadf32ee3c1269b3e",
       "safe_delete.py": "8d53e5f696d6735e8b1156d256fd51acfd02ed38682f311d4876952ec6cef754"
     }
   }

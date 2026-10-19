@@ -4,8 +4,8 @@
 The CLI consumes the same caller web profile and configures the same factories.
 Production never imports the H2 test adapters or unittest.mock. Missing/bad
 service configuration fails startup; there is no silent fallback to W-owned pi
-PIPEs. The retained old Supervisor/Bridge are implementation bases and legacy
-unit-test seams, not the default service transport after configuration.
+PIPEs. The ordinary Client owns only the socket. There is no retained direct-PIPE
+Supervisor or module-attribute factory replacement.
 
 Required caller inputs are W_SESSION_HOST_ENTRY (independent P's pi_host.py) and
 W_SESSION_RUNTIME (resolved to a short, canonical, private local directory), plus the existing
@@ -27,7 +27,7 @@ HTTP reload/clear carry the attached instance token (`expected_instance`), not a
 rund generation. API forwards the explicit expectation to the operation gate;
 stale/empty values fail rather than mutate a different instance. Delete manual
 URLs can capture the current registration/instance server-side without starting
-P; when an expectation is supplied it is enforced. Agent SocketSupervisor and
+P; when an expectation is supplied it is enforced. AgentClient and
 agentd control routing remain unchanged.
 
 CLI list/autorun do not create runtime roots or missing binding records. Service
@@ -49,7 +49,9 @@ Popen. After that, losing current.json must not reuse the import permission.
 No normal request automatically imports history or repairs incomplete records.
 Deployment tools belong to the caller, not this mechanism repository.
 
-The ordinary host/registry live in ordinary_host.py and ordinary_registry.py.
-H2 test files are thin, scoped adapters for those same runtime globals. The
+File helpers live in sessions.py, process operations in lifecycle.py, socket
+transport in client.py and registration/CRUD in registry.py. bootstrap.py
+explicitly assembles the service; Bridge receives a client factory. H2 tests
+scopingly inject that service instead of replacing production module factories. The
 fixed-input runner includes ordinary_default.py: no install()/patch, default
 CLI/API, explicit fences, preserved history, one-use import and zero file locks.

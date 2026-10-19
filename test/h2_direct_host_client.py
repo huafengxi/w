@@ -35,7 +35,7 @@ with installed(options):
             elif special == 'identity':
                 b = B.get_bridge('/chat-a.agent', store=store)
                 result = dict(status=b.sup.status_doc(), handles=list(b.sup.life.handles),
-                              imports=dict(proc=__import__('ext.sessiond.proc', fromlist=['x']).__file__,
+                              imports=dict(proc=__import__('ext.sessiond.sessions', fromlist=['x']).__file__,
                                            bridge=B.__file__), pid=os.getpid())
             else:
                 req.setdefault('session', '/chat-a.agent')

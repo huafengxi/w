@@ -3,7 +3,7 @@ import json as _json
 import logging as _logging
 import os as _os
 import posixpath as _posixpath
-from ext.sessiond import proc as _proc
+from ext.sessiond import sessions as _sessions
 
 _log = _logging.getLogger("sessiond-agent")
 
@@ -67,8 +67,8 @@ def resolve_agent(store, session):
                                 "string when present" % p},
                       '400 Bad Request')
         cwd_src = _os.path.realpath(_os.path.expanduser(cwd_val.strip()))
-        roots = [_proc.WS_REAL,
-                 _os.path.realpath(_os.path.join(_proc.WS, "run"))]
+        roots = [_sessions.WS_REAL,
+                 _os.path.realpath(_os.path.join(_sessions.WS, "run"))]
         if not any(cwd_src == r or cwd_src.startswith(r + _os.sep) for r in roots):
             return _j({"ok": False,
                        "error": "agent file %s: cwd escapes workspace: %s"
@@ -76,10 +76,10 @@ def resolve_agent(store, session):
                       '400 Bad Request')
     else:
         cwd_site_dir = _posixpath.dirname(p)
-        cwd_src = (_proc.WS if cwd_site_dir in ("", "/")
-                   else _os.path.join(_proc.WS, cwd_site_dir.lstrip("/")))
+        cwd_src = (_sessions.WS if cwd_site_dir in ("", "/")
+                   else _os.path.join(_sessions.WS, cwd_site_dir.lstrip("/")))
     try:
-        cwd = _proc.resolve_cwd(cwd_src)
+        cwd = _sessions.resolve_cwd(cwd_src)
     except ValueError as e:
         return _j({"ok": False,
                    "error": "agent file %s: cwd rejected: %s"
@@ -89,7 +89,7 @@ def resolve_agent(store, session):
     profile = None
     if prof_val is not None:
         try:
-            profile = _proc.validate_profile(prof_val)
+            profile = _sessions.validate_profile(prof_val)
         except ValueError as e:
             return _j({"ok": False,
                        "error": "agent file %s: %s" % (p, e)},
@@ -97,8 +97,8 @@ def resolve_agent(store, session):
     dir_val = spec.get("sessionDir")
     if dir_val is None:
         agent_site_dir = _posixpath.dirname(p)
-        sess_dir_src = (_proc.WS if agent_site_dir in ("", "/")
-                        else _os.path.join(_proc.WS, agent_site_dir.lstrip("/")))
+        sess_dir_src = (_sessions.WS if agent_site_dir in ("", "/")
+                        else _os.path.join(_sessions.WS, agent_site_dir.lstrip("/")))
         sess_dir = _os.path.realpath(sess_dir_src)
     else:
         if not isinstance(dir_val, str) or not dir_val.strip():
@@ -108,27 +108,27 @@ def resolve_agent(store, session):
                       '400 Bad Request')
         sess_dir = _os.path.expanduser(dir_val.strip())
         real = _os.path.realpath(sess_dir)
-        roots = [_proc.WS_REAL,
-                 _os.path.realpath(_os.path.join(_proc.WS, "run"))]
+        roots = [_sessions.WS_REAL,
+                 _os.path.realpath(_os.path.join(_sessions.WS, "run"))]
         if not any(real == r or real.startswith(r + _os.sep) for r in roots):
             return _j({"ok": False,
                        "error": "agent file %s: sessionDir escapes workspace: %s"
                                 % (p, dir_val)},
                       '400 Bad Request')
         sess_dir = real
-    rel_dir = _os.path.relpath(sess_dir, _proc.WS)
+    rel_dir = _os.path.relpath(sess_dir, _sessions.WS)
     if rel_dir == ".." or rel_dir.startswith(".." + _os.sep):
-        run_real = _os.path.realpath(_os.path.join(_proc.WS, "run"))
+        run_real = _os.path.realpath(_os.path.join(_sessions.WS, "run"))
         rel_run = _os.path.relpath(sess_dir, run_real)
         if rel_run == ".." or rel_run.startswith(".." + _os.sep):
             return _j({"ok": False,
                        "error": "agent file %s: sessionDir %s escapes the site root "
-                                "(rel to %s = %s)" % (p, sess_dir, _proc.WS, rel_dir)},
+                                "(rel to %s = %s)" % (p, sess_dir, _sessions.WS, rel_dir)},
                       '400 Bad Request')
         rel_dir = _posixpath.normpath(_posixpath.join("run", rel_run))
     site_jsonl = "/" + _posixpath.normpath(_posixpath.join(rel_dir, name + ".jsonl"))
     try:
-        session_file = _proc.resolve_session_path(site_jsonl)
+        session_file = _sessions.resolve_session_path(site_jsonl)
     except ValueError as e:
         return _j({"ok": False,
                    "error": "agent file %s: derived session path rejected: %s"

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Isolated lifecycle, declaration, event-gap and stream-budget regressions.
+"""Real independent-host lifecycle plus declaration, event-gap and stream budgets.
 
-Run: python3 test/session_lifecycle.py
-All subprocesses and workspace files live in a self-created temporary directory.
+All processes/files are synthetic. The Web client never owns pi PIPEs.
 """
 import io
 import json
@@ -10,7 +9,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -19,7 +17,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sandbox
-from ext.sessiond import proc as P, bridge as B
+from ext.sessiond import sessions as S, bridge as B, lifecycle as L, registry as R, bootstrap
+from ext.sessiond.client import Client
 from ext.sessiond.rpc import api, stream
 from core import wsgi
 from core.stream import ClosingIterator
@@ -29,132 +28,134 @@ from stores.dir_store import DirStore
 
 class LifecycleTests(unittest.TestCase):
     def setUp(self):
-        self.temp = sandbox.TempDir(prefix='session-lifecycle-')
+        self.temp = sandbox.TempDir(prefix='sl-')
         self.root = Path(self.temp.name).resolve()
-        self.patchers = [patch.object(P, 'WS', str(self.root)),
-                         patch.object(P, 'WS_REAL', str(self.root)),
-                         patch.object(P, 'find_hosts', return_value=[]),
-                         patch.object(B, '_BRIDGES', {})]
-        for patcher in self.patchers:
-            patcher.start()
-        self.processes = []
-        self.events = []
-        self.sup = P.Supervisor('/session.jsonl', self.events.append, cwd=str(self.root))
-        self.helper = self.root / 'host.py'
-        self.helper.write_text('''import json,sys
+        self.helper = self.root / 'fakepi'
+        self.helper.write_text('#!' + sys.executable + '\n' + '''import json,sys
 for line in sys.stdin:
     obj=json.loads(line)
     if obj.get('type') == 'exit': break
     print(json.dumps({'type':'response','id':obj.get('id'),'command':obj['type'],
                       'success':True,'data':{'entries':[],'commands':[]}}), flush=True)
 ''')
-        real_popen = subprocess.Popen
-        def popen(argv, **kwargs):
-            proc = real_popen([sys.executable, '-u', str(self.helper)], **kwargs)
-            self.processes.append(proc)
-            return proc
-        self.popen = patch.object(P.subprocess, 'Popen', side_effect=popen)
-        self.popen.start()
+        self.helper.chmod(0o700)
+        host = Path(os.environ['W_AGENTD_DIR']).resolve().parent / 'pi-host/pi_host.py'
+        self.service = R.build(dict(runtime=str(self.root / 'r'), host_entry=str(host),
+                                    agentd=os.environ['W_AGENTD_DIR'], stop_timeout=.5),
+                               registered=False)
+        self.clients = []
+        def factory(session_path, on_event, cwd=None, profile=None):
+            client = Client(session_path, on_event, cwd, profile, options=self.service.options)
+            self.clients.append(client)
+            return client
+        self.service.client_factory = factory
+        self.patchers = [patch.object(S, 'WS', str(self.root)),
+                         patch.object(S, 'WS_REAL', str(self.root)),
+                         patch.object(B, '_BRIDGES', {}),
+                         patch.object(bootstrap, '_REGISTRY', self.service),
+                         patch.dict(os.environ, W_SESSION_PI_BIN=str(self.helper))]
+        for patcher in self.patchers:
+            patcher.start()
+        self.events = []
+        self.sup = factory('/session.jsonl', self.events.append, cwd=str(self.root))
 
     def tearDown(self):
-        self.sup.shutdown('test cleanup')
-        for proc in self.processes:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
-        self.popen.stop()
+        # Detach is not cleanup: explicitly stop exact harness-owned instances.
+        for client in self.clients:
+            current = client.life.load()
+            if current and client.life.status()['state'] == 'running':
+                client.life.operate('stop', current['instance'])
+            client.shutdown()
+            for handle in client.life.handles.values():
+                handle.wait(timeout=3)
+        self.wait_for(lambda: not any(t.name == 'sessiond-child-wait' and t.is_alive()
+                                     for t in threading.enumerate()))
         for patcher in reversed(self.patchers):
             patcher.stop()
         self.temp.cleanup()
 
     def start(self):
         self.sup.ensure_started()
-        self.assertTrue(self.sup.wait_ready(2))
+        self.assertTrue(self.sup.wait_ready(2), self.sup.status_doc())
+
+    def wait_for(self, predicate):
+        deadline = time.monotonic() + 3
+        while not predicate() and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertTrue(predicate())
 
     def test_exit_does_not_restart(self):
         self.start()
-        self.sup.send({'type': 'exit'})
-        deadline = time.monotonic() + 2
-        while self.sup.state != 'dormant' and time.monotonic() < deadline:
-            time.sleep(.01)
-        self.assertEqual(self.sup.state, 'dormant')
-        self.assertEqual(len(self.processes), 1)
+        first = self.sup.gen
+        self.assertTrue(self.sup.send({'type': 'exit'}))
+        self.wait_for(lambda: self.sup.life.status()['state'] == 'dormant')
+        self.assertEqual(len(self.sup.life.handles), 1)
         self.start()
-        self.assertEqual(len(self.processes), 2)
+        self.assertNotEqual(self.sup.gen, first)
+        self.assertEqual(len(self.sup.life.handles), 2)
 
-    def test_shutdown_during_start_is_permanent(self):
-        entered, release = threading.Event(), threading.Event()
-        def clear_stale():
-            entered.set()
-            self.assertTrue(release.wait(2))
-        with patch.object(self.sup, '_clear_stale_proc', side_effect=clear_stale):
-            self.sup.ensure_started()
-            self.assertTrue(entered.wait(2))
-            result = []
-            closer = threading.Thread(target=lambda: result.append(self.sup.shutdown()))
-            closer.start()
-            deadline = time.monotonic() + 2
-            while not self.sup._closed and time.monotonic() < deadline:
-                time.sleep(.01)
-            self.assertTrue(self.sup._closed)
-            release.set()
-            closer.join(2)
-            self.assertFalse(closer.is_alive())
-        self.assertTrue(result[0]['ok'])
+    def test_shutdown_is_permanent_detach_not_process_exit(self):
+        self.start()
+        self.assertTrue(self.sup.shutdown()['ok'])
+        self.assertEqual(self.sup.life.status()['state'], 'running')
         self.sup.ensure_started()
         self.assertFalse(self.sup.wait_ready(.05))
-        self.assertEqual(self.sup.state, 'closed')
-        self.assertEqual(len(self.processes), 0)
+        self.assertFalse(self.sup.send({'type': 'prompt'}))
+        self.assertFalse(self.sup.change('reload', self.sup.gen)['ok'])
+        self.assertEqual(len(self.sup.life.handles), 1)
 
-    def test_reload_clear_and_concurrent_delete(self):
+    def test_reload_clear_and_closed_client(self):
         self.start()
         session = Path(self.sup.session_file)
         session.write_text('history')
-        self.assertTrue(self.sup.reload()['ok'])
+        first = self.sup.gen
+        self.assertTrue(self.sup.change('reload', first)['ok'])
+        second = self.sup.gen
+        self.assertNotEqual(first, second)
         self.assertEqual(session.read_text(), 'history')
-        self.assertTrue(self.sup.clear()['ok'])
+        self.assertTrue(self.sup.change('clear', second)['ok'])
         self.assertEqual(session.read_text(), '')
-        self.assertEqual(self.sup.gen, 3)
-        self.assertTrue(all(p.poll() is not None for p in self.processes[:-1]))
-        self.assertTrue(self.sup.shutdown()['ok'])
+        self.assertNotEqual(self.sup.gen, second)
+        self.assertEqual(len(self.sup.life.handles), 3)
+        self.assertTrue(all(p.poll() is not None for p in list(self.sup.life.handles.values())[:-1]))
+        self.sup.shutdown()
         self.assertFalse(self.sup.reload()['ok'])
         self.assertFalse(self.sup.clear()['ok'])
-        self.assertFalse(self.sup.send({'type': 'prompt'}))
 
-    def test_queued_start_does_not_duplicate_reload_generation(self):
+    def test_queued_access_does_not_duplicate_reload_instance(self):
         self.start()
-        # A request queued during the dormant interval of an explicit reload.
+        first = self.sup.gen
         with self.sup._op_lock:
-            self.sup._stop_locked()
-            self.sup.ensure_started()
-            self.assertTrue(self.sup._start_locked()["ok"])
-        self.sup._thread.join(2)
-        self.assertFalse(self.sup._thread.is_alive())
-        self.assertEqual(len(self.processes), 2)
-        self.assertEqual(self.sup.gen, 2)
+            queued = threading.Thread(target=self.sup.ensure_started)
+            queued.start()
+            self.assertTrue(self.sup.change('reload', first)['ok'])
+        queued.join(3)
+        self.assertFalse(queued.is_alive())
+        self.assertEqual(len(self.sup.life.handles), 2)
 
     def test_query_is_settled_when_generation_ends(self):
         b = self.channel()
-        waiter = {"event": threading.Event(), "resp": None}
+        waiter = {'event': threading.Event(), 'resp': None}
         b.pending['q'] = waiter
-        b._ingest({"type": "sessiond.session_dormant"})
+        b._ingest({'type': 'sessiond.session_dormant'})
         self.assertTrue(waiter['event'].is_set())
         self.assertFalse(waiter['resp']['success'])
         self.assertFalse(b.pending)
 
     def test_clear_failure_does_not_spawn(self):
         self.start()
-        with patch('builtins.open', side_effect=PermissionError('cannot truncate')):
-            result = self.sup.clear()
+        with patch.object(self.sup.life, 'truncate', side_effect=PermissionError('cannot truncate')):
+            result = self.sup.change('clear', self.sup.gen)
         self.assertFalse(result['ok'])
-        self.assertEqual(len(self.processes), 1)
-        self.assertIsNone(self.sup.proc)
+        self.assertEqual(len(self.sup.life.handles), 1)
+        self.assertEqual(self.sup.life.load()['phase'], 'stopped')
 
-    def test_start_failure_is_not_retried(self):
-        with patch.object(P.subprocess, 'Popen', side_effect=OSError('cannot spawn')) as spawn:
+    def test_start_failure_is_unknown_not_implicitly_retried(self):
+        with patch.object(L.subprocess, 'Popen', side_effect=OSError('cannot spawn')) as spawn:
             self.sup.ensure_started()
             self.assertFalse(self.sup.wait_ready(2))
-            self.assertEqual(self.sup.state, 'failed')
+            self.assertEqual(self.sup.state, 'unknown')
+            self.sup.ensure_started()
             self.assertEqual(spawn.call_count, 1)
 
     def test_declaration_without_prior_agent_request(self):
@@ -162,19 +163,18 @@ for line in sys.stdin:
         declaration = self.root / 'chat.agent'
         declaration.write_text(json.dumps({'host': 'test', 'cwd': str(self.root)}))
         channel = B.get_bridge('/chat.agent', store=store)
-        channel.sup.ensure_started()
         self.assertTrue(channel.sup.wait_ready(2))
         self.assertEqual(channel.sup.cwd, str(self.root))
-        self.assertEqual(B.get_bridge('/chat.agent', store=store), channel)
+        self.assertIs(B.get_bridge('/chat.agent', store=store), channel)
         with self.assertRaises(ValueError):
             B.get_bridge('/chat.jsonl', store=store)
         declaration.unlink()
         with self.assertRaises(ValueError):
             B.get_bridge('/chat.agent', store=store)
-        dropped = B.drop_session('/chat.jsonl')
-        self.assertTrue(dropped['killed'])
-        self.assertTrue(channel.terminated)
-        self.assertEqual(list(channel.iter_events(channel.seq)), [])
+        detached = B.detach_session('/chat.jsonl')
+        self.assertTrue(detached['found'])
+        self.assertFalse(detached['killed'])
+        self.assertEqual(channel.sup.life.status()['state'], 'running')
 
     def test_invalid_requests_do_not_open_channel(self):
         with patch.object(B, 'get_bridge', side_effect=AssertionError('must not open')):
@@ -187,19 +187,17 @@ for line in sys.stdin:
                 self.assertIn(meta['http_status'][:3], ('400', '403'))
 
     def channel(self):
-        b = B.Bridge('/session.jsonl', cwd=str(self.root))
+        b = B.OrdinaryBridge('/session.jsonl', cwd=str(self.root),
+                             client_factory=self.service.client_factory)
         b.ring = deque(maxlen=8)
         return b
 
-    def test_first_baseline_waits_for_generation_announcement(self):
+    def test_first_baseline_waits_for_instance_announcement(self):
         b = self.channel()
-        try:
-            result = b.get_entries(timeout=2)
-            self.assertTrue(result['ok'])
-            self.assertTrue(result['resp']['success'])
-            self.assertTrue(result['watermark'])
-        finally:
-            self.assertTrue(b.sup.shutdown()['ok'])
+        result = b.get_entries(timeout=2)
+        self.assertTrue(result['ok'], result)
+        self.assertTrue(result['resp']['success'])
+        self.assertTrue(result['watermark'])
 
     def test_expired_dialog_broadcast_precedes_query_response(self):
         for command in ('get_entries', 'get_commands', 'prompt'):
@@ -236,26 +234,22 @@ for line in sys.stdin:
         iterator.close()
         self.assertEqual(b.subscribers, 0)
 
-    def test_disconnect_keeps_process_and_reconnect_reuses_generation(self):
+    def test_disconnect_keeps_process_and_reconnect_reuses_instance(self):
         store = RootStore([('/', DirStore(str(self.root)))])
         (self.root / 'chat.agent').write_text(json.dumps({'host': 'test', 'cwd': str(self.root)}))
         b = B.get_bridge('/chat.agent', store=store)
-        try:
-            self.assertTrue(b.sup.wait_ready(2))
-            generation, process = b.sup.gen, b.sup.proc
-            _, events = stream.interp(store, session='/chat.agent')
-            next(events)
-            events.close()
-            self.assertEqual(b.subscribers, 0)
-            self.assertIsNone(process.poll())
-            connected = B.get_bridge('/chat.agent', store=store)
-            baseline = connected.get_entries(timeout=2)
-            self.assertTrue(baseline['resp']['success'])
-            self.assertIs(connected.sup.proc, process)
-            self.assertEqual(connected.sup.gen, generation)
-            self.assertEqual(len(self.processes), 1)
-        finally:
-            self.assertTrue(B.drop_session('/chat.jsonl')['killed'])
+        generation = b.sup.gen
+        _, events = stream.interp(store, session='/chat.agent')
+        next(events)
+        events.close()
+        self.assertEqual(b.subscribers, 0)
+        self.assertEqual(b.sup.life.status()['state'], 'running')
+        connected = B.get_bridge('/chat.agent', store=store)
+        baseline = connected.get_entries(timeout=2)
+        self.assertTrue(baseline['resp']['success'])
+        self.assertIs(connected.sup, b.sup)
+        self.assertEqual(connected.sup.gen, generation)
+        self.assertEqual(len(b.sup.life.handles), 1)
 
     def test_shared_stream_limit_including_proxy_handlers(self):
         slots = threading.BoundedSemaphore(1)

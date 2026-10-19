@@ -54,7 +54,7 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 }}}))
 (CONFIG / 'settings.json').write_text(json.dumps({'retry': {'enabled': False}, 'compaction': {'enabled': False}}))
 session = ROOT / 'registered.jsonl'
-probe = Path(__file__).resolve().parents[1] / 'ext/sessiond/probe.ts'
+probe = Path(__file__).resolve().parents[1] / 'ext/sessiond/pi-extension.ts'
 cancel_ext = ROOT / 'cancel.ts'
 cancel_ext.write_text('''export default function(pi:any) {
  let cancel=false;

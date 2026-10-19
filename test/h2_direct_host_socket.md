@@ -1,7 +1,7 @@
 # Ordinary fixed socket: post-launch acceptance, no file locks
 
 This is the current ordinary-host candidate contract. P now lives in the unified
-agent-platform/pi-wrap module, runs independently with only the standard library,
+agent-platform/pi-host module, runs independently with only the standard library,
 and neither imports A nor needs AGENTD_DIR. Agent adapter/persona policy moved
 to agent-platform/agentd; dependency direction is A -> P. W still uses its own
 explicit A tool source for registration/other agent APIs; that is not a P dependency.
@@ -66,7 +66,7 @@ visibly; there is no automatic retry of destructive operations.
 - Adapted lifecycle13/CRUD8 retain sequential/reconnect/history/unknown/error
   behavior. Cross-Web simultaneous startup/reload/delete guarantees and
   alternate-socket arbitration were explicitly removed, not silently passed.
-- P test_ordinary_process checks the generic Transport creates no locks;
+- P test_local_process checks the generic Transport creates no locks;
   test_standalone copies P alone and rejects A imports/reads during real RPC.
   A test_rpc_adapter separately checks actual agent two-lock contention and
   shared Transport method objects; the UI baseline implementation moved, not copied.

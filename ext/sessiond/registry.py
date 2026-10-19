@@ -1,6 +1,6 @@
-"""Ordinary registration/CRUD and process-local factory wiring.
+"""Ordinary session registration, fenced CRUD and explicit client assembly.
 
-Configured once at process startup; no production test imports or file locks.
+File operations live in sessions, process operations in lifecycle.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -11,17 +11,11 @@ from pathlib import Path
 import stat
 import threading
 import uuid
-from ext.sessiond import ordinary_host as H
-from ext.sessiond import proc as P, bridge as B
-from ext.sessiond.rpc import api
+from ext.sessiond import lifecycle as H
+from ext.sessiond.client import Client
+from ext.sessiond import sessions as P, bridge as B
 
-_EXPECTED_REGISTRATION = ContextVar('h2_registration', default=None)
-_CREATE = P.create_cc_session
-_LIST = P.list_cc_sessions
-_RENAME = P.rename_cc_session
-_DELETE_FILES = P.delete_cc_session
-_GET_BRIDGE = B.get_bridge
-_NEW_NAME = P.new_session_name
+_EXPECTED_REGISTRATION = ContextVar('sessiond_registration', default=None)
 
 
 def imported_history(life):
@@ -53,6 +47,7 @@ class Registry:
         if self.root.exists():
             H.private_dir(self.root)
         self.mutex = threading.RLock()
+        self.registered = True
 
     @contextmanager
     def lock(self):
@@ -80,18 +75,18 @@ class Registry:
             raise ValueError('registration absent/unreadable: %s' % e) from e
         if (not isinstance(doc, dict) or not isinstance(doc.get('h2Registration'), str)
                 or len(doc['h2Registration']) != 32):
-            raise ValueError('missing/incomplete candidate registration; unknown ownership')
+            raise ValueError('missing/incomplete session registration; unknown ownership')
         # The token is published only AFTER inbox creation succeeds. Validate
-        # the completed identity on every resolution and cached supervisor
+        # the completed identity on every resolution and cached client
         # check; never mkdir here or silently repair a partial registration.
         inbox = Path(P.WS) / 'agents/bot' / name / 'inbox'
         try:
             st = inbox.lstat()
         except OSError as e:
-            raise ValueError('candidate inbox absent/unreadable; unknown ownership: %s' % e) from e
+            raise ValueError('session inbox absent/unreadable; unknown ownership: %s' % e) from e
         if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid()
                 or inbox.resolve() != inbox):
-            raise ValueError('missing/incomplete candidate inbox; unknown ownership')
+            raise ValueError('missing/incomplete session inbox; unknown ownership')
         prof, pd = P.profile_spec(doc.get('profile'))
         cwd = P.profile_cwd(prof, pd)
         if (doc.get('name') != name or doc.get('cwd') != cwd
@@ -100,7 +95,7 @@ class Registry:
         return doc, a, h
 
     def life(self, name, doc, history):
-        # Identical configuration to the Supervisor's data path; never launches.
+        # Identical configuration to the Client's data path; never launches.
         env = P.clean_env()
         env.update(SESSIOND_SESSION_FILE=str(history), W_WORKSPACE=P.WS,
                    AGENTD_DIR=self.options['agentd'], AGENTD_ROOT=P.WS,
@@ -117,7 +112,7 @@ class Registry:
                 attempts += 1
                 if attempts > P.SESSION_NAME_TRIES:
                     raise ValueError('cannot allocate a free session name in bounded tries')
-                name = _NEW_NAME()
+                name = P.new_session_name()
                 if not P.SESSION_NAME_OK.fullmatch(name):
                     raise ValueError('generated session name invalid')
                 a, h = self.files(name)
@@ -134,7 +129,7 @@ class Registry:
             # profile/host/cwd/declaration writer. No existing file is overwritten.
             for _ in range(P.SESSION_NAME_TRIES):
                 try:
-                    result = _CREATE(profile, name_factory=allocate)
+                    result = P.create_files(profile, name_factory=allocate)
                     break
                 except NameCollision:
                     continue
@@ -161,7 +156,7 @@ class Registry:
         with self.lock():
             # Keep original title precedence, mtime order and row/API/tab shape;
             # explicitly disable the old pi/environ scanner, then replace state.
-            rows = _LIST(scan_hosts=False)
+            rows = P.list_files()
             for r in rows:
                 r.update(state='unknown', pids=[])
                 try:
@@ -199,14 +194,16 @@ class Registry:
     def rename(self, name, title):
         with self.lock():
             self.declaration(name)
-            return _RENAME(name, title)  # title-only original writer/validation
+            return P.rename_files(name, title)  # title-only original writer/validation
 
     def get_bridge(self, entry, store=None):
         with self.lock():
-            if isinstance(entry, str) and entry.startswith(P.site_path_of(P.sessions_dir()) + '/'):
-                name = api._cc_name(entry)
+            if self.registered and isinstance(entry, str) and entry.startswith(P.site_path_of(P.sessions_dir()) + '/'):
+                name = P.session_name_from_site(entry)
                 self.declaration(name)
-            return _GET_BRIDGE(entry, store=store)
+            with B._BRIDGES_LOCK:
+                return B._get_bridge_locked(entry, store, client_factory=self.client_factory,
+                                            bridge_factory=self.bridge_factory)
 
     def delete(self, name):
         with self.lock():
@@ -230,7 +227,7 @@ class Registry:
                             raise ValueError('incomplete runtime; unknown ownership')
                         # No process ever launched: declaration fence plus an
                         # explicit unstarted capture, not an invented host token.
-                        result = _DELETE_FILES(name)
+                        result = P.delete_files(name)
                         H.atomic(life.local / 'deleted-registration.json', dict(registration=expected_reg))
                         return dict(result, ok=True, process=dict(neverStarted=True), registration=expected_reg,
                                     retained=['inbox', 'runtime facts'])
@@ -262,7 +259,7 @@ class Registry:
                     life.save(d)
                     # Original deletion semantics: only these TWO regular files.
                     # Inbox, runtime facts, locks and unrelated history stay put.
-                    result = _DELETE_FILES(name)
+                    result = P.delete_files(name)
                     d['phase'] = 'deleted'
                     life.save(d)  # permanent tombstone denies old object revival
                 key = str(history)
@@ -283,10 +280,11 @@ class NameCollision(ValueError):
     pass
 
 
-def build(options):
+def build(options, *, registered=True):
     registry = Registry(options)
+    registry.registered = registered
 
-    class RegisteredSupervisor(H.DirectSupervisor):
+    class RegisteredClient(Client):
         def __init__(self, session_path, on_event, cwd=None, profile=None, *, options):
             super().__init__(session_path, on_event, cwd, profile, options=options)
             self.registration = None
@@ -294,7 +292,7 @@ def build(options):
             if self.registered:
                 doc, _a, h = registry.declaration(self.name)
                 if str(h) != self.session_file or cwd != doc['cwd'] or profile != doc['profile']:
-                    raise ValueError('supervisor registration mismatch')
+                    raise ValueError('client registration mismatch')
                 self.registration = doc['h2Registration']
                 self.life.env['AGENTD_ROOT'] = P.WS
 
@@ -302,7 +300,7 @@ def build(options):
             if self.registered:
                 doc, _a, _h = registry.declaration(self.name)
                 if doc['h2Registration'] != self.registration:
-                    raise ValueError('stale supervisor registration')
+                    raise ValueError('stale client registration')
                 if self.life.load() is None and not imported_history(self.life) and (
                         Path(self.session_file).exists() or
                         (self.life.local / 'deleted-registration.json').exists() or
@@ -338,7 +336,7 @@ def build(options):
                     return dict(ok=False, error=str(e))
                 return super().change(operation, expected)
 
-    class RegisteredBridge(H.DirectBridge):
+    class RegisteredBridge(B.OrdinaryBridge):
         # These are only process-local thread locks, including original queries
         # that call ensure_started. No cross-Web atomicity is promised.
         def get_entries(self, *a, **kw):
@@ -380,18 +378,10 @@ def build(options):
                 yield event
 
     def factory(session_path, on_event, cwd=None, profile=None):
-        return RegisteredSupervisor(session_path, on_event, cwd, profile, options=options)
+        return RegisteredClient(session_path, on_event, cwd, profile, options=options)
 
-    registry.bindings = ((P, 'Supervisor', factory), (B, 'Bridge', RegisteredBridge),
-            (P, 'create_cc_session', registry.create), (P, 'list_cc_sessions', registry.rows),
-            (P, 'rename_cc_session', registry.rename), (B, 'delete_cc_session', registry.delete),
-            (B, 'get_bridge', registry.get_bridge))
-    return registry
-
-
-def configure(options):
-    registry = build(options)
-    # Factory selection happens once before requests, not around each request.
-    for module, name, factory in registry.bindings:
-        setattr(module, name, factory)
+    registry.client_factory = factory if registered else (
+            lambda session_path, on_event, cwd=None, profile=None:
+                Client(session_path, on_event, cwd, profile, options=options))
+    registry.bridge_factory = RegisteredBridge if registered else B.OrdinaryBridge
     return registry

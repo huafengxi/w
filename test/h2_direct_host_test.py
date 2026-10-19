@@ -24,8 +24,8 @@ os.environ.update(HOME=str(BASE / 'home'), TMPDIR=str(BASE / 'tmp'),
 os.chdir(BASE / 'cwd')
 sys.path[:0] = [str(SOURCE), str(SOURCE / 'test')]
 from h2_direct_host import (Lifecycle, identity, same, live, signal_identity,
-                            atomic, installed, api_call, DirectBridge)
-from ext.sessiond import proc as P, bridge as B
+                            atomic, installed, api_call)
+from ext.sessiond import sessions as P, bridge as B
 from ext.sessiond.rpc import api, stream
 from stores.store import RootStore
 from stores.dir_store import DirStore
@@ -569,7 +569,8 @@ class Acceptance(unittest.TestCase):
         # remain intact; mock receipt proves routing, not a real agent control.
         with installed(self.f.options):
             agent = B.Bridge('/chat-a.jsonl', sock_path='/not-connected', participant_id='task/test')
-            self.assertIsInstance(agent.sup, P.SocketSupervisor)
+            from ext.sessiond.agent_client import AgentClient
+            self.assertIsInstance(agent.sup, AgentClient)
             with patch.object(B, 'get_bridge', return_value=agent), patch.object(api, '_agentd_control_proxy', return_value=('proxy', 'real-branch')) as proxy:
                 self.assertEqual(api_call(None, op='reload', session='/agent'), ('proxy', 'real-branch'))
                 proxy.assert_called_once()

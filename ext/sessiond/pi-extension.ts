@@ -1,21 +1,12 @@
 /**
- * sessiond 探针扩展（任务 s0f1la）。
+ * sessiond's pi-side adapter, explicitly loaded with -e by ordinary Client and
+ * the agentd adapter. Runs inside pi; no Web server or P transport logic here.
  *
- * 由 ext/sessiond/proc.py:_spawn 对所有会话子进程注入 `-e <本文件绝对路径>`。
- * 提供内部斜杠命令 `sessiond-inspect` 与 `sessiond-chat`（命名冲突排查见任务 s0f1la plan.md：
- * 不与 pi 内置命令、已装 npm 包命令、本地/项目扩展命令、skill 命名空间冲突；
- * 本扩展不注册任何工具，工具名冲突面为零）。
- *
- * 行为：`/sessiond-inspect <nonce>` 把该会话当前的系统提示词全文 + 工具清单
- * 转储为侧车文件 workspace/run/sessiond-inspect/<nonce>.json（临时文件+rename 原子
- * 落盘），由 sessiond 后端 op=inspect 编排（发命令→等回执→读文件→HTTP 返回，
- * 见 ext/sessiond/bridge.py:inspect）。不走 pi 事件流/jsonl，零会话污染。
- *
- * 健壮性（实测口径，与 proc.py PROBE_EXT 注释同步）：pi 对 -e 扩展的加载（语法）
- * 错误是致命的（启动即退出）；运行期异常（命令/钩子）只发 extension_error 不崩进程。
- * 故探针保持极小面，命令 handler 整体 try/catch，异常也写 error payload 到同一侧车文件，
- * 绝不拖垮会话。
- * chat 状态钩子仅保留压缩瞬态；无工具、无后台资源。
+ * sessiond-inspect returns the current system prompt and registered tool list.
+ * sessiond-chat queries live chat state or regenerates on the same history tree.
+ * Nonce-addressed sidecar results are read/deleted by Bridge; queries do not add
+ * model messages. Regeneration deliberately appends a new branch via public APIs.
+ * No model-callable tools, background processes, sockets or timers are registered.
  */
 
 import { VERSION } from "@earendil-works/pi-coding-agent";

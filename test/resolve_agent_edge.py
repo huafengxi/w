@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sandbox
 from ext.sessiond.rpc import api           # noqa: E402
-from ext.sessiond import proc as _proc     # noqa: E402
+from ext.sessiond import sessions as _proc     # noqa: E402
 
 
 class FakeStore:

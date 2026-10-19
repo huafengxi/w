@@ -10,7 +10,7 @@
      sessionDir/name 服务端恒定或自动生成；
   ④ ⛔ 无 `command` 键（rename/delete 两枚 op 只接 `session`/`title`/`confirm`；客户端传
      command/cwd/profile/sessionDir/name/host ⇒ api 层 400）；**新建面不经 op**（页面手动
-     widget 直调 CLI → `proc.create_cc_session`）；
+     widget 直调 CLI → `proc.create_files`）；
   ⑤ delete 的删除面：realpath 前缀断言（拒符号链接逃逸）+ root 身份断言 + 删前 stat
      三要素证据 + 删后复核；rename 的标题校验与 override 落点（.agent 的 title 字段）。
 
@@ -30,7 +30,10 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sandbox
-from ext.sessiond import proc as _proc          # noqa: E402
+from ext.sessiond import sessions as _proc, bootstrap, registry as registry_module
+from ext.sessiond.client import Client
+from unittest.mock import patch
+from pathlib import Path          # noqa: E402
 from ext.sessiond.rpc import api as _api        # noqa: E402
 
 
@@ -174,7 +177,7 @@ def case3_profile_whitelist(ws, outside):
 # ---------------------------------------------------------------- ④ 建会话与字段集
 
 def case4_create(ws, outside):
-    doc = _proc.create_cc_session("ccw")            # cwd 由清单声明（= 项目 w）
+    doc = _proc.create_files("ccw")            # cwd 由清单声明（= 项目 w）
     agent_path = doc["agent_path"]
     assert os.path.exists(agent_path), agent_path
     with open(agent_path, encoding="utf-8") as f:
@@ -196,22 +199,22 @@ def case4_create(ws, outside):
     print("case4 OK: 字段集 = %s（⛔ 无 command 键；0600）" % sorted(spec))
 
     # 缺省 profile = CC_PROFILE（未声明 cwd ⇒ 工作区根）
-    d0 = _proc.create_cc_session()
+    d0 = _proc.create_files()
     assert d0["profile"] == _proc.CC_PROFILE == "command-center", d0
     assert d0["cwd"] == os.path.realpath(ws), d0
     print("case4 OK: 缺省 profile=%s、清单未声明 cwd ⇒ 工作区根（%s）"
           % (d0["profile"], d0["cwd"]))
-    _proc.delete_cc_session(d0["name"])
+    _proc.delete_files(d0["name"])
 
     # 非 interactive 档 ⇒ 拒
     for bad, label in (("executor", "form: task"), ("dispatcher", "form: resident"),
                        ("noform", "缺 form"), ("nosuchprofile", "清单不在场")):
-        msg = _reject(_proc.create_cc_session, bad)
+        msg = _reject(_proc.create_files, bad)
         print("   reject profile=%-14s %-10s → %s" % (bad, label, msg))
     # 清单声明的 cwd 非法 ⇒ 拒（不落盘、⛔ 不回落）
     before = len(os.listdir(os.path.join(ws, "run", "sessiond")))
     for bad, label in (("ccenv", "根集内非项目"), ("ccabs", "绝对路径")):
-        msg = _reject(_proc.create_cc_session, bad)
+        msg = _reject(_proc.create_files, bad)
         print("   reject 清单 cwd 非法（%s：%s）→ %s" % (bad, label, msg))
     after = len(os.listdir(os.path.join(ws, "run", "sessiond")))
     assert before == after, (before, after)
@@ -222,10 +225,10 @@ def case4_create(ws, outside):
     saved_tries = _proc.SESSION_NAME_TRIES
     _proc.new_session_name = lambda: "a000"
     try:
-        d1 = _proc.create_cc_session("ccw")
+        d1 = _proc.create_files("ccw")
         ino1 = os.stat(d1["agent_path"]).st_ino
         _proc.SESSION_NAME_TRIES = 2
-        msg = _reject(_proc.create_cc_session, "ccw")
+        msg = _reject(_proc.create_files, "ccw")
         assert "free session name" in msg, msg
         assert os.stat(d1["agent_path"]).st_ino == ino1, "撞名不得覆盖第一枚"
         with open(d1["agent_path"], encoding="utf-8") as f:
@@ -239,20 +242,20 @@ def case4_create(ws, outside):
     seq = ["a000", "b9zz"]
     _proc.new_session_name = lambda: seq.pop(0)
     try:
-        d2 = _proc.create_cc_session("ccw")
+        d2 = _proc.create_files("ccw")
         assert d2["name"] == "b9zz", d2["name"]
         assert os.stat(d1["agent_path"]).st_ino == ino1, "第一枚不得被动"
         print("case4 OK: 撞名 ⇒ 重取到下一个自由名（%s），⛔ 零覆盖" % d2["name"])
     finally:
         _proc.new_session_name = saved_gen
-        _proc.delete_cc_session(d1["name"])
-        _proc.delete_cc_session(d2["name"])
+        _proc.delete_files(d1["name"])
+        _proc.delete_files(d2["name"])
 
     # host 不可得 ⇒ 拒（⛔ 不猜）
     saved = _proc._self_host
     _proc._self_host = lambda: None
     try:
-        msg = _reject(_proc.create_cc_session, "ccw")
+        msg = _reject(_proc.create_files, "ccw")
         print("   reject host 不可得 → %s" % msg)
     finally:
         _proc._self_host = saved
@@ -313,21 +316,21 @@ def case5_title(ws, outside):
 # ---------------------------------------------------------------- ⑥ 列表与分组
 
 def case6_list(ws, outside, created):
-    second = _proc.create_cc_session()               # 第二枚：cwd = workspace 自身（清单未声明）
-    rows = _proc.list_cc_sessions()
+    second = _proc.create_files()               # 第二枚：cwd = workspace 自身（清单未声明）
+    rows = _proc.list_files()
     by_name = {r["name"]: r for r in rows}
     assert created["name"] in by_name and second["name"] in by_name, sorted(by_name)
     r1 = by_name[created["name"]]
     assert r1["project"] == ws + "/w", r1["project"]
     assert by_name[second["name"]]["project"] == ws, by_name[second["name"]]
-    assert r1["state"] in ("running", "dormant") and isinstance(r1["pids"], list)
+    assert r1["state"] == "unknown" and r1["pids"] == []
     assert r1["agent_site"] == "/run/sessiond/%s.agent" % created["name"]
     assert r1["session_site"] == "/run/sessiond/%s.jsonl" % created["name"]
     groups = sorted({r["project"] for r in rows})
     assert groups == [ws, ws + "/w"], groups
     # rename 的 override 生效 + titleSource 标记
-    _proc.rename_cc_session(created["name"], "我的工作会话")
-    rows = {r["name"]: r for r in _proc.list_cc_sessions()}
+    _proc.rename_files(created["name"], "我的工作会话")
+    rows = {r["name"]: r for r in _proc.list_files()}
     assert rows[created["name"]]["title"] == "我的工作会话", rows[created["name"]]
     assert rows[created["name"]]["titleSource"] == "override"
     assert rows[second["name"]]["titleSource"] == "name"   # 无 jsonl ⇒ 回落 name
@@ -335,7 +338,7 @@ def case6_list(ws, outside, created):
     bad = os.path.join(ws, "run", "sessiond", "broken.agent")
     with open(bad, "w") as f:
         f.write("{not json\n")
-    names = {r["name"] for r in _proc.list_cc_sessions()}
+    names = {r["name"] for r in _proc.list_files()}
     assert "broken" not in names and created["name"] in names, names
     os.unlink(bad)
     print("case6 OK: 列表按项目分组 = %s；override/auto/name 三种标题来源都在场；"
@@ -349,16 +352,16 @@ def case7_rename(ws, outside, created):
     name = created["name"]
     for bad, label in ((None, "非字符串"), ("../x", "穿越段"), ("a/b", "含分隔符"),
                        ("", "空串"), (".hidden", "点开头")):
-        msg = _reject(_proc.rename_cc_session, bad, "t")
+        msg = _reject(_proc.rename_files, bad, "t")
         print("   reject rename name=%-10r %-10s → %s" % (bad, label, msg))
-    msg = _reject(_proc.rename_cc_session, "nosuchsession", "t")
+    msg = _reject(_proc.rename_files, "nosuchsession", "t")
     print("   reject rename 不存在的会话 → %s" % msg)
-    msg = _reject(_proc.rename_cc_session, name, "x" * (_proc.TITLE_MAX + 1))
+    msg = _reject(_proc.rename_files, name, "x" * (_proc.TITLE_MAX + 1))
     print("   reject rename 标题超长 → %s" % msg)
-    msg = _reject(_proc.rename_cc_session, name, "bad\x01title")
+    msg = _reject(_proc.rename_files, name, "bad\x01title")
     print("   reject rename 标题含控制字符 → %s" % msg)
     # 空标题 = 清除 override（回落自动标题）
-    r = _proc.rename_cc_session(name, "   ")
+    r = _proc.rename_files(name, "   ")
     assert r["override"] is None and r["title"] == name, r
     with open(os.path.join(ws, "run", "sessiond", name + ".agent"),
               encoding="utf-8") as f:
@@ -375,7 +378,7 @@ def case8_delete(ws, outside, created, second):
     with open(jsonl, "w", encoding="utf-8") as f:
         f.write(json.dumps({"type": "session"}) + "\n")
     st = os.stat(agent)
-    r = _proc.delete_cc_session(name)
+    r = _proc.delete_files(name)
     assert r["removed"] == ["agent", "jsonl"], r
     assert r["afterExists"] == {"agent": False, "jsonl": False}, r
     assert not os.path.exists(agent) and not os.path.exists(jsonl)
@@ -385,7 +388,7 @@ def case8_delete(ws, outside, created, second):
     print("case8 OK: 删前身份证据（dev=%s ino=%s size=%s realpath=%s）+ 删后复核 exists=False"
           % (ev["dev"], ev["ino"], ev["size"], ev["realpath"]))
     # 幂等：再删一次（.agent 已不在）⇒ 名字校验通过、零 removed、复核仍为假
-    r2 = _proc.delete_cc_session(name)
+    r2 = _proc.delete_files(name)
     assert r2["removed"] == [] and r2["afterExists"] == {"agent": False,
                                                          "jsonl": False}, r2
     print("case8 OK: 重复删除幂等（removed=[]）")
@@ -394,7 +397,7 @@ def case8_delete(ws, outside, created, second):
     esc = os.path.join(ws, "run", "sessiond", "esc.agent")
     os.symlink(os.path.join(outside, "secret.txt"), esc)
     target_before = os.stat(os.path.join(outside, "secret.txt"))
-    msg = _reject(_proc.delete_cc_session, "esc")
+    msg = _reject(_proc.delete_files, "esc")
     print("   reject delete 符号链接逃逸 → %s" % msg)
     assert os.path.exists(os.path.join(outside, "secret.txt")), "目标文件不得被动"
     assert os.stat(os.path.join(outside, "secret.txt")).st_ino == target_before.st_ino
@@ -402,7 +405,7 @@ def case8_delete(ws, outside, created, second):
 
     # 反控 B：名字非法（穿越/分隔符）
     for bad in ("../evil", "a/b", "", None, "x" * 80):
-        msg = _reject(_proc.delete_cc_session, bad)
+        msg = _reject(_proc.delete_files, bad)
         print("   reject delete name=%-10r → %s" % (bad, msg))
 
     # 反控 C：root 身份断言 —— 会话目录解析成 WS 根（合成形态：SESSIONS_SUBDIR 空）
@@ -414,7 +417,7 @@ def case8_delete(ws, outside, created, second):
     finally:
         _proc.SESSIONS_SUBDIR = saved
     # 清理第二枚（走正常删除面）
-    r3 = _proc.delete_cc_session(second["name"])
+    r3 = _proc.delete_files(second["name"])
     assert r3["afterExists"] == {"agent": False, "jsonl": False}, r3
     print("case8 OK: 反控 A/B/C 全部被拒，第二枚会话正常收口")
 
@@ -431,12 +434,12 @@ def case9_api(ws, outside):
         return meta.get("http_status", "200 OK"), json.loads(body)
 
     # 新建 = CLI 面（零 HTTP 参数面；校验全在 proc）
-    created = _proc.create_cc_session("ccw")
+    created = bootstrap.get_registry().create("ccw")
     name = created["name"]
     assert created["profile"] == "ccw" and created["host"] == "test-host", created
     assert created["cwd"] == os.path.realpath(os.path.join(ws, "w")), created
     assert created["agent_site"] == "/run/sessiond/%s.agent" % name, created
-    print("case9 OK: 新建走 CLI 面（proc.create_cc_session profile=ccw → %s，cwd 由清单声明 = %s）"
+    print("case9 OK: 新建走 CLI 面（proc.create_files profile=ccw → %s，cwd 由清单声明 = %s）"
           % (name, created["cwd"]))
 
     # 退役面钉桩：create_session 不在 op 集内 ⇒ 落到既有 session 参数门的 400
@@ -479,7 +482,7 @@ def case9_api(ws, outside):
     assert doc["removed"] == ["agent"], doc
     assert doc["evidence"]["jsonl"]["absent"] is True, doc
     assert doc["afterExists"] == {"agent": False, "jsonl": False}, doc
-    assert doc["process"]["found"] is False, doc      # 从未打开 ⇒ ⛔ 不为它建桥拉起
+    assert doc["process"]["neverStarted"] is True, doc      # 从未打开 ⇒ ⛔ 不为它建桥拉起
     st, doc = call(op="session_tabs")
     assert doc["rows"] == [], doc                      # 空态吐零行
     print("case9 OK: op=delete_session（process.found=False、未建桥）+ 空态 session_tabs 零行")
@@ -545,136 +548,36 @@ def case10_agent_profile(ws, outside):
         os.unlink(os.path.join(d, n + ".agent"))
 
 
-def case11_spawn_env(ws, outside):
-    """`Supervisor._spawn` 的 env 面：profile 在场 ⇒ clean_env() 之后回注 DISPATCH_PROFILE；
-    缺省 ⇒ ⛔ 不注（既有 .agent/.jsonl 会话的 spawn env 逐字不变）。
-    monkeypatch subprocess.Popen ⇒ ⛔ 不真拉进程。"""
-    import io as _io
-    import subprocess as _sp
-
-    class _FakeProc:
-        def __init__(self):
-            self.pid = 424242
-            self.stdin = _io.BytesIO()
-            self.stdout = _io.BytesIO(b"")
-
-        def poll(self):
-            return None
-
-    captured = {}
-
-    def fake_popen(cmd, **kw):
-        captured["cmd"] = cmd
-        captured["env"] = kw.get("env")
-        captured["cwd"] = kw.get("cwd")
-        return _FakeProc()
-
-    jsonl = os.path.join(ws, "run", "sessiond", "spawnenv.jsonl")
-    saved = _sp.Popen
-    _proc.subprocess.Popen = fake_popen
-    try:
-        for profile, expect in (("command-center", "command-center"), (None, None)):
-            captured.clear()
-            sup = _proc.Supervisor(jsonl, on_event=lambda o: None, cwd=ws,
-                                   profile=profile)
-            sup._spawn()
-            env = captured["env"]
-            assert _proc.HOST_MARKER in env, "既有标记必须仍在场"
-            if expect:
-                assert env.get("DISPATCH_PROFILE") == expect, env.get("DISPATCH_PROFILE")
-            else:
-                assert "DISPATCH_PROFILE" not in env, env.get("DISPATCH_PROFILE")
-            print("case11 OK: profile=%-16r ⇒ spawn env DISPATCH_PROFILE=%r"
-                  "（HOST_MARKER 仍在场，cwd=%s）"
-                  % (profile, env.get("DISPATCH_PROFILE"), captured["cwd"]))
-    finally:
-        _proc.subprocess.Popen = saved
-        if os.path.exists(jsonl):
-            os.unlink(jsonl)
+def case11_client_env(ws, outside):
+    """Profile is injected after scrubbing; constructing a client does not spawn pi."""
+    for profile in ("command-center", None):
+        with patch.dict(os.environ, DISPATCH_PROFILE="inherited-poison"):
+            client = Client("/run/sessiond/spawnenv.jsonl", lambda obj: None, cwd=ws,
+                            profile=profile, options=bootstrap.get_registry().options)
+        env = client.life.env
+        assert env[_proc.HOST_MARKER] == client.session_file
+        assert env.get("DISPATCH_PROFILE") == profile
+        assert client.life.load() is None
+        assert client.life.extensions == ["-e", _proc.PI_EXTENSION]
+    print("case11 OK: explicit client configuration, scrubbed profile and no process spawn")
 
 
-def case12_drop_session(ws, outside):
-    """删除的**进程面**：`bridge.drop_session` 绝不建桥；命中桥接 ⇒ `Supervisor.shutdown`
-    杀进程（SIGTERM 档）+ 摘除登记。monkeypatch subprocess.Popen ⇒ ⛔ 不真拉 pi。"""
-    import io as _io
-    import threading as _th
-    from ext.sessiond import bridge as _b
-
+def case12_detach_session(ws, outside):
+    """Detaching never constructs a channel or claims process termination."""
+    from ext.sessiond import bridge as b
+    from types import SimpleNamespace
     site = "/run/sessiond/dropcase.jsonl"
     key = _proc.resolve_session_path(site)
-
-    # ① 未命中（从未打开）⇒ found=False 且 **⛔ 不建桥**
-    r = _b.drop_session(site)
-    assert r == {"found": False, "killed": False}, r
-    with _b._BRIDGES_LOCK:
-        assert key not in _b._BRIDGES, "drop_session ⛔ 不得为被删的会话建桥/拉起"
-    print("case12 OK: 未命中桥接 ⇒ found=False 且零建桥（删从未打开的会话不会反而拉起它）")
-
-    class _FakeProc:
-        def __init__(self):
-            self.pid = 424243
-            self.stdin = _io.BytesIO()
-            self._ev = _th.Event()
-            event = self._ev
-            class BlockingStdout:
-                def readline(self):
-                    event.wait(20)
-                    return b''
-                def close(self):
-                    event.set()
-            self.stdout = BlockingStdout()
-            self.terminated = False
-            self.killed = False
-
-        def poll(self):
-            return 0 if self._ev.is_set() else None
-
-        def wait(self, timeout=None):
-            if self._ev.wait(timeout if timeout is not None else 20):
-                return 0
-            raise _proc.subprocess.TimeoutExpired("fake", timeout)
-
-        def terminate(self):
-            self.terminated = True
-            self._ev.set()
-
-        def kill(self):
-            self.killed = True
-            self._ev.set()
-
-    holder = {}
-
-    def fake_popen(cmdo, **kw):
-        holder["proc"] = _FakeProc()
-        holder["env"] = kw.get("env")
-        return holder["proc"]
-
-    saved = _proc.subprocess.Popen
-    _proc.subprocess.Popen = fake_popen
-    try:
-        b = _b.Bridge(site, cwd=ws, profile="command-center")
-        with _b._BRIDGES_LOCK:
-            _b._BRIDGES[key] = b
-        b.sup.ensure_started()
-        assert b.sup.wait_ready(timeout=15), "假进程未就位"
-        assert holder["env"].get("DISPATCH_PROFILE") == "command-center", holder["env"]
-        r = _b.drop_session(site)
-        assert r["found"] is True and r["killed"] is True, r
-        assert holder["proc"].terminated is True, "SIGTERM 档未走"
-        assert holder["proc"].killed is False, "已优雅退出 ⇒ ⛔ 不应再 SIGKILL"
-        with _b._BRIDGES_LOCK:
-            assert key not in _b._BRIDGES, "桥接未摘除"
-        assert b.terminated, "删除后事件流须终结"
-        print("case12 OK: 命中桥接 ⇒ shutdown 杀进程（terminated=True、未走 SIGKILL）"
-              "+ 桥接摘除且流终结（返回 %s）" % r)
-        # 再删一次 ⇒ 幂等（已摘除）
-        r2 = _b.drop_session(site)
-        assert r2 == {"found": False, "killed": False}, r2
-        print("case12 OK: 重复 drop 幂等（found=False）")
-    finally:
-        _proc.subprocess.Popen = saved
-        with _b._BRIDGES_LOCK:
-            _b._BRIDGES.pop(key, None)
+    assert b.detach_session(site) == dict(found=False, killed=False)
+    calls = []
+    channel = SimpleNamespace(sup=SimpleNamespace(shutdown=lambda: calls.append("detach") or dict(ok=True)))
+    with b._BRIDGES_LOCK:
+        b._BRIDGES[key] = channel
+    result = b.detach_session(site)
+    assert result == dict(ok=True, found=True, killed=False), result
+    assert calls == ["detach"] and key not in b._BRIDGES
+    assert b.detach_session(site) == dict(found=False, killed=False)
+    print("case12 OK: detach-only channel removal, no invented kill result")
 
 
 def main():
@@ -693,10 +596,16 @@ def main():
         second = case6_list(ws, outside, created)
         case7_rename(ws, outside, created)
         case8_delete(ws, outside, created, second)
-        case9_api(ws, outside)
+        options = dict(runtime=str(Path(base) / "runtime"),
+                       host_entry=str(Path(os.environ["W_AGENTD_DIR"]).resolve().parent / "pi-host/pi_host.py"),
+                       agentd=os.environ["W_AGENTD_DIR"])
+        service = registry_module.build(options)
+        with patch.object(bootstrap, "_REGISTRY", service):
+            case9_api(ws, outside)
         case10_agent_profile(ws, outside)
-        case11_spawn_env(ws, outside)
-        case12_drop_session(ws, outside)
+        with patch.object(bootstrap, "_REGISTRY", service):
+            case11_client_env(ws, outside)
+            case12_detach_session(ws, outside)
         print("ALL PASS")
         return 0
     finally:

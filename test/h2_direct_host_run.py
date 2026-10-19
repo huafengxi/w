@@ -72,14 +72,15 @@ run('root-guard', [sys.executable, '-B', '-c',
     "import sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from safe_delete import safe_rmtree;"
     "a,b=map(Path,sys.argv[2:]);assert not safe_rmtree(a,authorized_root=a)[0];"
     "assert not safe_rmtree(b,authorized_root=a)[0];assert (b/'keep').read_text()=='harmless'", str(A), str(allowed), str(outside)])
-run('P-ordinary-process', [sys.executable, '-B', str(P / 'test_ordinary_process.py')])
+run('P-local-process', [sys.executable, '-B', str(P / 'test_local_process.py')])
+run('source-layout', [sys.executable, '-B', str(W / 'test/source_layout.py')])
 run('ordinary-default', [sys.executable, '-B', str(W / 'test/ordinary_default.py')])
 run('h2-platform', [sys.executable, '-B', str(W / 'test/h2_direct_host_platform_test.py')])
 run('h2-startup-acceptance', [sys.executable, '-B', str(W / 'test/h2_direct_host_startup_test.py')])
 run('h2-acceptance', [sys.executable, '-B', str(W / 'test/h2_direct_host_test.py')])
 run('h2-crud', [sys.executable, '-B', str(W / 'test/h2_direct_host_crud_test.py')])
 run('h2-repair-countercontrols', [sys.executable, '-B', str(W / 'test/h2_direct_host_repair_test.py')])
-for name in ('resolve_agent_edge', 'session_lifecycle', 'dormant_send_revive', 'session_ops_edge', 'chat_backend'):
+for name in ('agent_client', 'resolve_agent_edge', 'session_lifecycle', 'dormant_send_revive', 'session_ops_edge', 'chat_backend'):
     run('W-' + name, [sys.executable, '-B', str(W / ('test/' + name + '.py'))])
 if node:
     run('W-chat_frontend', [node, str(W / 'test/chat_frontend.cjs')])

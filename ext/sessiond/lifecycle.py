@@ -1,8 +1,8 @@
-"""Linux/Darwin ordinary host: W connects to independent P, never owns pi PIPE.
+"""Finite, identity-checked lifecycle operations for independent pi hosts.
 
-Configured once before serving requests; agent task/bot socket routing is separate.
+Owns local instance facts, not pi PIPEs, agent scheduling or browser transport.
 """
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from contextvars import ContextVar
 import ctypes
 import hashlib
@@ -22,9 +22,9 @@ import threading
 import time
 import uuid
 
-from ext.sessiond import proc as P, bridge as B
+from ext.sessiond import sessions as P
 
-_EXPECTED = ContextVar('h2_expected_instance', default=None)
+_EXPECTED = ContextVar('sessiond_instance', default=None)
 _LIBC = ctypes.CDLL(None, use_errno=True)
 _PROCESS_TOOLS = None
 _SESSION_MUTEXES = {}  # process-local thread serialization, not file locks
@@ -34,21 +34,19 @@ def configure_process_tools(host_entry):
     """Load the process tools beside the explicitly selected ordinary P.
 
     One fixed P tool source per web process, never a PATH/platform fallback.
-    The caller's manifest pins both host_entry and ordinary_process.py.
+    The caller's manifest pins both host_entry and local_process.py.
     """
     global _PROCESS_TOOLS
-    source = Path(host_entry).resolve().with_name('ordinary_process.py')
+    source = Path(host_entry).resolve().with_name('local_process.py')
     if _PROCESS_TOOLS is not None:
         if Path(_PROCESS_TOOLS.__file__).resolve() != source:
             raise RuntimeError('conflicting ordinary process tool source')
         return
-    spec = importlib.util.spec_from_file_location('_w_ordinary_process', source)
+    spec = importlib.util.spec_from_file_location('_w_local_process', source)
     tools = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tools)
     tools.boot_id()  # unsupported platform/errors fail before any launch
     _PROCESS_TOOLS = tools
-_ORIGINAL_SUPERVISOR = P.Supervisor
-_ORIGINAL_BRIDGE = B.Bridge
 
 
 def atomic(path, obj):
@@ -426,7 +424,7 @@ class Lifecycle:
             self._reject_start(d, handle, e)
             raise RuntimeError('host startup acceptance failed: %s' % e) from e
         threading.Thread(target=self._reap, args=(handle, token), daemon=True,
-                         name='h2-own-child-wait').start()
+                         name='sessiond-child-wait').start()
         return d
 
     def ensure(self):
@@ -535,164 +533,3 @@ class Lifecycle:
             return self._start()
 
 
-class DirectSupervisor(_ORIGINAL_SUPERVISOR):
-    """Original Bridge-facing API, data socket only; never a SocketSupervisor."""
-    def __init__(self, session_path, on_event, cwd=None, profile=None, *, options):
-        super().__init__(session_path, on_event, cwd=cwd, profile=profile)
-        if profile:
-            P.profile_spec(profile)
-        env = P.clean_env()
-        # Bind the canonical JSONL after scrubbing. A is a W-side dependency;
-        # neither P nor its pi child needs AGENTD_DIR for the ordinary host.
-        env[P.HOST_MARKER] = self.session_file
-        env['W_WORKSPACE'] = P.WS
-        env.pop('AGENTD_DIR', None)
-        if profile:
-            env['DISPATCH_PROFILE'] = profile
-        ext = ['-e', P.PROBE_EXT] if os.path.exists(P.PROBE_EXT) else []
-        self.life = Lifecycle(self.session_file, self.name, self.cwd,
-                              env=env, pi_binary=P.pi_binary(), extensions=ext,
-                              prepare=self._sync_header_cwd, **options)
-        self._sock = None
-        self._reader = None
-        self.gen = None  # actual ordinary instance token, NOT S generation
-
-    def _disconnect(self):
-        s, self._sock = self._sock, None
-        if s is not None:
-            try:
-                s.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            s.close()
-        if self._reader is not None and self._reader is not threading.current_thread():
-            self._reader.join(3)
-            if self._reader.is_alive():
-                raise TimeoutError('old data reader did not close')
-        self._reader = None
-
-    def _connect(self, d):
-        self._disconnect()
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            s.connect(self.life.sock)
-            peer, uid, _gid = _PROCESS_TOOLS.peer_credentials(s)
-            with self.life.lock():
-                now = self.life.load()
-                if (now['instance'] != d['instance'] or now.get('fence') or uid != os.getuid()
-                        or peer != d['host']['pid'] or not same(identity(peer), d['host'])):
-                    raise RuntimeError('socket peer/instance identity mismatch')
-            self._sock = s
-            self.gen, self.pid = d['instance'], d['host']['pid']
-            self.state = 'running'
-            self._broadcast(dict(type='sessiond.session_restarted', gen=self.gen,
-                                 instance=self.gen, session=self.name, pid=self.pid))
-            self._reader = threading.Thread(target=self._read, args=(s, self.gen), daemon=True)
-            self._reader.start()
-        except BaseException:
-            s.close()
-            raise
-
-    def _read(self, s, token):
-        try:
-            with s.makefile('rb') as f:
-                for line in f:
-                    if len(line) <= P.LINE_LIMIT:
-                        self._broadcast(json.loads(line))
-        except (OSError, ValueError):
-            pass
-        finally:
-            if self._sock is s and self.gen == token:
-                self.state = 'disconnected'  # never infer pi exit from EOF
-                self._broadcast(dict(type='sessiond.channel_disconnected', session=self.name,
-                                     instance=token, reason='data disconnected; exit unknown'))
-
-    def ensure_started(self):
-        with self._op_lock:
-            if self._closed:
-                return
-            try:
-                d = self.life.ensure()
-                if self._sock is None or self.state != 'running' or self.gen != d['instance']:
-                    self._connect(d)
-            except (OSError, ValueError, KeyError, RuntimeError) as e:
-                self.state = 'unknown'
-                self._broadcast(dict(type='sessiond.error', message=str(e)))
-
-    def wait_ready(self, timeout=25):
-        return self.state == 'running' and self._sock is not None
-
-    def send(self, obj):
-        with self._op_lock, self.life.lock():
-            d = self.life.load()
-            if (self._closed or self._sock is None or not d or d.get('fence')
-                    or d['instance'] != self.gen or self.life.observe(d)['state'] != 'running'):
-                return False
-            try:
-                self._sock.sendall(json.dumps(obj).encode() + b'\n')
-                return True  # native RPC receipt still required; never auto replay
-            except OSError:
-                return False
-
-    def change(self, operation, expected):
-        with self._op_lock:
-            try:
-                # Reject a stale caller before disturbing even its local reader.
-                with self.life.lock():
-                    current = self.life.load()
-                    if not current or not expected or current['instance'] != expected or current.get('fence'):
-                        raise RuntimeError('instance fence mismatch or duplicate request')
-                # Reader boundary precedes new token / historical mutation.
-                self._disconnect()
-                d = self.life.operate(operation, expected)
-                if operation != 'stop':
-                    self._connect(d)
-                else:
-                    self.state = 'stopped'
-                return dict(ok=True, gen=d['instance'], instance=d['instance'], pid=d['host']['pid'])
-            except (OSError, ValueError, KeyError, RuntimeError) as e:
-                self.state = 'unknown'
-                return dict(ok=False, error=str(e))
-
-    def reload(self):
-        return self.change('reload', _EXPECTED.get())
-
-    def clear(self):
-        return self.change('clear', _EXPECTED.get())
-
-    def shutdown(self, reason=''):
-        # Never let original drop_session mistake a detach for a verified kill.
-        if reason == 'delete_session':
-            return dict(ok=False, error='candidate delete is not migrated; explicit fenced stop required')
-        # Browser/web disposal is detach only. Explicit stop is change(stop, token).
-        with self._op_lock:
-            self._closed = True
-            self._disconnect()
-            return dict(ok=True, state='detached')
-
-    def status_doc(self):
-        obs = self.life.status()
-        return dict(session=self.name, session_file=self.session_file, cwd=self.cwd,
-                    gen=obs.get('instance'), pid=obs.get('host', {}).get('pid'),
-                    mode='ordinary-direct-host', **obs)
-
-
-class DirectBridge(_ORIGINAL_BRIDGE):
-    # Keep each original synchronous query and its captured instance together.
-    # The reader never takes this operation lock, so RPC responses can arrive.
-    # Existing agent SocketSupervisor is not given ordinary control/locks.
-    def get_entries(self, *a, **kw):
-        with getattr(self.sup, '_op_lock', nullcontext()):
-            return super().get_entries(*a, **kw)
-
-    def request(self, *a, **kw):
-        with getattr(self.sup, '_op_lock', nullcontext()):
-            return super().request(*a, **kw)
-
-    def get_commands(self, *a, **kw):
-        with getattr(self.sup, '_op_lock', nullcontext()):
-            return super().get_commands(*a, **kw)
-
-    def inspect(self, *a, **kw):
-        with getattr(self.sup, '_op_lock', nullcontext()):
-            return super().inspect(*a, **kw)
