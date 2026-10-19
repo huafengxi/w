@@ -79,10 +79,11 @@ class DefaultFactory(unittest.TestCase):
         fake.write_text('#!' + sys.executable + '\nimport sys;sys.path.insert(0,' + repr(os.environ['H2_P_SOURCE']) + ')\n' + (W / 'test/h2_direct_host_fakepi.py').read_text())
         fake.chmod(0o700)
         home = root / 'home'; home.mkdir()
+        caller = root / 'caller'; caller.symlink_to(root, target_is_directory=True)
         env = dict(HOME=str(home), TMPDIR=str(root), PATH=os.defpath, PYTHONDONTWRITEBYTECODE='1',
-                   W_WORKSPACE=str(ws), W_AGENTD_DIR=os.environ['H2_A_SOURCE'], W_HOST_ID_FILE=str(hostmap),
+                   W_WORKSPACE=str(caller/'ws'), W_AGENTD_DIR=os.environ['H2_A_SOURCE'], W_HOST_ID_FILE=str(hostmap),
                    W_SESSION_PI_BIN=str(fake), W_SESSION_HOST_ENTRY=str(Path(os.environ['H2_P_SOURCE'])/'pi_host.py'),
-                   W_SESSION_RUNTIME=str(root/'runtime'))
+                   W_SESSION_RUNTIME=str(caller/'runtime'))
         if sys.platform.startswith('linux'):
             self.assertEqual(ctypes.CDLL(None).prctl(36,1,0,0,0),0)
         try:

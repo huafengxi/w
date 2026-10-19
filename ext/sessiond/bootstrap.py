@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import threading
+from pathlib import Path
 
 from core.config import path as config_path
 
@@ -15,7 +16,7 @@ def configure(*, required=True):
     # environment. Real server startup always calls with required=True.
     if not required and not os.environ.get('W_SESSION_HOST_ENTRY'):
         return None
-    options = dict(runtime=config_path('W_SESSION_RUNTIME', required=True),
+    options = dict(runtime=str(Path(config_path('W_SESSION_RUNTIME', required=True)).resolve()),
                    host_entry=config_path('W_SESSION_HOST_ENTRY', required=True),
                    agentd=config_path('W_AGENTD_DIR', required=True),
                    startup_timeout=25)

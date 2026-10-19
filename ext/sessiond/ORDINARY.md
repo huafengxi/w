@@ -8,8 +8,10 @@ PIPEs. The retained old Supervisor/Bridge are implementation bases and legacy
 unit-test seams, not the default service transport after configuration.
 
 Required caller inputs are W_SESSION_HOST_ENTRY (independent P's pi_host.py) and
-W_SESSION_RUNTIME (short, canonical, private local directory), plus the existing
-W_WORKSPACE/W_AGENTD_DIR/host map/pi configuration. P itself never imports A.
+W_SESSION_RUNTIME (resolved to a short, canonical, private local directory), plus the existing
+W_WORKSPACE/W_AGENTD_DIR/host map/pi configuration. Caller workspace aliases are
+resolved before binding/identity checks; the private-directory check itself is
+not relaxed. P itself never imports A.
 The default startup acceptance timeout is 25 seconds to include pi extension
 initialization. It remains one post-launch peer-checked get_state, not a retry
 or pre-launch contention protocol. Ordinary operations take only thread locks.

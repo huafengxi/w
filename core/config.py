@@ -18,4 +18,4 @@ def workspace():
     value = path('W_WORKSPACE', required=True)
     if not os.path.isdir(value):
         raise ValueError('W_WORKSPACE must be an existing directory')
-    return value
+    return os.path.realpath(value)

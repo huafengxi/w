@@ -10,7 +10,7 @@
 
 | 环境变量 | 接口 |
 |---|---|
-| `W_WORKSPACE` | 必填，已存在的绝对工作区目录；服务 cwd 与 sessiond 安全根 |
+| `W_WORKSPACE` | 必填，已存在的绝对工作区目录；解析为 realpath 后作为服务 cwd 与 sessiond 安全根 |
 | `W_FSTAB` | 必填，绝对挂载配置路径；根挂载必需，其余失败告警跳过 |
 | `W_AUTH_FILE` | 必填，绝对凭据文件路径，非空 `user:password`；缺失或格式错误拒启 |
 | `W_TLS_CERT` / `W_TLS_KEY` | 均未设置时 HTTP；设置时必须同时指向存在的文件，否则拒启；`nossl=1` 显式禁用 TLS |
@@ -20,7 +20,7 @@
 | `W_SESSION_PROFILE` | 调用方的缺省交互 profile 名；未设置时新建须显式传 profile，仍验证 manifest 的 interactive 白名单 |
 | `W_AGENTD_DIR` | 使用 sessiond 时必填，提供 `envscrub` 模块的绝对目录；身份洗刷由该模块负责 |
 | `W_SESSION_HOST_ENTRY` | 服务必填，独立 P 的绝对入口文件；普通会话由 P 唯一持 pi PIPE |
-| `W_SESSION_RUNTIME` | 服务必填，短、canonical、0700 的宿主本地 runtime 目录；不跨机同步 |
+| `W_SESSION_RUNTIME` | 服务必填，调用方绝对路径先 canonical 化，再核短路径/0700/属主的宿主本地目录；不跨机同步 |
 | `W_SESSION_PI_BIN` | 可选，sessiond 交互会话的 pi 可执行文件；缺省按 PATH 查找。整批队列操作要求 pi >=0.84.4 的 `clear_queue` RPC，安装与版本由调用方管理 |
 | `W_ORG_LOAD_PATH` | 可选，以路径分隔符连接的 Emacs 包目录 |
 | `W_ORG_AUTHOR` / `W_ORG_EMAIL` / `W_REVEAL_ROOT` | 可选，org 导出元数据和 reveal 资源 URL |
