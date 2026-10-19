@@ -64,7 +64,8 @@ cancel_ext.write_text('''export default function(pi:any) {
  pi.registerCommand("fixture-cancel-tree", {handler: async()=>{cancel=true;}});
  pi.on("session_before_tree", ()=>{if(cancel){cancel=false;return {cancel:true};}});
 }''')
-PIXEL = {'type': 'image', 'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1sAAAAASUVORK5CYII=', 'mimeType': 'image/png'}
+# Valid PNG chunk checksums: newer pi image decoding rejects a corrupt IDAT CRC.
+PIXEL = {'type': 'image', 'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'mimeType': 'image/png'}
 env = dict(os.environ, PI_CODING_AGENT_DIR=str(CONFIG), W_WORKSPACE=str(ROOT),
            SESSIOND_SESSION_FILE=str(session), PI_OFFLINE='1', NO_PROXY='127.0.0.1,localhost')
 for k in list(env):
