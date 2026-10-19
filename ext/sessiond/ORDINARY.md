@@ -16,6 +16,13 @@ The default startup acceptance timeout is 25 seconds to include pi extension
 initialization. It remains one post-launch peer-checked get_state, not a retry
 or pre-launch contention protocol. Ordinary operations take only thread locks.
 
+Read-only running status accepts live tool descendants only after checking their
+current identities and ancestry back to the recorded P/pi, with matching boot,
+owner, process group and session. These observations are not persisted and do
+not expand stop authority. Unrelated members, unverifiable ancestry and residual
+processes after leader loss remain unknown. Tool execution therefore does not
+temporarily reject metadata/control RPC merely by starting a subprocess.
+
 HTTP reload/clear carry the attached instance token (`expected_instance`), not a
 rund generation. API forwards the explicit expectation to the operation gate;
 stale/empty values fail rather than mutate a different instance. Delete manual

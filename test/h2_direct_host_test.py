@@ -379,6 +379,38 @@ class Acceptance(unittest.TestCase):
         self.assertEqual((self.f.ws / 'chat-a.jsonl').read_bytes(), history)
         record(unknownResidual=obs, harnessCollected=descendant, recovered=new)
 
+    def test_C_live_tool_descendant_keeps_status_and_rpc_available(self):
+        d = self.start()
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(self.f.life.sock)
+        socket_rpc(s, 'descendant'); s.close()
+        self.f.remember()
+        descendant = identity(json.loads((self.f.ws / 'descendant.json').read_text())['pid'])
+        self.assertTrue(live(descendant))
+        before = self.f.life.load()
+        obs = self.f.life.status()
+        self.assertEqual(obs['state'], 'running', obs)
+        self.assertEqual(obs['unknown'], [])
+        self.assertEqual(self.f.life.load(), before, 'read-only ancestry checks must not adopt descendants')
+        self.assertEqual(self.f.life.ensure()['instance'], d['instance'])
+        client = Client(self.f)
+        reply = client.request(special='rpc', command=dict(type='get_state'))
+        self.assertTrue(reply['ok'], reply)
+        self.assertEqual(self.f.life.load()['instance'], d['instance'])
+        record(liveToolStatus=obs, liveToolRpc=reply)
+
+    def test_C_unrelated_group_member_is_still_unknown(self):
+        d = self.start()
+        unrelated = dict(identity(os.getpid()))
+        unrelated.update(pgid=d['host']['pgid'], sid=d['host']['sid'])
+        import h2_direct_host as H
+        with patch.object(H, 'group_members', return_value=[d['host'], d['child'], unrelated]):
+            obs = self.f.life.status()
+            self.assertEqual(obs['state'], 'unknown', obs)
+            self.assertEqual(obs['unknown'], [unrelated])
+            with self.assertRaises(RuntimeError):
+                self.f.life.ensure()
+
     def test_C_stale_unreadable_stop_timeout(self):
         d = self.start()
         stale = json.loads(json.dumps(d))

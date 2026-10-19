@@ -121,6 +121,35 @@ def group_members(host):
     return _PROCESS_TOOLS.group_members(host)
 
 
+def unverified_members(members, known, host):
+    """Read-only ancestry check for live tool subprocesses, not stop authority.
+
+    Group membership alone is insufficient. Every accepted descendant must
+    retain its sampled identity and a currently verified parent chain.
+    Nothing is persisted or added to the set of identities we may signal.
+    """
+    verified = {i['pid']: i for i in known}
+    pending = [i for i in members if not any(same(i, k) for k in known)]
+    while pending:
+        remaining = []
+        for member in pending:
+            current = identity(member['pid'])
+            if not live(current):  # exited after the group snapshot
+                continue
+            parent = verified.get(current['ppid'])
+            actual_parent = identity(parent['pid']) if parent else None
+            if (same(current, member) and parent and live(actual_parent)
+                    and same(actual_parent, parent)
+                    and all(current[k] == host[k] for k in ('boot', 'uid', 'pgid', 'sid'))):
+                verified[current['pid']] = current
+            else:
+                remaining.append(member)
+        if len(remaining) == len(pending):
+            return remaining
+        pending = remaining
+    return []
+
+
 def private_dir(path):
     path = Path(path)
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -225,7 +254,8 @@ class Lifecycle:
             self.save(d)
         members = group_members(d['host'])
         known = d.get('known', [d['host'], d['child']])
-        unknown = [i for i in members if not any(same(i, k) for k in known)]
+        unknown = (unverified_members(members, known, d['host']) if live(h) and live(c)
+                   else [i for i in members if not any(same(i, k) for k in known)])
         known_live = []
         for expected in known:
             actual = identity(expected['pid'])
