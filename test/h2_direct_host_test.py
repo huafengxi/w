@@ -508,7 +508,7 @@ class Acceptance(unittest.TestCase):
             self.assertEqual(cfg['sessionName'], 'chat-a')
             self.assertEqual(cfg['env']['SESSIOND_SESSION_FILE'], str(self.f.ws / 'chat-a.jsonl'))
             self.assertEqual(cfg['env']['W_WORKSPACE'], str(self.f.ws))
-            self.assertEqual(cfg['env']['AGENTD_DIR'], self.f.options['agentd'])
+            self.assertNotIn('AGENTD_DIR', cfg['env'])
             self.assertTrue((Path(cfg['env']['AGENTD_ROOT']) / 'agents/bot/chat-a/inbox').is_dir())
             self.assertFalse((self.f.ws / 'agents/bot/chat-a/spec.json').exists())
             before = (self.f.ws / 'chat-a.jsonl').read_bytes()

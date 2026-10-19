@@ -1,6 +1,12 @@
 # Ordinary fixed socket: post-launch acceptance, no file locks
 
-This is the current ordinary-host candidate contract. It supersedes the older
+This is the current ordinary-host candidate contract. P now lives in the unified
+agent-platform/pi-wrap module, runs independently with only the standard library,
+and neither imports A nor needs AGENTD_DIR. Agent adapter/persona policy moved
+to agent-platform/agentd; dependency direction is A -> P. W still uses its own
+explicit A tool source for registration/other agent APIs; that is not a P dependency.
+
+This contract supersedes the older
 file-lock and cross-Web linearizability statements in h2_direct_host.md,
 h2_direct_host_crud.md and h2_direct_host_platform.md. Those suites' historical
 results remain historical; their old concurrency assertions are not current
@@ -33,8 +39,8 @@ instance record; reconnect does not restart pi or replay user commands.
 The ordinary path creates none of registry.lock, op.lock, s.lock or canonical
 session.lock. Process-local RLocks remain to serialize threads and local API
 adapters. Legacy lock files are neither acquired nor deleted. File locks in the
-agent task/bot Transport defaults are unchanged; ordinary Host opts out through
-socket_lock_paths().
+agent task/bot adapter remain in A. Generic P has no file-lock implementation;
+A.Wrap adds its task-specific locks without P importing any agent code.
 
 One canonical session uses ONE agreed endpoint. Supporting different endpoint
 basenames for the same session is no longer a contract. Existing owner/stale
@@ -60,8 +66,10 @@ visibly; there is no automatic retry of destructive operations.
 - Adapted lifecycle13/CRUD8 retain sequential/reconnect/history/unknown/error
   behavior. Cross-Web simultaneous startup/reload/delete guarantees and
   alternate-socket arbitration were explicitly removed, not silently passed.
-- P test_ordinary_process also checks ordinary no-lock selection and actual
-  default Transport creation of both agent file locks.
+- P test_ordinary_process checks the generic Transport creates no locks;
+  test_standalone copies P alone and rejects A imports/reads during real RPC.
+  A test_rpc_adapter separately checks actual agent two-lock contention and
+  shared Transport method objects; the UI baseline implementation moved, not copied.
 - Fakepi records each startup get_state request. Raw fixture clients match their
   own response ID instead of mistaking the startup response replay for success.
 

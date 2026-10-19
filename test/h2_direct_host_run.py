@@ -84,7 +84,7 @@ if node:
     run('W-chat_frontend', [node, str(W / 'test/chat_frontend.cjs')])
 else:
     results.append(dict(label='W-chat_frontend', rc=125, error='existing node missing, not skipped as PASS'))
-# Shared socket/generic core is unchanged but exercised in this fresh environment.
+# Independent generic P is exercised with no A dependency in its standalone copy.
 run('P-generic', [sys.executable, '-B', str(P / 'test_generic.py')])
-run('P-dependency', [sys.executable, '-B', str(P / 'test_dependency.py')])
+run('P-standalone', [sys.executable, '-B', str(P / 'test_standalone.py')])
 sys.exit(0 if all(r['rc'] == 0 for r in results) else 1)

@@ -360,7 +360,7 @@ class Lifecycle:
                       piBinary=self.pi_binary, extensionArgv=self.extensions,
                       socketPath=self.sock, env=self.env)
         atomic(run / 'declaration.json', config)
-        hostenv = dict(self.env, AGENTD_DIR=self.agentd)
+        hostenv = dict(self.env)
         with (run / 'stdout').open('ab', buffering=0) as out, (run / 'stderr').open('ab', buffering=0) as err:
             handle = subprocess.Popen([sys.executable, '-B', self.host_entry, str(run / 'declaration.json')],
                                       cwd=self.cwd, env=hostenv, stdin=subprocess.DEVNULL,
@@ -512,11 +512,11 @@ class DirectSupervisor(_ORIGINAL_SUPERVISOR):
         if profile:
             P.profile_spec(profile)
         env = P.clean_env()
-        # Original probe/edit contract: bind the exact canonical JSONL after
-        # scrubbing, and explicitly select this candidate's fixed tool source.
+        # Bind the canonical JSONL after scrubbing. A is a W-side dependency;
+        # neither P nor its pi child needs AGENTD_DIR for the ordinary host.
         env[P.HOST_MARKER] = self.session_file
         env['W_WORKSPACE'] = P.WS
-        env['AGENTD_DIR'] = options['agentd']
+        env.pop('AGENTD_DIR', None)
         if profile:
             env['DISPATCH_PROFILE'] = profile
         ext = ['-e', P.PROBE_EXT] if os.path.exists(P.PROBE_EXT) else []

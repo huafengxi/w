@@ -155,8 +155,9 @@ class CRUD(unittest.TestCase):
         ident=c1.request(special='identity',session=doc['agent_site']);d=json.loads(self.f.current(name).read_text())
         cfg=json.loads((self.f.current(name).parent/d['instance']/'declaration.json').read_text())
         for k,v in dict(SESSIOND_SESSION_FILE=str(decl.with_suffix('.jsonl')),W_WORKSPACE=str(self.f.ws),
-                        AGENTD_ROOT=str(self.f.ws),AGENTD_DIR=self.f.options['agentd'],DISPATCH_PROFILE='good').items():
+                        AGENTD_ROOT=str(self.f.ws),DISPATCH_PROFILE='good').items():
             self.assertEqual(cfg['env'][k],v)
+        self.assertNotIn('AGENTD_DIR',cfg['env'])
         self.assertEqual(cfg['cwd'],str(self.f.ws));self.assertEqual(cfg['sessionName'],name)
         renamed=c1.request(op='rename_session',session=doc['agent_site'],title='Visible title')['body'];self.assertTrue(renamed['ok'])
         self.assertEqual(json.loads(decl.read_text())['name'],name)
