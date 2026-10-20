@@ -223,7 +223,7 @@ class Lifecycle:
         if not isinstance(d.get('host'), dict):
             raise RuntimeError('missing host identity')
         wait = d.get('childWait')
-        if wait is not None and (not isinstance(wait, dict) or not d.get('child')
+        if wait is not None and (not isinstance(wait, dict)
                                  or type(wait.get('returncode')) is not int):
             raise RuntimeError('invalid actual child wait')
         return d
@@ -234,7 +234,6 @@ class Lifecycle:
             return None
         d['instance'] = self.process_key(d['host'])
         d['socket'] = self.sock
-        d['known'] = [i for i in (d['host'], d.get('child')) if i]
         d['phase'], d['fence'] = 'unverified', None
         control = self.web_record().get('runtime', {})
         if not isinstance(control, dict):
@@ -243,13 +242,14 @@ class Lifecycle:
             if not same(control['host'], d['host']):
                 raise RuntimeError('Web control/actual host identity mismatch')
             d.update(control)
+        d['known'] = [d['host']]  # derive transient stop observations, never trust a disk snapshot
         return d
 
     def save(self, d):
         # Only this caller writes .agent. Never rewrite P's host.json or a prior
         # instance archive. Preserve concurrently read presentation/config data.
         doc = self.web_record()
-        control = {k: d[k] for k in ('host', 'phase', 'fence', 'known',
+        control = {k: d[k] for k in ('host', 'phase', 'fence',
                    'startupAcceptance', 'hostWait', 'error', 'startupCleanup') if k in d}
         old = doc.get('runtime', {})
         if (d.get('host') and old.get('host') and same(old['host'], d['host'])
@@ -261,24 +261,22 @@ class Lifecycle:
     def observe(self, d):
         if d is None:
             return dict(state='idle', instance=None)
-        if d.get('host') is None or d.get('child') is None:
+        if d.get('host') is None:
             raise RuntimeError('incomplete process identity; unknown, no blind takeover')
         actual_record = self.read_host()
-        if (not actual_record or not same(actual_record['host'], d['host'])
-                or not same(actual_record.get('child'), d['child'])):
+        if not actual_record or not same(actual_record['host'], d['host']):
             raise RuntimeError('host state changed during observation')
         wait = d['childWait'] = actual_record.get('childWait')
-        h, c = identity(d['host']['pid']), identity(d['child']['pid'])
-        for actual, expected in ((h, d['host']), (c, d['child'])):
-            if actual and not same(actual, expected):
-                raise RuntimeError('stale/reused process identity')
+        h = identity(d['host']['pid'])
+        if h and not same(h, d['host']):
+            raise RuntimeError('stale/reused process identity')
         handle = self.handles.get(d['instance'])
         if handle is not None and handle.poll() is not None:
             d['hostWait'] = dict(source='W Popen.poll/wait', returncode=handle.wait())
             self.save(d)
         members = group_members(d['host'])
         known = d['known']
-        unknown = (unverified_members(members, known, d['host']) if live(h) and live(c)
+        unknown = (unverified_members(members, known, d['host']) if live(h)
                    else [i for i in members if not any(same(i, k) for k in known)])
         known_live = []
         for expected in known:
@@ -287,15 +285,15 @@ class Lifecycle:
                 raise RuntimeError('known descendant identity/group changed')
             if live(actual):
                 known_live.append(actual)
-        settled = not members and not known_live and not live(h) and not live(c)
+        settled = not members and not known_live and not live(h)
         natural = (settled and wait is not None and d.get('hostWait') is not None
                    and d['hostWait']['returncode'] == (wait['returncode'] if wait['returncode'] >= 0
                                                        else 128 - wait['returncode']))
-        state = ('running' if d['phase'] == 'running' and live(h) and live(c) and not unknown
+        state = ('running' if d['phase'] == 'running' and live(h) and not unknown
                  else ('dormant' if natural else 'unknown'))
         if d.get('fence'):
             state = 'stopped' if settled and d.get('phase') == 'stopped' else 'fenced'
-        return dict(state=state, instance=d['instance'], host=d['host'], child=d['child'],
+        return dict(state=state, instance=d['instance'], host=d['host'],
                     socket=self.sock, members=members, knownLive=known_live, unknown=unknown,
                     settled=settled, childWait=wait, hostWait=d.get('hostWait'), phase=d['phase'])
 
@@ -353,14 +351,8 @@ class Lifecycle:
         raise TimeoutError('startup get_state response timeout')
 
     def _reject_start(self, d, handle, error):
-        # Only identities belonging to THIS Popen, never the foreign socket peer.
-        try:
-            actual = self.read_host()
-            if d.get('host') and actual and same(actual['host'], d['host']):
-                d['child'] = actual.get('child')
-        except (OSError, ValueError, KeyError, RuntimeError):
-            pass
-        known = [i for i in (d.get('child'), d.get('host')) if i]
+        # Only THIS Popen. P owns pi; Linux kills pi even on an uncatchable P exit.
+        known = [d['host']] if d.get('host') else []
         errors = []
         for sig in (signal.SIGTERM, signal.SIGKILL):
             for i in known:
@@ -376,8 +368,7 @@ class Lifecycle:
                 continue
         remaining = [i for i in known if same(identity(i['pid']), i) and live(identity(i['pid']))]
         d.update(phase='startup_failed', fence='startup_failed', error=str(error),
-                 startupCleanup=dict(remainingLive=remaining, errors=errors,
-                                     childIdentityUnknown=d.get('child') is None))
+                 startupCleanup=dict(remainingLive=remaining, errors=errors))
         self.save(d)  # an ACTUAL failed attempt, never a pre-Popen prediction
 
     def _start(self):
@@ -395,7 +386,7 @@ class Lifecycle:
             handle = subprocess.Popen([sys.executable, '-B', self.host_entry, '-'],
                                       cwd=self.cwd, env=dict(self.env), stdin=subprocess.PIPE,
                                       stdout=log, stderr=log, start_new_session=True, close_fds=True)
-        d = dict(binding=self.binding, socket=self.sock, host=None, child=None,
+        d = dict(binding=self.binding, socket=self.sock, host=None,
                  phase='unverified', fence=None)
         try:
             d['host'] = identity(handle.pid)
@@ -412,13 +403,8 @@ class Lifecycle:
             deadline = time.monotonic() + self.startup_timeout
             while time.monotonic() < deadline:
                 actual = self.read_host()
-                if actual and same(actual['host'], d['host']) and actual.get('child'):
-                    child = identity(actual['child']['pid'])
-                    if not same(child, actual['child']):
-                        raise RuntimeError('child identity unavailable/changed')
-                    if child['pgid'] != d['host']['pgid'] or child['sid'] != d['host']['sid']:
-                        raise RuntimeError('noncooperative child group')
-                    d.update(child=child, childWait=actual.get('childWait'), known=[d['host'], child])
+                if actual and same(actual['host'], d['host']):
+                    d.update(known=[d['host']])
                     break
                 if handle.poll() is not None:
                     raise RuntimeError('host exited before actual process facts')

@@ -11,7 +11,7 @@ Registry passes explicit factories to Bridge. Independent P owns every pi PIPE.
 run/sessiond/<name>/
   <name>.agent      Web-owned configuration, registration and actual control results
   <name>.jsonl      pi-owned history (may not exist until first assistant output)
-  host.json         P-owned current native identities and real child wait
+  host.json         P-owned native P identity and real pi exit result
   s                 fixed Unix socket
   host.log          optional shared P/pi diagnostics, not lifecycle authority
 ```
@@ -24,8 +24,10 @@ ordinary registration does not create an agentd spec/pid/enable/watcher.
 
 Web is the sole writer of `.agent` (including its `runtime` control section).
 P is the sole writer of `host.json`. Web control records reference actual P
-identity and hold acceptance, explicit operation fences/known stop identities
-and actual Web wait results. They never substitute for P's real child wait.
+identity and hold acceptance, explicit operation fences and actual Web wait
+results. Pi identity and known stop descendants are kept in memory only;
+tool ancestry is sampled from the kernel when needed. P's real child wait
+records an exit result without a durable pi PID.
 The HTTP `gen`/`expected_instance` slots serialize native P boot/PID/start identity,
 not an extra generated token or a runtime generation. Registration UUID remains
 separate, preventing stale clients from targeting a different session object.
@@ -53,7 +55,13 @@ Confirmed natural dormancy still requires P's true pi wait, Web's true P wait,
 consistent results and closed known/group identities. Losing the spawning Web
 can lose its future wait authority: a later Web must not invent a host exit code.
 
-Live tools are read-only observations after verified ancestry to current P/pi
+Pi belongs to P's lifetime. Linux arms SIGKILL on parent death before exec,
+checking the parent on both sides of prctl; this also covers uncatchable P exit.
+Other supported hosts use native pi RPC's stdin-EOF shutdown contract. P retains
+the sole stdin writer. A P crash cannot manufacture a pi wait result, and
+remaining tool processes still block destructive operations until closure.
+
+Live tools are read-only observations after verified ancestry to current P
 with matching boot/uid/group/session. This does not persist adopted children or
 expand signal authority. Unknown members or leader loss with residuals remain
 unknown. Stop/reload/clear keep exact identity checks and confirmed tree closure.

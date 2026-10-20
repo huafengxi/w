@@ -105,6 +105,7 @@ class Fixture:
             d=json.loads(p.read_text())
             self.known.extend(i for i in d.get('known',[]) if i)
             self.known.extend(d[k] for k in ('host','child') if d.get(k))
+            self.known.extend(H.group_members(d['host']))
         for p in (self.ws/'run/sessiond').glob('*/descendant.json'):
             i=H.identity(json.loads(p.read_text())['pid'])
             if i:self.known.append(i)
@@ -173,7 +174,7 @@ class CRUD(unittest.TestCase):
         self.assertEqual((history.parent/'effects').read_text(),'once-only\n')
         self.rpc(c2,doc,'descendant');self.f.remember()
         child=H.identity(json.loads((history.parent/'descendant.json').read_text())['pid'])
-        stopped=[d['host'],d['child'],child]
+        stopped=H.group_members(d['host'])
         deleted=self.delete(c2,doc,a['gen']);self.assertTrue(deleted['ok'],deleted)
         self.assertFalse(self.f.current(name).exists())
         self.assertFalse(any(H.live(H.identity(i['pid'])) for i in stopped))
@@ -211,7 +212,8 @@ class CRUD(unittest.TestCase):
         self.rpc(c,doc,'ignore_term')
         agent=self.f.ws/doc['agent_site'].lstrip('/');history=agent.with_suffix('.jsonl')
         before=(agent.read_bytes(),history.read_bytes())
-        result=self.delete(c,doc,a['gen']);self.assertFalse(result['ok']);self.assertIn('stop not confirmed',result['error'])
+        result=c.request(special='block_stop_term',name=doc['name'])
+        self.assertFalse(result['ok']);self.assertIn('stop not confirmed',result['error'])
         self.assertEqual(history.read_bytes(),before[1])
         self.assertEqual({k:v for k,v in json.loads(agent.read_bytes()).items() if k!='runtime'},
                          {k:v for k,v in json.loads(before[0]).items() if k!='runtime'})
@@ -281,7 +283,8 @@ class CRUD(unittest.TestCase):
         self.assertEqual(agent.with_suffix('.jsonl').read_bytes(),before[1])
         self.assertEqual({k:v for k,v in json.loads(agent.read_bytes()).items() if k!='runtime'},
                          {k:v for k,v in json.loads(before[0]).items() if k!='runtime'})
-        self.assertTrue(H.live(H.identity(d['child']['pid'])))
+        pi_pid=json.loads((agent.parent/'ready.json').read_text())['pid']
+        wait(lambda:not H.live(H.identity(pi_pid)))
 
     def test_G_unstarted_delete_and_natural_list_facts(self):
         c=Client(self.f);doc=self.create(c)

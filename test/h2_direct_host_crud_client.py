@@ -6,6 +6,7 @@ import io
 import json
 import os
 import socket
+import signal
 from pathlib import Path
 import sys
 import time
@@ -123,6 +124,13 @@ with C.installed(options) as registry:
                 with patch.object(H.Lifecycle, '_stop', stop_then_replace):
                     meta, body = C.api_call(store, **req)
                 result = dict(meta=meta, body=json.loads(body))
+            elif special == 'block_stop_term':
+                real_signal = H.signal_identity
+                def blocked(expected, sig):
+                    if sig != signal.SIGTERM:
+                        real_signal(expected, sig)
+                with patch.object(H, 'signal_identity', side_effect=blocked):
+                    result = registry.delete(req['name'])
             elif special == 'inject_identity_denial':
                 with patch.object(H, 'identity', side_effect=PermissionError('injected identity denial')):
                     meta, body = C.api_call(store, **req)

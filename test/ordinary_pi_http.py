@@ -128,7 +128,9 @@ def call(op, **kw):
 
 def remember():
     d = json.loads((folder/'host.json').read_text())
-    known.extend(d[k] for k in ('host', 'child') if d.get(k))
+    assert 'child' not in d
+    assert 'known' not in json.loads((folder/(name+'.agent')).read_text())['runtime']
+    known.extend(H.group_members(d['host']))  # harness observations only
     return d
 
 
@@ -175,6 +177,35 @@ try:
     assert deleted['ok'] and deleted['process']['settled'], deleted
     assert not folder.exists()
     assert (WS/'agents/bot'/name/'inbox').is_dir()
+    # Exercise native pi's portable stdin-EOF contract without Linux prctl.
+    # This tests the actual installed pi, not a fake that conveniently exits.
+    eof_root = ROOT/'stdin-eof'; eof_root.mkdir()
+    launch = ('import sys;sys.path.insert(0,sys.argv.pop(1));import pi_host;'
+              'pi_host.Host.launch_argv=lambda self,c:c.argv();sys.exit(pi_host.main())')
+    cfg = dict(sessionFile=str(eof_root/'history.jsonl'), cwd=str(eof_root), sessionName='eof',
+               piBinary=str(wrapper), socketPath=str(eof_root/'s'), extensionArgv=[], env=env)
+    with (eof_root/'host.log').open('wb') as log:
+        p = subprocess.Popen([sys.executable, '-B', '-c', launch, str(P_SOURCE), '-'],
+                             stdin=subprocess.PIPE, stdout=log, stderr=log, env=env,
+                             start_new_session=True)
+        child = None
+        try:
+            p.stdin.write(json.dumps(cfg).encode()); p.stdin.close()
+            wait(lambda: (eof_root/'host.json').exists())
+            with socket.socket(socket.AF_UNIX) as s:
+                s.settimeout(25); s.connect(cfg['socketPath'])
+                s.sendall(b'{"type":"get_state","id":"eof-ready"}\n')
+                with s.makefile('rb') as f:
+                    wait(lambda: json.loads(f.readline()).get('id') == 'eof-ready')
+                host = json.loads((eof_root/'host.json').read_text())['host']
+                child = next(i for i in H.group_members(host) if i['ppid'] == p.pid)
+                known.extend([host, child])
+                p.kill(); p.wait(timeout=5)
+                wait(lambda: not H.live(H.identity(child['pid'])), seconds=8)
+                assert 'childWait' not in json.loads((eof_root/'host.json').read_text())
+                result['nativeStdinEOF'] = True
+        finally:
+            if p.poll() is None: p.kill(); p.wait(timeout=5)
     assert len(CAPTURE)==2
     result.update(ok=True, actualModelRequests=2, minimalLayout=True, preservedHistory=True,
                   webRestartSameP=True, staleRequestRejected=True, regenerate=True, clear=True, delete=True)

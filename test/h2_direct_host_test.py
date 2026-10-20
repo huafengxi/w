@@ -109,7 +109,7 @@ class Client:
 
 class Fixture:
     def __init__(self, key):
-        self.root = BASE / key
+        self.root = BASE / 'workspace' / key
         self.root.mkdir()
         self.ws = self.root / 'ws'
         self.ws.mkdir()
@@ -143,10 +143,8 @@ class Fixture:
     def remember(self):
         d = self.life.load()
         if d:
-            self.known.extend(i for i in d.get('known', []) if i)
-            for k in ('host', 'child'):
-                if d.get(k):
-                    self.known.append(d[k])
+            self.known.append(d['host'])
+            self.known.extend(group_member for group_member in __import__('h2_direct_host').group_members(d['host']))
         desc = self.ws / 'descendant.json'
         if desc.exists():
             i = identity(json.loads(desc.read_text())['pid'])
@@ -184,6 +182,7 @@ class Acceptance(unittest.TestCase):
         d = self.f.life.ensure()
         self.f.remember()
         wait_for(lambda: (self.f.ws / 'chat-a.jsonl').exists())
+        d['child'] = identity(json.loads((self.f.ws / 'ready.json').read_text())['pid'])  # harness only
         record(start=d, observed=self.f.life.status())
         return d
 
@@ -335,23 +334,22 @@ class Acceptance(unittest.TestCase):
                 self.f.cleanup()
                 self.f = Fixture(self.id().split('.')[-1] + '-nonzero')
 
-    def test_C_crash_residual_unknown_no_blind_kill(self):
+    def test_C_crash_closes_pi_requires_explicit_recovery(self):
         d = self.start()
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(self.f.life.sock)
         socket_rpc(s, 'hold_eof'); s.close()
         signal_identity(d['host'], signal.SIGKILL)
-        wait_for(lambda: not live(identity(d['host']['pid'])))
+        wait_for(lambda: not live(identity(d['host']['pid'])) and not live(identity(d['child']['pid'])))
         obs = self.f.life.status()
         self.assertEqual(obs['state'], 'unknown')
         self.assertIsNone(obs['childWait'])
         with self.assertRaises(RuntimeError):
             self.f.life.ensure()
-        with self.assertRaises(RuntimeError):
-            self.f.life.operate('reload', d['instance'])
-        self.assertTrue(live(identity(d['child']['pid'])))
         self.assertEqual(self.f.life.load()['instance'], d['instance'])
         record(crash=obs, residualChild=identity(d['child']['pid']))
+        new = self.f.life.operate('recover', d['instance'])
+        self.assertNotEqual(new['instance'], d['instance'])
 
     def test_C_unknown_descendant_and_checked_crash_recovery(self):
         d = self.start()
@@ -434,8 +432,13 @@ class Acceptance(unittest.TestCase):
         s.connect(self.f.life.sock)
         socket_rpc(s, 'ignore_term'); s.close()
         before = (self.f.ws / 'chat-a.jsonl').read_bytes()
-        with self.assertRaises(TimeoutError):
-            self.f.life.operate('clear', d['instance'])
+        real_signal = signal_identity
+        def blocked_term(expected, sig):
+            if sig != signal.SIGTERM:
+                real_signal(expected, sig)
+        with patch('h2_direct_host.signal_identity', side_effect=blocked_term):
+            with self.assertRaises(TimeoutError):
+                self.f.life.operate('clear', d['instance'])
         self.assertEqual((self.f.ws / 'chat-a.jsonl').read_bytes(), before)
         self.assertTrue(live(identity(d['child']['pid'])))
         self.assertEqual(self.f.life.load()['phase'], 'fenced')
@@ -452,7 +455,8 @@ class Acceptance(unittest.TestCase):
         self.assertTrue(obs['settled'], obs)
         self.assertEqual(obs['state'], 'stopped')
         self.assertIsNone(obs['childWait'])  # signals do not invent P wait facts
-        self.assertEqual(len(self.f.life.load()['known']), 3)
+        self.assertEqual(len(self.f.life.load()['known']), 1)
+        self.assertNotIn('known', json.loads(self.f.life.declaration.read_text())['runtime'])
         record(cooperativeStop=obs, known=self.f.life.load()['known'])
 
     def test_D_running_reload_clear_late_duplicate_and_failure(self):

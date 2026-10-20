@@ -35,7 +35,8 @@ class StartupAcceptance(unittest.TestCase):
         self.assertEqual(proof['peerPid'], d['host']['pid'])
         self.assertEqual((proof['command'], proof['success']), ('get_state', True))
         requests = [json.loads(x) for x in (self.f.ws / 'startup-requests').read_text().splitlines()]
-        self.assertEqual(requests, [dict(pid=d['child']['pid'], id=proof['requestId'])])
+        child = json.loads((self.f.ws / 'ready.json').read_text())
+        self.assertEqual(requests, [dict(pid=child['pid'], id=proof['requestId'])])
         self.assertEqual(self.life.status()['state'], 'running')
         self.assertEqual(list(self.life.local.parent.rglob('*.lock')), [])
         record(startupAcceptance=proof, beforeAcceptance=observed, noFileLocks=True)

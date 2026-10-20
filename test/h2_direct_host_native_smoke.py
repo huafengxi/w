@@ -50,15 +50,15 @@ result = dict(root=str(ROOT), pi=str(pi), submittedPrompt=False,
 print('NATIVE_SMOKE_ROOT=' + str(ROOT), flush=True)
 try:
     d = life.ensure()
-    known.extend(d['known'])
+    known.extend(H.group_members(d['host']))
     facts = life.read_host()
     proof = d['startupAcceptance']
     assert proof['peerPid'] == d['host']['pid'] and proof['success'] is True
     assert list((ROOT / 'runtime').rglob('*.lock')) == []
-    result.update(instance=d['instance'], host=d['host'], child=d['child'], facts=facts,
+    result.update(instance=d['instance'], host=d['host'], facts=facts,
                   startupAcceptance=proof, fileLocks=0)
     assert facts['host'] == d['host']
-    assert facts['child'] == d['child']
+    assert 'child' not in facts
     assert set(p.name for p in life.local.iterdir()) == {'host.json', 'host.log', 's'}
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(25)
