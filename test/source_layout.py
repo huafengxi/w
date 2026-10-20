@@ -33,6 +33,19 @@ class SourceLayout(unittest.TestCase):
             else:
                 self.assertEqual(spawns, [], str(file))
 
+    def test_start_has_no_persistent_prediction_or_random_generation(self):
+        tree = ast.parse((SESSIOND / 'lifecycle.py').read_text())
+        life = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Lifecycle')
+        start = next(n for n in life.body if isinstance(n, ast.FunctionDef) and n.name == '_start')
+        calls = [n for n in ast.walk(start) if isinstance(n, ast.Call)]
+        popen = next(n for n in calls if isinstance(n.func, ast.Attribute) and n.func.attr == 'Popen')
+        for call in calls:
+            rendered = ast.unparse(call.func)
+            self.assertNotIn(rendered, ('uuid.uuid4', 'atomic', 'private_dir'))
+            if rendered == 'self.save':
+                self.assertGreater(call.lineno, popen.lineno)
+        self.assertNotIn('launching', ast.unparse(start))
+
     def test_production_never_replaces_imported_factories(self):
         for file in SESSIOND.rglob('*.py'):
             tree = ast.parse(file.read_text())

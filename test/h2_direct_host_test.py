@@ -203,7 +203,10 @@ class Acceptance(unittest.TestCase):
         # canonical name/inbox must not follow the alias or presentation title.
         (self.f.ws / 'alias.agent').write_text(json.dumps(dict(host='test', cwd=str(self.f.ws), title='New presentation')))
         (self.f.ws / 'alias.jsonl').symlink_to(self.f.ws / 'chat-a.jsonl')
-        (self.f.ws / 'chat-a.agent').write_text(json.dumps(dict(host='test', cwd=str(self.f.ws), title='Renamed title')))
+        original = self.f.ws / 'chat-a.agent'
+        original_doc = json.loads(original.read_text())
+        original_doc['title'] = 'Renamed title'
+        original.write_text(json.dumps(original_doc))
         c2 = Client(self.f)
         alias = c2.request(op='attach', session='/alias.agent')['body']
         self.assertTrue(alias['ok'])
@@ -276,7 +279,9 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(c3.request(op='status')['body']['instance'], d['instance'])
         # An already-live fixed endpoint still refuses a sequential second P.
         # Alternate socket names for one session are no longer supported.
-        config = json.loads((self.f.life.local / d['instance'] / 'declaration.json').read_text())
+        config = dict(sessionFile=self.f.life.session, sessionName=self.f.life.name,
+                      cwd=self.f.life.cwd, piBinary=str(self.f.fake), extensionArgv=[],
+                      socketPath=self.f.life.sock, env=self.f.web_env())
         alias = self.f.ws / 'alias.jsonl'
         alias.symlink_to(self.f.ws / 'chat-a.jsonl')
         for n, (session, sock) in enumerate(((config['sessionFile'], config['socketPath']),
@@ -535,7 +540,8 @@ class Acceptance(unittest.TestCase):
             self.assertTrue(b.get_entries()['ok'])
             self.f.remember()
             d = self.f.life.load()
-            cfg = json.loads((self.f.life.local / d['instance'] / 'declaration.json').read_text())
+            actual = b.request(dict(type='identity'), timeout=5)['data']
+            cfg = dict(env=actual['env'], sessionName=actual['name'])
             self.assertEqual(cfg['env']['DISPATCH_PROFILE'], 'good')
             self.assertEqual(cfg['sessionName'], 'chat-a')
             self.assertEqual(cfg['env']['SESSIOND_SESSION_FILE'], str(self.f.ws / 'chat-a.jsonl'))

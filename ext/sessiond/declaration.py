@@ -134,7 +134,15 @@ def resolve_agent(store, session):
                    "error": "agent file %s: derived session path rejected: %s"
                             % (p, e)},
                   '400 Bad Request')
+    declaration_file = None
+    try:
+        local = store.head(p).get('rpath')
+        if local:
+            declaration_file = _os.path.realpath(local)
+    except (OSError, AttributeError):
+        pass  # informational parsing can still work for a virtual store
     return _j({"ok": True, "name": name, "host": host, "cwd": cwd,
+               "declaration_file": declaration_file,
                "profile": profile,
                "sessionDir": sess_dir, "session": site_jsonl,
                "session_file": session_file,

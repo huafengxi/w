@@ -187,14 +187,14 @@ def case4_create(ws, outside):
     assert spec["profile"] == "ccw", spec
     assert spec["host"] == "test-host", spec
     assert spec["cwd"] == os.path.realpath(os.path.join(ws, "w")), spec
-    assert spec["sessionDir"] == os.path.realpath(os.path.join(ws, "run", "sessiond"))
+    assert spec["sessionDir"] == os.path.realpath(os.path.join(ws, "run", "sessiond", doc["name"]))
     assert spec["name"] == doc["name"] == os.path.basename(agent_path)[:-len(".agent")]
     assert _proc.SESSION_NAME_OK.match(doc["name"]), doc["name"]
     # 现名形态 = 短名 `s<rand4>`（用户拍板 2026-10-04；旧存量名仍是长形态 ⇒
     # SESSION_NAME_OK 是校验面、本行钉的是生成面）
     assert re.fullmatch(r"[a-z0-9]{4}", doc["name"]), doc["name"]
-    assert doc["agent_site"] == "/run/sessiond/%s.agent" % doc["name"], doc
-    assert doc["session_site"] == "/run/sessiond/%s.jsonl" % doc["name"], doc
+    assert doc["agent_site"] == "/run/sessiond/%s/%s.agent" % (doc["name"], doc["name"]), doc
+    assert doc["session_site"] == "/run/sessiond/%s/%s.jsonl" % (doc["name"], doc["name"]), doc
     assert oct(os.stat(agent_path).st_mode & 0o777) == "0o600", "文件权限须 0600"
     print("case4 OK: 字段集 = %s（⛔ 无 command 键；0600）" % sorted(spec))
 
@@ -324,8 +324,8 @@ def case6_list(ws, outside, created):
     assert r1["project"] == ws + "/w", r1["project"]
     assert by_name[second["name"]]["project"] == ws, by_name[second["name"]]
     assert r1["state"] == "unknown" and r1["pids"] == []
-    assert r1["agent_site"] == "/run/sessiond/%s.agent" % created["name"]
-    assert r1["session_site"] == "/run/sessiond/%s.jsonl" % created["name"]
+    assert r1["agent_site"] == "/run/sessiond/%s/%s.agent" % (created["name"], created["name"])
+    assert r1["session_site"] == "/run/sessiond/%s/%s.jsonl" % (created["name"], created["name"])
     groups = sorted({r["project"] for r in rows})
     assert groups == [ws, ws + "/w"], groups
     # rename 的 override 生效 + titleSource 标记
@@ -363,7 +363,7 @@ def case7_rename(ws, outside, created):
     # 空标题 = 清除 override（回落自动标题）
     r = _proc.rename_files(name, "   ")
     assert r["override"] is None and r["title"] == name, r
-    with open(os.path.join(ws, "run", "sessiond", name + ".agent"),
+    with open(os.path.join(ws, "run", "sessiond", name, name + ".agent"),
               encoding="utf-8") as f:
         assert "title" not in json.load(f), "空标题须删掉 title 键"
     print("case7 OK: 反控 5+3 例被拒；空标题清除 override 且字段回落")
@@ -373,8 +373,8 @@ def case7_rename(ws, outside, created):
 
 def case8_delete(ws, outside, created, second):
     name = created["name"]
-    agent = os.path.join(ws, "run", "sessiond", name + ".agent")
-    jsonl = os.path.join(ws, "run", "sessiond", name + ".jsonl")
+    agent = os.path.join(ws, "run", "sessiond", name, name + ".agent")
+    jsonl = os.path.join(ws, "run", "sessiond", name, name + ".jsonl")
     with open(jsonl, "w", encoding="utf-8") as f:
         f.write(json.dumps({"type": "session"}) + "\n")
     st = os.stat(agent)
@@ -394,7 +394,7 @@ def case8_delete(ws, outside, created, second):
     print("case8 OK: 重复删除幂等（removed=[]）")
 
     # 反控 A：符号链接逃逸 —— <name>.agent 是指向根集外文件的软链 ⇒ 拒且目标未动
-    esc = os.path.join(ws, "run", "sessiond", "esc.agent")
+    esc = os.path.join(ws, "run", "sessiond", "esc", "esc.agent"); os.makedirs(os.path.dirname(esc))
     os.symlink(os.path.join(outside, "secret.txt"), esc)
     target_before = os.stat(os.path.join(outside, "secret.txt"))
     msg = _reject(_proc.delete_files, "esc")
@@ -438,7 +438,7 @@ def case9_api(ws, outside):
     name = created["name"]
     assert created["profile"] == "ccw" and created["host"] == "test-host", created
     assert created["cwd"] == os.path.realpath(os.path.join(ws, "w")), created
-    assert created["agent_site"] == "/run/sessiond/%s.agent" % name, created
+    assert created["agent_site"] == "/run/sessiond/%s/%s.agent" % (name, name), created
     print("case9 OK: 新建走 CLI 面（proc.create_files profile=ccw → %s，cwd 由清单声明 = %s）"
           % (name, created["cwd"]))
 
@@ -451,7 +451,7 @@ def case9_api(ws, outside):
     for field, val in (("command", "rm -rf /"), ("cwd", "lore"), ("profile", "ccw"),
                        ("sessionDir", "/tmp"), ("name", "pwn"), ("host", "mac")):
         for op in ("rename_session", "delete_session"):
-            st, doc = call(op=op, session="/run/sessiond/%s.jsonl" % name,
+            st, doc = call(op=op, session="/run/sessiond/%s/%s.jsonl" % (name, name),
                            title="x", confirm="1", **{field: val})
             assert st.startswith("400") and field in doc["error"], (op, field, st, doc)
             assert doc["ok"] is False
@@ -465,17 +465,17 @@ def case9_api(ws, outside):
     print("case9 OK: op=list_sessions → %d 枚会话（响应面 = %s）"
           % (len(doc["sessions"]), ",".join(sorted(doc))))
 
-    st, doc = call(op="rename_session", session="/run/sessiond/%s.jsonl" % name,
+    st, doc = call(op="rename_session", session="/run/sessiond/%s/%s.jsonl" % (name, name),
                    title="改名后的标题")
     assert st == "200 OK" and doc["title"] == "改名后的标题", (st, doc)
     st, doc = call(op="session_tabs")
     assert st == "200 OK" and doc["ok"] and doc["prefix"] == "test-host", (st, doc)
     assert len(doc["rows"]) == 1 and doc["rows"][0]["title"] == "改名后的标题", doc
-    assert doc["rows"][0]["url"] == ("/test-host/run/sessiond/%s.agent?v=chat" % name), doc
+    assert doc["rows"][0]["url"] == ("/test-host/run/sessiond/%s/%s.agent?v=chat" % (name, name)), doc
     print("case9 OK: op=rename_session + op=session_tabs（prefix=%s、url=%s）"
           % (doc["prefix"], doc["rows"][0]["url"]))
 
-    st, doc = call(op="delete_session", session="/run/sessiond/%s.jsonl" % name,
+    st, doc = call(op="delete_session", session="/run/sessiond/%s/%s.jsonl" % (name, name),
                    confirm="1")
     assert st == "200 OK" and doc["ok"], (st, doc)
     # 本例从未 attach 过 ⇒ jsonl 从未落盘 ⇒ 只删 .agent（缺文件不报错、删后复核仍为假）
@@ -487,7 +487,7 @@ def case9_api(ws, outside):
     assert doc["rows"] == [], doc                      # 空态吐零行
     print("case9 OK: op=delete_session（process.found=False、未建桥）+ 空态 session_tabs 零行")
 
-    st, doc = call(op="delete_session", session="/run/sessiond/%s.jsonl" % name)
+    st, doc = call(op="delete_session", session="/run/sessiond/%s/%s.jsonl" % (name, name))
     assert st.startswith("400") and "confirm" in doc["error"], (st, doc)
     print("   reject delete 缺 confirm → %s %s" % (st, doc["error"]))
     st, doc = call(op="delete_session", session="/etc/passwd", confirm="1")

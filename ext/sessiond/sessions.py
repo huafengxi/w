@@ -336,67 +336,55 @@ def new_session_name():
 
 
 def create_files(profile=CC_PROFILE, *, name_factory=None):
-    """新建一枚指挥中心临时会话 = 现场写 `run/sessiond/<name>.agent`。
-    字段集（全部服务端恒定 ∨ 自动生成 ∨ 由 profile 清单派生）：
-      `host`       = 本机规范名（`env/host-id` 查表；不可得 ⇒ 拒绝，⛔ 不猜）
-      `cwd`        = 该 profile 清单声明的 `cwd`（`profile_cwd`；缺省 = 工作区根）经
-                     白名单/逃逸校验后的 realpath（⛔ 客户端不控）
-      `sessionDir` = `<WS>/run/sessiond`（服务端恒定）
-      `profile`    = `profile_spec` 放行的名字（客户端唯一可控面；缺省 = `CC_PROFILE`）
-      `name`       = `new_session_name()`（自动生成的短名；撞名 ⇒ 有界重取，用尽即拒、
-                     ⛔ 不覆盖同名 `.agent`）
-      `createdAt`  = UTC ISO 时刻
-    ⛔ **无 `command` 键**：spawn argv 的单点是 `pi-host LaunchConfig`，声明者不可控。
-    落盘 = 同目录临时文件 + `link` 无覆盖原子发布，目录 0700 / 文件 0600。
-    返回 dict(name, profile, cwd, host, agent_site, session_site, agent_path, session_path)。"""
+    """Create a private temporary session directory and its declaration.
+
+    Creation reserves the session NAME, not a process launch. No host state or
+    launch marker is manufactured. Only profile is caller-selected.
+    """
     prof, pdoc = profile_spec(profile)
     cwd = profile_cwd(prof, pdoc)
     host = _self_host()
     if not host:
-        raise ValueError("cannot determine local host (env/host-id missing or no "
-                         "entry for this hostname); refusing to create a session "
-                         "with an unknown host field")
-    sdir = os.path.realpath(sessions_dir())
-    if not _within_roots(sdir):
-        raise ValueError("sessions dir escapes the workspace roots: %s" % sdir)
-    # 有界选名；最后以同目录link原子无覆盖发布，不能只靠此前exists检查。
+        raise ValueError('cannot determine local host (env/host-id missing or unmapped)')
+    root = os.path.realpath(sessions_dir())
+    if not _within_roots(root):
+        raise ValueError('sessions dir escapes the workspace roots: %s' % root)
+    os.makedirs(root, mode=0o700, exist_ok=True)
     for _ in range(SESSION_NAME_TRIES):
         name = (name_factory or new_session_name)()
-        agent_path = os.path.join(sdir, name + ".agent")
-        if not os.path.exists(agent_path):
+        if not SESSION_NAME_OK.fullmatch(name):
+            raise ValueError('invalid generated session name')
+        # A legacy flat declaration/history still owns its name until an explicit
+        # offline cutover. Do not launch another pi behind the old owner's back.
+        if any(os.path.lexists(os.path.join(root, name + s)) for s in ('.agent', '.jsonl')):
+            continue
+        sdir = os.path.join(root, name)
+        try:
+            os.mkdir(sdir, mode=0o700)
             break
+        except FileExistsError:
+            continue
     else:
-        raise ValueError("cannot allocate a free session name in %d tries "
-                         "(sessions dir=%s)" % (SESSION_NAME_TRIES, sdir))
-    jsonl_path = os.path.join(sdir, name + ".jsonl")
-    doc = {"host": host, "cwd": cwd, "sessionDir": sdir, "profile": prof,
-           "name": name,
-           "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        raise ValueError('cannot allocate a free session name in bounded tries')
+    agent_path = os.path.join(sdir, name + '.agent')
+    jsonl_path = os.path.join(sdir, name + '.jsonl')
+    doc = dict(host=host, cwd=cwd, sessionDir=sdir, profile=prof, name=name,
+               createdAt=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+    tmp = os.path.join(sdir, '.tmp-' + uuid.uuid4().hex + '.agent')
     try:
-        os.makedirs(sdir, mode=0o700, exist_ok=True)
-        tmp = os.path.join(sdir, ".tmp-%d-%s.agent" % (os.getpid(),
-                                                        uuid.uuid4().hex[:6]))
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+        with open(tmp, 'x', encoding='utf-8') as f:
+            os.chmod(tmp, 0o600)
+            f.write(json.dumps(doc, ensure_ascii=False, indent=1) + '\n')
             f.flush()
             os.fsync(f.fileno())
-        os.chmod(tmp, 0o600)
-        try:
-            os.link(tmp, agent_path)  # no overwrite if a concurrent creator won
-        finally:
-            os.unlink(tmp)
-    except OSError as e:
-        raise ValueError("cannot write agent declaration %s: %s" % (agent_path, e)) from e
-    agent_site = site_path_of(agent_path)
-    session_site = site_path_of(jsonl_path)
+        os.link(tmp, agent_path)
+    finally:
+        os.unlink(tmp)
+    agent_site, session_site = site_path_of(agent_path), site_path_of(jsonl_path)
     if not agent_site or not session_site:
-        raise ValueError("derived site paths escape the site root: %s / %s"
-                         % (agent_path, jsonl_path))
-    log.info("created command-center session %s (cwd=%s profile=%s host=%s)",
-             name, cwd, prof, host)
-    return {"name": name, "profile": prof, "cwd": cwd, "host": host,
-            "agent_site": agent_site, "session_site": session_site,
-            "agent_path": agent_path, "session_path": jsonl_path}
+        raise ValueError('derived session paths escape site root')
+    return dict(name=name, profile=prof, cwd=cwd, host=host, agent_site=agent_site,
+                session_site=session_site, agent_path=agent_path, session_path=jsonl_path)
 
 
 def session_title(jsonl_path, fallback):
@@ -449,20 +437,27 @@ def _first_user_text(content):
 
 
 def list_files():
-    """枚举本机 `run/sessiond/*.agent`（未删即列）→ 列表页/tab rpc 共用的数据面。
+    """枚举本机 `run/sessiond/<name>/<name>.agent`（未删即列）→ 列表页/tab rpc 共用的数据面。
     每项 = {name, title, titleSource, project, cwd, state, pids, mtime, agent_site,
     session_site, profile, host}；坏文件宽容跳过（记 WARN，⛔ 不整页失败）。
     本层只枚举磁盘元数据；运行态由 Registry 的实例事实补齐，不猜测进程。
     排序 = 最近活动（jsonl ∨ .agent 的 mtime）降序。"""
     sdir = sessions_dir()
     try:
-        names = sorted(fn[:-len(".agent")] for fn in os.listdir(sdir)
-                       if fn.endswith(".agent"))
+        names = sorted({fn[:-len(".agent")] if fn.endswith(".agent") else fn
+                        for fn in os.listdir(sdir)
+                        if fn.endswith(".agent") or (not os.path.islink(os.path.join(sdir, fn))
+                        and os.path.isfile(os.path.join(sdir, fn, fn + '.agent')))})
     except OSError:
         return []
     rows = []
     for name in names:
-        agent_path = os.path.join(sdir, name + ".agent")
+        if not SESSION_NAME_OK.fullmatch(name):
+            continue
+        parent = os.path.join(sdir, name)
+        if not os.path.isfile(os.path.join(parent, name + ".agent")):
+            parent = sdir  # read-only legacy listing; launching requires migration
+        agent_path = os.path.join(parent, name + ".agent")
         try:
             with open(agent_path, encoding="utf-8") as f:
                 spec = json.load(f)
@@ -473,7 +468,7 @@ def list_files():
         if not isinstance(spec, dict):
             log.warning("list_cc_sessions: skip non-object %s", agent_path)
             continue
-        jsonl_path = os.path.join(sdir, name + ".jsonl")
+        jsonl_path = os.path.join(parent, name + ".jsonl")
         cwd = spec.get("cwd")
         rows.append({
             "name": name,
@@ -527,25 +522,21 @@ def _project_label(cwd):
 
 
 def session_files(name):
-    """会话名 → (.agent realpath, .jsonl realpath, 会话目录 realpath)，带三重断言：
-    ① 名字白名单正则（⛔ 无路径分隔符、无穿越段）；
-    ② **root 身份断言**：会话目录的 realpath 不得等于 WS 根、也不得是 WS 根的祖先
-       （防「某分支上变量变成生产根」形态 ⇒ 删除面越界）；
-    ③ 两个目标文件的 realpath 必须**严格在会话目录内**（拒符号链接逃逸）。
-    任一不满足抛 ValueError（调用方回 400，⛔ 不动盘）。"""
-    if not isinstance(name, str) or not SESSION_NAME_OK.match(name):
-        raise ValueError("session name invalid: %r (expect ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$)"
-                         % (name,))
-    base = os.path.realpath(sessions_dir())
-    if base == WS_REAL or WS_REAL.startswith(base + os.sep):
-        raise ValueError("refusing: sessions dir %s is the workspace root or its "
-                         "ancestor (delete surface would escape)" % base)
+    """Exact managed declaration/history paths; reject aliased directories."""
+    if not isinstance(name, str) or not SESSION_NAME_OK.fullmatch(name):
+        raise ValueError('invalid session name')
+    root = os.path.realpath(sessions_dir())
+    if root == WS_REAL or WS_REAL.startswith(root + os.sep):
+        raise ValueError('refusing workspace root as session directory')
+    lexical = os.path.join(root, name)
+    base = os.path.realpath(lexical)
+    if base != lexical or not base.startswith(root + os.sep):
+        raise ValueError('session directory is aliased or escapes root')
     out = []
-    for suffix in (".agent", ".jsonl"):
+    for suffix in ('.agent', '.jsonl'):
         p = os.path.realpath(os.path.join(base, name + suffix))
-        if not p.startswith(base + os.sep):
-            raise ValueError("%s path escapes the sessions dir %s: %r"
-                             % (suffix, base, name))
+        if p != os.path.join(base, name + suffix):
+            raise ValueError('session file is aliased or escapes directory')
         out.append(p)
     return out[0], out[1], base
 
@@ -671,26 +662,15 @@ def sync_header_cwd(session_file, cwd):
 
 
 def session_name_from_site(session):
-    """op 参数 session（站内 .jsonl ∨ .agent 路径）→ 临时会话名。
-    只认 `run/sessiond/` 下的文件（与 sessions.session_files 的名字白名单、realpath 断言
-    组成两道）；非法抛 ValueError（调用方回 400）。"""
-    if not isinstance(session, str) or "\x00" in session \
-            or not session.startswith("/"):
-        raise ValueError("session must be an absolute site path: %r" % (session,))
+    """Resolve only /run/sessiond/<name>/<name>.agent|jsonl managed entries."""
+    if not isinstance(session, str) or '\x00' in session or not session.startswith('/'):
+        raise ValueError('session must be an absolute site path')
     p = posixpath.normpath(session)
-    base = posixpath.dirname(p)
     fn = posixpath.basename(p)
-    name = None
-    for suf in (".jsonl", ".agent"):
-        if fn.endswith(suf):
-            name = fn[:-len(suf)]
-            break
-    if not name:
-        raise ValueError("session must end with .jsonl or .agent: %r" % (session,))
-    want = site_path_of(os.path.realpath(sessions_dir()))
-    if base != want:
-        raise ValueError("not a command-center session path (expect %s/<name>."
-                         "jsonl|.agent, got %r)" % (want, session))
+    name = next((fn[:-len(s)] for s in ('.jsonl', '.agent') if fn.endswith(s)), None)
+    if not name or not SESSION_NAME_OK.fullmatch(name):
+        raise ValueError('invalid managed session filename')
+    root = site_path_of(os.path.realpath(sessions_dir()))
+    if posixpath.dirname(p) != root + '/' + name:
+        raise ValueError('not a managed session path; legacy flat sessions require offline migration')
     return name
-
-

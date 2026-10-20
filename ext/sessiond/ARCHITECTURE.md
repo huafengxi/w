@@ -19,9 +19,11 @@ HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接�
 - 明确访问时启动或连接；启动须核验本次 P 的内核 peer 身份并取得匹配的 `get_state` 成功回执。
 - 浏览器关闭仅释放订阅；Web 客户端 shutdown 只 detach，P/pi 继续运行。Web 重启可依本机实例事实重新连接。
 - 确认的自然退出进入 dormant；下一次明确访问可启动新实例。socket EOF 不证明 pi 退出，不完整或未知身份不自动重试接管。
-- reload：带当前 instance token，确认旧进程树停止，再从同一历史启动。
+- reload：带当前 P 的真实 boot/PID/start 身份，确认旧进程树停止，再从同一历史启动；不另造随机 instance token。
 - clear：同样确认停止后截断历史，再启动；截断或停止失败不启动替代实例。
-- delete：核验注册/实例身份与文件身份，确认停止后只删除声明和历史；保留 inbox 与运行事实。
+- delete：核验注册/进程身份与文件身份，确认停止后删除声明、历史和已知宿主文件；保留 inbox，不递归删除无关文件或新 owner 的端点。
+
+普通临时会话一会话一目录：`.agent`（Web 配置/控制）、`.jsonl`（pi 历史）、`host.json`（P 事实）、socket `s` 和诊断 `host.log`。无按代归档、启动参数快照或独立 pidfile。Popen 前不写启动意图；极端启动中断可能留下需人工处理的现场。详情见 [ORDINARY.md](ORDINARY.md)。
 
 普通会话只用进程内线程锁，不承诺多 Web 进程原子仲裁或同时启动唯一性。
 环境清洗由调用方的 agentd/envscrub 提供；profile 与 pi 扩展在清洗后显式注入。
@@ -152,13 +154,13 @@ select/confirm/input/editor 请求按 id 保留，基线重建尚未结算的问
 
 ### 12.1 创建
 
-调用方 CLI 调用 `bootstrap.get_registry().create(profile)`。声明与历史落本机运行时目录；profile 决定 cwd，短名由服务生成。
+调用方 CLI 调用 `bootstrap.get_registry().create(profile)`。声明与历史落本机 `run/sessiond/<name>/<name>.agent|jsonl`；profile 决定 cwd，短名由服务生成。创建不会产生进程启动标记；P 实际运行后才写自己的 `host.json`。
 
 ### 12.2 列表与变更
 
 列表从声明文件读取标题、profile、cwd 与历史活动时间；运行态由本机独立 P 的实例事实核验取得，不扫描进程名或 environ 推断宿主。标题顺序为 override、首条用户消息、文件名。
 
-删除与声明解析共用进程内注册表锁；不把它描述成跨 Web 进程原子事务。rename 只改声明标题。文件路径与 profile 校验归 sessions，注册完成、实例 fence 和停止后删除协调归 registry/lifecycle。
+删除与声明解析共用进程内注册表锁；不把它描述成跨 Web 进程原子事务。rename 只改声明标题并保留控制记录。文件路径与 profile 校验归 sessions，注册完成、真实进程身份检查和停止后删除协调归 registry/lifecycle。旧平铺临时会话只读展示为 unknown，须显式离线迁移，不在请求中自动接管。
 
 ### 12.3 动态 tab
 

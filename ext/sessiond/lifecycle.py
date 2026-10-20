@@ -53,6 +53,7 @@ def atomic(path, obj):
     temp = Path(str(path) + '.tmp-' + uuid.uuid4().hex)
     try:
         with temp.open('x') as f:
+            os.chmod(temp, 0o600)
             json.dump(obj, f, sort_keys=True)
             f.flush()
             os.fsync(f.fileno())
@@ -159,99 +160,124 @@ def private_dir(path):
 
 
 class Lifecycle:
-    """Finite syscall operations, not a server, supervisor or command spool."""
+    """Finite operations: P owns host.json, Web owns .agent/runtime.
+
+    No pre-spawn marker, random generation, per-run directory or command spool.
+    Missing launch evidence has the explicitly accepted crash-window ambiguity.
+    """
     def __init__(self, session, name, cwd, runtime, host_entry, agentd, env,
                  pi_binary, extensions=(), claim=P._claim_origin, truncate=None,
-                 prepare=None, stop_timeout=3, startup_timeout=5):
+                 prepare=None, stop_timeout=3, startup_timeout=5, declaration_path=None):
         configure_process_tools(host_entry)
         self.session = str(Path(session).resolve())
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9._-]+', name) or name in ('.', '..'):
             raise ValueError('ordinary name must remain a legal participant short name')
+        if name != P.display_name(self.session):
+            raise ValueError('name must match the canonical history basename')
         self.name, self.cwd = name, str(Path(cwd).resolve())
         self.host_entry, self.agentd = str(host_entry), str(agentd)
         self.env, self.pi_binary, self.extensions = dict(env), pi_binary, list(extensions)
-        self.claim = claim
-        self.prepare = prepare
+        self.claim, self.prepare = claim, prepare
         self.truncate = truncate or self._truncate
-        self.stop_timeout = stop_timeout
-        self.startup_timeout = startup_timeout
-        root = private_dir(runtime)
-        self.local = private_dir(root / hashlib.sha256(os.fsencode(self.session)).hexdigest()[:16])
+        self.stop_timeout, self.startup_timeout = stop_timeout, startup_timeout
+        history = Path(self.session)
+        if history.parent.parent == Path(P.sessions_dir()).resolve() and history.parent.name == name:
+            self.local = private_dir(history.parent)
+        else:
+            # Arbitrary declarations/aliases still converge by CANONICAL history,
+            # never by the spelling or parent of an alias .agent.
+            self.local = private_dir(private_dir(runtime) / hashlib.sha256(os.fsencode(self.session)).hexdigest()[:16])
         self._mutex = _SESSION_MUTEXES.setdefault(str(self.local), threading.RLock())
         self.sock = str(self.local / 's')
         if len(os.fsencode(self.sock)) > 100:
-            raise ValueError('socket path too long; supply a short stable runtime root')
-        self.current = self.local / 'current.json'
-        self.handles = {}  # optional true wait only, never required for reconnect
+            raise ValueError('socket path too long; supply a short private session/runtime root')
+        self.current = self.local / 'host.json'
+        self.declaration = Path(declaration_path).resolve() if declaration_path else history.with_suffix('.agent')
+        if not P._within_roots(str(self.declaration)):
+            raise ValueError('control declaration escapes workspace')
+        self.handles = {}
         self.binding = dict(session=self.session, name=name, cwd=self.cwd)
-        with self.lock():
-            p = self.local / 'binding.json'
-            if p.exists():
-                if json.loads(p.read_text()) != self.binding:
-                    raise ValueError('canonical session binding changed')
-            else:
-                atomic(p, self.binding)
+
+    @staticmethod
+    def process_key(host):
+        # Existing gen/expected_instance API carries native identity, not a UUID.
+        return '%s:%s:%s' % (host['boot'], host['pid'], host['start'])
 
     @contextmanager
     def lock(self):
-        # Human-triggered operations; no cross-process file-lock guarantee.
         with self._mutex:
             yield
 
-    def load(self):
+    def web_record(self):
+        doc = json.loads(self.declaration.read_text())
+        if not isinstance(doc, dict):
+            raise ValueError('invalid session declaration')
+        return doc
+
+    def read_host(self):
         if not self.current.exists():
             return None
         d = json.loads(self.current.read_text())
-        if d['binding'] != self.binding or d['socket'] != self.sock:
-            raise RuntimeError('metadata binding mismatch')
+        if not isinstance(d, dict) or d.get('binding') != self.binding:
+            raise RuntimeError('host state binding mismatch')
+        if not isinstance(d.get('host'), dict):
+            raise RuntimeError('missing host identity')
+        wait = d.get('childWait')
+        if wait is not None and (not isinstance(wait, dict) or not d.get('child')
+                                 or type(wait.get('returncode')) is not int):
+            raise RuntimeError('invalid actual child wait')
         return d
 
-    def save(self, d, *, publish=True):
-        path = self.local / d['instance'] / 'record.json'
-        if path.exists() and 'hostWait' not in d:
-            previous = json.loads(path.read_text())
-            if 'hostWait' in previous:
-                d['hostWait'] = previous['hostWait']
-        atomic(path, d)
-        if publish:
-            atomic(self.current, d)
+    def load(self):
+        d = self.read_host()
+        if d is None:
+            return None
+        d['instance'] = self.process_key(d['host'])
+        d['socket'] = self.sock
+        d['known'] = [i for i in (d['host'], d.get('child')) if i]
+        d['phase'], d['fence'] = 'unverified', None
+        control = self.web_record().get('runtime', {})
+        if not isinstance(control, dict):
+            raise ValueError('invalid Web control record')
+        if control.get('host'):
+            if not same(control['host'], d['host']):
+                raise RuntimeError('Web control/actual host identity mismatch')
+            d.update(control)
+        return d
 
-    def facts(self, d):
-        rows = [json.loads(line) for line in (self.local / d['instance'] / 'stdout').read_text().splitlines()]
-        starts = [r for r in rows if r.get('event') == 'host_started']
-        if len(starts) != 1:
-            raise RuntimeError('missing/duplicate host_started fact')
-        f = starts[0]
-        h = d['host']
-        if (f['hostPid'] != h['pid'] or str(f['hostProcStart']) != h['start']
-                or f['sessionFile'] != self.session or f['sessionName'] != self.name
-                or f['socketPath'] != self.sock):
-            raise RuntimeError('host_started identity mismatch')
-        waits = [r for r in rows if r.get('event') == 'child_wait']
-        if len(waits) > 1 or (waits and (waits[0]['childPid'] != f['childPid']
-                or type(waits[0]['returncode']) is not int)):
-            raise RuntimeError('invalid child_wait fact')
-        return f, waits[0] if waits else None
+    def save(self, d):
+        # Only this caller writes .agent. Never rewrite P's host.json or a prior
+        # instance archive. Preserve concurrently read presentation/config data.
+        doc = self.web_record()
+        control = {k: d[k] for k in ('host', 'phase', 'fence', 'known',
+                   'startupAcceptance', 'hostWait', 'error', 'startupCleanup') if k in d}
+        old = doc.get('runtime', {})
+        if (d.get('host') and old.get('host') and same(old['host'], d['host'])
+                and 'hostWait' not in control and 'hostWait' in old):
+            control['hostWait'] = old['hostWait']
+        doc['runtime'] = control
+        atomic(self.declaration, doc)
 
     def observe(self, d):
         if d is None:
             return dict(state='idle', instance=None)
         if d.get('host') is None or d.get('child') is None:
-            raise RuntimeError('incomplete launch identity; unknown, no automatic retry')
+            raise RuntimeError('incomplete process identity; unknown, no blind takeover')
+        actual_record = self.read_host()
+        if (not actual_record or not same(actual_record['host'], d['host'])
+                or not same(actual_record.get('child'), d['child'])):
+            raise RuntimeError('host state changed during observation')
+        wait = d['childWait'] = actual_record.get('childWait')
         h, c = identity(d['host']['pid']), identity(d['child']['pid'])
-        # PID reuse is not absence; do not signal it or take over its socket.
         for actual, expected in ((h, d['host']), (c, d['child'])):
             if actual and not same(actual, expected):
                 raise RuntimeError('stale/reused process identity')
-        f, wait = self.facts(d)
-        if f['childPid'] != d['child']['pid'] or str(f['childProcStart']) != d['child']['start']:
-            raise RuntimeError('child fact identity mismatch')
         handle = self.handles.get(d['instance'])
         if handle is not None and handle.poll() is not None:
             d['hostWait'] = dict(source='W Popen.poll/wait', returncode=handle.wait())
             self.save(d)
         members = group_members(d['host'])
-        known = d.get('known', [d['host'], d['child']])
+        known = d['known']
         unknown = (unverified_members(members, known, d['host']) if live(h) and live(c)
                    else [i for i in members if not any(same(i, k) for k in known)])
         known_live = []
@@ -270,29 +296,29 @@ class Lifecycle:
         if d.get('fence'):
             state = 'stopped' if settled and d.get('phase') == 'stopped' else 'fenced'
         return dict(state=state, instance=d['instance'], host=d['host'], child=d['child'],
-                    socket=self.sock, members=members, knownLive=known_live, unknown=unknown, settled=settled,
-                    childWait=wait, hostWait=d.get('hostWait'), phase=d['phase'])
+                    socket=self.sock, members=members, knownLive=known_live, unknown=unknown,
+                    settled=settled, childWait=wait, hostWait=d.get('hostWait'), phase=d['phase'])
 
     def status(self):
         with self.lock():
             try:
                 return self.observe(self.load())
-            except (OSError, ValueError, KeyError, RuntimeError) as e:
+            except (OSError, ValueError, KeyError, RuntimeError, TypeError) as e:
                 return dict(state='unknown', error=str(e))
 
-    def _reap(self, handle, token):
-        # Ordinary child reaping only. Never restart/signal; if web dies this
-        # thread dies too and no replacement wait fact is manufactured.
+    def _reap(self, handle, host):
         rc = handle.wait()
         with self.lock():
-            path = self.local / token / 'record.json'
-            d = json.loads(path.read_text())
-            d['hostWait'] = dict(source='W Popen.wait', returncode=rc)
-            current = self.load()
-            if current and current['instance'] == token:
-                self.save(d)
-            else:
-                atomic(path, d)
+            try:
+                actual = self.read_host()
+                if not actual or not same(actual['host'], host):
+                    return  # a later P owns the state; no old callback write
+                current = self.load()
+                if current and same(current['host'], host):
+                    current['hostWait'] = dict(source='W Popen.wait', returncode=rc)
+                    self.save(current)
+            except (FileNotFoundError, RuntimeError):
+                pass  # missing/changed declaration: never recreate or repair it
 
     def _accept_start(self, d):
         """One post-launch connection: our P's kernel peer AND a real pi RPC.
@@ -327,103 +353,85 @@ class Lifecycle:
         raise TimeoutError('startup get_state response timeout')
 
     def _reject_start(self, d, handle, error):
-        """Discard only identities from this invocation; never unlink its path.
-
-        If another P owns the pathname, its process and endpoint are untouched.
-        This is failed-start cleanup, not retry or automatic recovery.
-        """
+        # Only identities belonging to THIS Popen, never the foreign socket peer.
+        try:
+            actual = self.read_host()
+            if d.get('host') and actual and same(actual['host'], d['host']):
+                d['child'] = actual.get('child')
+        except (OSError, ValueError, KeyError, RuntimeError):
+            pass
         known = [i for i in (d.get('child'), d.get('host')) if i]
         errors = []
         for sig in (signal.SIGTERM, signal.SIGKILL):
             for i in known:
                 try:
-                    actual = identity(i['pid'])
-                    if same(actual, i) and live(actual):
+                    if same(identity(i['pid']), i) and live(identity(i['pid'])):
                         signal_identity(i, sig)
                 except (OSError, RuntimeError) as e:
                     errors.append(str(e))
             try:
-                rc = handle.wait(timeout=max(.1, self.stop_timeout))
-                d['hostWait'] = dict(source='W failed-start Popen.wait', returncode=rc)
+                d['hostWait'] = dict(source='W failed-start Popen.wait',
+                                     returncode=handle.wait(timeout=max(.1, self.stop_timeout)))
             except subprocess.TimeoutExpired:
                 continue
-        remaining = list(known)
-        deadline = time.monotonic() + max(.1, self.stop_timeout)
-        while remaining and time.monotonic() < deadline:
-            pending = []
-            for i in remaining:
-                try:
-                    actual = identity(i['pid'])
-                    if same(actual, i) and live(actual):
-                        pending.append(i)
-                except (OSError, RuntimeError) as e:
-                    if str(e) not in errors:
-                        errors.append(str(e))
-                    pending.append(i)
-            remaining = pending
-            if remaining:
-                time.sleep(.01)
+        remaining = [i for i in known if same(identity(i['pid']), i) and live(identity(i['pid']))]
         d.update(phase='startup_failed', fence='startup_failed', error=str(error),
                  startupCleanup=dict(remainingLive=remaining, errors=errors,
                                      childIdentityUnknown=d.get('child') is None))
-        current = self.load()
-        self.save(d, publish=bool(current and current['instance'] == d['instance']))
+        self.save(d)  # an ACTUAL failed attempt, never a pre-Popen prediction
 
     def _start(self):
         if os.path.exists(self.session):
             self.claim(self.session)
             if self.prepare:
                 self.prepare()
-        # A launch marker precedes the syscall. Interrupted launch is unknown,
-        # not a reason to search by name or start a replacement.
-        token = uuid.uuid4().hex
-        run = private_dir(self.local / token)
-        d = dict(instance=token, binding=self.binding, socket=self.sock,
-                 phase='launching', host=None, child=None, fence=None)
-        self.save(d)
-        # Offline import permission is one-use. Once a real launch is recorded,
-        # losing current.json must not authorize another launch over old history.
-        (self.local / 'imported-history.json').unlink(missing_ok=True)
         config = dict(sessionFile=self.session, sessionName=self.name, cwd=self.cwd,
                       piBinary=self.pi_binary, extensionArgv=self.extensions,
                       socketPath=self.sock, env=self.env)
-        atomic(run / 'declaration.json', config)
-        hostenv = dict(self.env)
-        with (run / 'stdout').open('ab', buffering=0) as out, (run / 'stderr').open('ab', buffering=0) as err:
-            handle = subprocess.Popen([sys.executable, '-B', self.host_entry, str(run / 'declaration.json')],
-                                      cwd=self.cwd, env=hostenv, stdin=subprocess.DEVNULL,
-                                      stdout=out, stderr=err, start_new_session=True, close_fds=True)
-        self.handles[token] = handle
+        # No persistent launch marker, random instance, config file or per-run
+        # directory. A crash before actual identity publication may need manual
+        # investigation. The log is diagnostic and is never a startup marker.
+        with (self.local / 'host.log').open('ab', buffering=0) as log:
+            handle = subprocess.Popen([sys.executable, '-B', self.host_entry, '-'],
+                                      cwd=self.cwd, env=dict(self.env), stdin=subprocess.PIPE,
+                                      stdout=log, stderr=log, start_new_session=True, close_fds=True)
+        d = dict(binding=self.binding, socket=self.sock, host=None, child=None,
+                 phase='unverified', fence=None)
         try:
             d['host'] = identity(handle.pid)
             if not d['host'] or d['host']['sid'] != handle.pid or d['host']['pgid'] != handle.pid:
                 raise RuntimeError('host did not acquire independent session/group')
-            self.save(d)
+            d['instance'] = self.process_key(d['host'])
+            self.handles[d['instance']] = handle
+            try:
+                handle.stdin.write(json.dumps(config).encode())
+                handle.stdin.close()
+            finally:
+                if not handle.stdin.closed:
+                    handle.stdin.close()
             deadline = time.monotonic() + self.startup_timeout
             while time.monotonic() < deadline:
-                try:
-                    f, _ = self.facts(d)
-                    child = identity(f['childPid'])
-                    if not child or child['start'] != str(f['childProcStart']):
-                        raise RuntimeError('child identity unavailable')
+                actual = self.read_host()
+                if actual and same(actual['host'], d['host']) and actual.get('child'):
+                    child = identity(actual['child']['pid'])
+                    if not same(child, actual['child']):
+                        raise RuntimeError('child identity unavailable/changed')
                     if child['pgid'] != d['host']['pgid'] or child['sid'] != d['host']['sid']:
                         raise RuntimeError('noncooperative child group')
+                    d.update(child=child, childWait=actual.get('childWait'), known=[d['host'], child])
                     break
-                except (ValueError, KeyError, RuntimeError):
-                    if handle.poll() is not None:
-                        raise RuntimeError('host exited before launch facts')
-                    time.sleep(.01)
+                if handle.poll() is not None:
+                    raise RuntimeError('host exited before actual process facts')
+                time.sleep(.01)
             else:
-                raise TimeoutError('host launch facts unavailable')
-            d.update(child=child, known=[d['host'], child], phase='verifying')
-            self.save(d)
+                raise TimeoutError('host process facts unavailable')
             d['startupAcceptance'] = self._accept_start(d)
             d['phase'] = 'running'
             self.save(d)
         except Exception as e:
             self._reject_start(d, handle, e)
             raise RuntimeError('host startup acceptance failed: %s' % e) from e
-        threading.Thread(target=self._reap, args=(handle, token), daemon=True,
+        threading.Thread(target=self._reap, args=(handle, d['host']), daemon=True,
                          name='sessiond-child-wait').start()
         return d
 
@@ -431,14 +439,14 @@ class Lifecycle:
         with self.lock():
             d = self.load()
             if d is None:
+                if self.web_record().get('runtime'):
+                    raise RuntimeError('missing actual host record; unknown, explicit recovery required')
                 return self._start()
             obs = self.observe(d)
             if d.get('fence'):
-                raise RuntimeError('instance fenced; no implicit retry/recovery')
+                raise RuntimeError('failed operation; no implicit retry/recovery')
             if obs['state'] == 'running':
                 return d
-            # Only locally witnessed natural exit may implicitly revive on a
-            # new explicit access. Crash/unknown requires recover(expected).
             if obs['state'] == 'dormant':
                 return self._start()
             raise RuntimeError('unknown prior instance; explicit checked recovery required')
@@ -510,12 +518,12 @@ class Lifecycle:
         with self.lock():
             d = self.load()
             if not d or not expected or d['instance'] != expected:
-                raise RuntimeError('instance fence mismatch')
+                raise RuntimeError('process identity mismatch')
             if d.get('fence'):
-                raise RuntimeError('duplicate/failed operation is fenced; do not retry')
+                raise RuntimeError('duplicate/failed operation; do not retry')
             if operation not in ('stop', 'reload', 'clear', 'recover'):
                 raise ValueError('unknown lifecycle operation')
-            obs = self.observe(d)  # identity gate precedes even recording a fence
+            obs = self.observe(d)
             d['fence'], d['phase'] = operation, 'fenced'
             self.save(d)
             if operation == 'recover':
@@ -529,7 +537,5 @@ class Lifecycle:
                 return d
             if operation == 'clear':
                 self.truncate(self.session)
-                self.claim(self.session)  # original ordinary weak claim, no new guarantee
+                self.claim(self.session)
             return self._start()
-
-

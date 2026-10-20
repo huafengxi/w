@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import socket
 from pathlib import Path
 import sys
 import time
@@ -22,6 +23,7 @@ options = json.loads(Path(sys.argv[1]).read_text())
 store = RootStore([('/', DirStore(os.environ['W_WORKSPACE']))])
 streams = {}
 spawn_attempts = []
+foreign_sockets = []  # harness-only replacement endpoint countercontrol
 
 
 def audit(event, args):
@@ -108,6 +110,19 @@ with C.installed(options) as registry:
                 with patch.object(H.Lifecycle, '_stop', stop_then_create):
                     meta, body = C.api_call(store, **req)
                 result = dict(meta=meta, body=json.loads(body))
+            elif special == 'socket_changes_during_stop':
+                original_stop = H.Lifecycle._stop
+                def stop_then_replace(life, d):
+                    original_stop(life, d)
+                    endpoint = Path(life.sock)
+                    if endpoint.exists():
+                        endpoint.rename(endpoint.with_name('fixture-stopped-socket'))
+                    foreign = socket.socket(socket.AF_UNIX)
+                    foreign.bind(str(endpoint)); foreign.listen(1)
+                    foreign_sockets.append(foreign)
+                with patch.object(H.Lifecycle, '_stop', stop_then_replace):
+                    meta, body = C.api_call(store, **req)
+                result = dict(meta=meta, body=json.loads(body))
             elif special == 'inject_identity_denial':
                 with patch.object(H, 'identity', side_effect=PermissionError('injected identity denial')):
                     meta, body = C.api_call(store, **req)
@@ -120,3 +135,5 @@ with C.installed(options) as registry:
             print(json.dumps(dict(ok=False, error=repr(e))), flush=True)
     for b in list(B._BRIDGES.values()):
         b.sup.shutdown()  # web exit = detach only
+    for foreign in foreign_sockets:
+        foreign.close()

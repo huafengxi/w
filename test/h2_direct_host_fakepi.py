@@ -14,8 +14,10 @@ name = sys.argv[sys.argv.index('-n') + 1]
 root = session.parent
 
 def ident():
-    return dict(pid=os.getpid(), start=str(starttime(os.getpid())), name=name,
-                stdio=[os.fstat(i).st_ino for i in (0, 1, 2)])
+    return dict(pid=os.getpid(), start=str(starttime(os.getpid())), name=name, cwd=os.getcwd(),
+                stdio=[os.fstat(i).st_ino for i in (0, 1, 2)],
+                env={k: os.environ[k] for k in ('DISPATCH_PROFILE', 'SESSIOND_SESSION_FILE',
+                     'W_WORKSPACE', 'AGENTD_ROOT', 'AGENTD_DIR') if k in os.environ})
 
 
 def emit(o):

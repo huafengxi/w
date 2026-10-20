@@ -12,7 +12,7 @@ log = logging.getLogger("sessiond-client")
 
 class Client:
     """Bridge-facing ordinary socket client; Lifecycle owns explicit process operations."""
-    def __init__(self, session_path, on_event, cwd=None, profile=None, *, options):
+    def __init__(self, session_path, on_event, cwd=None, profile=None, *, options, declaration_path=None):
         rp = os.path.realpath(session_path)
         self.session_file = rp if P._within_roots(rp) else P.resolve_session_path(session_path)
         self.name = P.display_name(self.session_file)
@@ -36,10 +36,11 @@ class Client:
         ext = ['-e', P.PI_EXTENSION] if os.path.exists(P.PI_EXTENSION) else []
         self.life = L.Lifecycle(self.session_file, self.name, self.cwd,
                               env=env, pi_binary=P.pi_binary(), extensions=ext,
-                              prepare=lambda: P.sync_header_cwd(self.session_file, self.cwd), **options)
+                              prepare=lambda: P.sync_header_cwd(self.session_file, self.cwd),
+                              declaration_path=declaration_path, **options)
         self._sock = None
         self._reader = None
-        self.gen = None  # actual ordinary instance token, NOT S generation
+        self.gen = None  # native P boot/pid/start identity; no extra instance token
 
     def _disconnect(self):
         s, self._sock = self._sock, None
@@ -128,7 +129,7 @@ class Client:
                     current = self.life.load()
                     if not current or not expected or current['instance'] != expected or current.get('fence'):
                         raise RuntimeError('instance fence mismatch or duplicate request')
-                # Reader boundary precedes new token / historical mutation.
+                # Reader boundary precedes process replacement / history mutation.
                 self._disconnect()
                 d = self.life.operate(operation, expected)
                 if operation != 'stop':
@@ -150,7 +151,7 @@ class Client:
         # Never let original drop_session mistake a detach for a verified kill.
         if reason == 'delete_session':
             return dict(ok=False, error='candidate delete is not migrated; explicit fenced stop required')
-        # Browser/web disposal is detach only. Explicit stop is change(stop, token).
+        # Browser/web disposal is detach only. Explicit stop targets native P identity.
         with self._op_lock:
             self._closed = True
             self._disconnect()

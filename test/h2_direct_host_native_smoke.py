@@ -40,7 +40,8 @@ wrapper.chmod(0o700)
 env = dict(HOME=str(ROOT / 'home'), TMPDIR=str(ROOT / 'tmp'),
            PATH=os.environ['PATH'], PI_CODING_AGENT_DIR=str(ROOT / 'config'),
            PI_OFFLINE='1', NO_PROXY='127.0.0.1,localhost', W_WORKSPACE=str(ROOT))
-life = H.Lifecycle(str(ROOT / 'history.jsonl'), 'native-smoke', str(ROOT / 'cwd'),
+(ROOT / 'history.agent').write_text(json.dumps(dict(host='fixture', cwd=str(ROOT / 'cwd'))))
+life = H.Lifecycle(str(ROOT / 'history.jsonl'), 'history', str(ROOT / 'cwd'),
                    str(ROOT / 'runtime'), str(Path(os.environ['H2_P_SOURCE']) / 'pi_host.py'),
                    os.environ['H2_A_SOURCE'], env, str(wrapper), claim=lambda path: None)
 known = []
@@ -50,14 +51,15 @@ print('NATIVE_SMOKE_ROOT=' + str(ROOT), flush=True)
 try:
     d = life.ensure()
     known.extend(d['known'])
-    facts, _ = life.facts(d)
+    facts = life.read_host()
     proof = d['startupAcceptance']
     assert proof['peerPid'] == d['host']['pid'] and proof['success'] is True
     assert list((ROOT / 'runtime').rglob('*.lock')) == []
     result.update(instance=d['instance'], host=d['host'], child=d['child'], facts=facts,
                   startupAcceptance=proof, fileLocks=0)
-    assert str(facts['hostProcStart']) == d['host']['start']
-    assert str(facts['childProcStart']) == d['child']['start']
+    assert facts['host'] == d['host']
+    assert facts['child'] == d['child']
+    assert set(p.name for p in life.local.iterdir()) == {'host.json', 'host.log', 's'}
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(25)
         sock.connect(life.sock)
@@ -90,13 +92,6 @@ finally:
     if current:
         known.extend(i for i in current.get('known', []) if i)
         known.extend(current[k] for k in ('host', 'child') if current.get(k))
-        try:
-            start, _ = life.facts(current)
-            child = H.identity(start['childPid'])
-            if child and child['start'] == str(start['childProcStart']):
-                known.append(child)
-        except (OSError, ValueError, KeyError, RuntimeError):
-            pass
     for item in known:
         actual = H.identity(item['pid'])
         if H.same(actual, item) and H.live(actual):

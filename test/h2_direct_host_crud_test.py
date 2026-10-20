@@ -101,18 +101,16 @@ class Fixture:
                     AGENTD_ROOT=str(self.ws),H2_CLI_SOURCE=str(self.cli),PYTHONDONTWRITEBYTECODE='1')
 
     def remember(self):
-        for p in self.runtime.glob('*/current.json'):
+        for p in (self.ws/'run/sessiond').glob('*/host.json'):
             d=json.loads(p.read_text())
             self.known.extend(i for i in d.get('known',[]) if i)
             self.known.extend(d[k] for k in ('host','child') if d.get(k))
-        for p in (self.ws/'run/sessiond').glob('descendant.json'):
+        for p in (self.ws/'run/sessiond').glob('*/descendant.json'):
             i=H.identity(json.loads(p.read_text())['pid'])
             if i:self.known.append(i)
 
     def current(self, name):
-        history=self.ws/'run/sessiond'/(name+'.jsonl')
-        key=__import__('hashlib').sha256(os.fsencode(str(history))).hexdigest()[:16]
-        return self.runtime/key/'current.json'
+        return self.ws/'run/sessiond'/name/'host.json'
 
     def cleanup(self):
         self.remember()
@@ -146,14 +144,14 @@ class CRUD(unittest.TestCase):
         self.assertEqual(cli['rc'],0,cli)
         rows=c1.request(op='list_sessions')['body']['sessions'];self.assertEqual(len(rows),1)
         row=rows[0];self.assertEqual(row['state'],'dormant')
-        name=row['name'];decl=self.f.ws/'run/sessiond'/(name+'.agent')
+        name=row['name'];decl=self.f.ws/'run/sessiond'/name/(name+'.agent')
         doc=dict(agent_site=row['agent'],name=name,registration=json.loads(decl.read_text())['h2Registration'])
         inbox=self.f.ws/'agents/bot'/name/'inbox';(inbox/'keep').write_text('preexisting inbox payload')
         a=self.attach(c1,doc)
         self.rpc(c1,doc,'effect',value='once-only',text='  Auto first title\nsecond line')
         before=self.rpc(c1,doc,'identity')['data']
         ident=c1.request(special='identity',session=doc['agent_site']);d=json.loads(self.f.current(name).read_text())
-        cfg=json.loads((self.f.current(name).parent/d['instance']/'declaration.json').read_text())
+        cfg=dict(env=before['env'],cwd=before['cwd'],sessionName=before['name'])
         for k,v in dict(SESSIOND_SESSION_FILE=str(decl.with_suffix('.jsonl')),W_WORKSPACE=str(self.f.ws),
                         AGENTD_ROOT=str(self.f.ws),DISPATCH_PROFILE='good').items():
             self.assertEqual(cfg['env'][k],v)
@@ -174,10 +172,11 @@ class CRUD(unittest.TestCase):
         history=decl.with_suffix('.jsonl');self.assertIn('once-only',history.read_text())
         self.assertEqual((history.parent/'effects').read_text(),'once-only\n')
         self.rpc(c2,doc,'descendant');self.f.remember()
+        child=H.identity(json.loads((history.parent/'descendant.json').read_text())['pid'])
+        stopped=[d['host'],d['child'],child]
         deleted=self.delete(c2,doc,a['gen']);self.assertTrue(deleted['ok'],deleted)
-        stopped=json.loads(self.f.current(name).read_text())
-        self.assertEqual(len(stopped['known']),3)
-        self.assertFalse(any(H.live(H.identity(i['pid'])) for i in stopped['known']))
+        self.assertFalse(self.f.current(name).exists())
+        self.assertFalse(any(H.live(H.identity(i['pid'])) for i in stopped))
         self.assertFalse(decl.exists());self.assertFalse(history.exists())
         self.assertEqual((inbox/'keep').read_text(),'preexisting inbox payload')
         self.assertEqual(c2.request(op='session_tabs')['body']['rows'],[])
@@ -192,19 +191,19 @@ class CRUD(unittest.TestCase):
         reload=c1.request(op='reload',session=doc['agent_site'],expected_instance=a['gen'])['body']
         self.assertTrue(reload['ok'],reload);self.f.remember()
         old=self.delete(c2,doc,a['gen']);self.assertFalse(old['ok'])
-        self.assertEqual(json.loads(self.f.current(doc['name']).read_text())['instance'],reload['gen'])
+        self.assertEqual(H.Lifecycle.process_key(json.loads(self.f.current(doc['name']).read_text())['host']),reload['gen'])
         # Ordered deletion and late access, not cross-Web linearizability.
         deleted=self.delete(c1,doc,reload['gen'])
         attached=c2.request(op='attach',session=doc['agent_site'])['body']
         self.assertTrue(deleted['ok'],deleted)
         cached=c2.request(special='cached',session=doc['agent_site']);self.assertFalse(cached['sent'])
-        current=json.loads(self.f.current(doc['name']).read_text());self.assertEqual(current['phase'],'deleted')
-        self.assertEqual(current['instance'],reload['gen'])
+        current=dict(absent=not self.f.current(doc['name']).exists())
+        self.assertTrue(current['absent'])
         self.assertFalse(c2.request(op='attach',session=doc['agent_site'])['body']['ok'])
         stream=c2.request(special='stream_finish',session=doc['agent_site'])
         self.assertTrue(stream['terminated']);self.assertEqual(stream['subscribers'],0)
-        # Original stream iterator sees the durable tombstone, not an invented
-        # natural exit or a socket disconnect being treated as stop success.
+        # The stream sees registration removal, not a new tombstone file or an
+        # invented natural exit from socket disconnect.
         record(race=dict(delete=deleted,attach=attached,cached=cached,current=current))
 
     def test_C_stop_timeout_files_unchanged_and_no_retry(self):
@@ -213,7 +212,10 @@ class CRUD(unittest.TestCase):
         agent=self.f.ws/doc['agent_site'].lstrip('/');history=agent.with_suffix('.jsonl')
         before=(agent.read_bytes(),history.read_bytes())
         result=self.delete(c,doc,a['gen']);self.assertFalse(result['ok']);self.assertIn('stop not confirmed',result['error'])
-        self.assertEqual((agent.read_bytes(),history.read_bytes()),before)
+        self.assertEqual(history.read_bytes(),before[1])
+        self.assertEqual({k:v for k,v in json.loads(agent.read_bytes()).items() if k!='runtime'},
+                         {k:v for k,v in json.loads(before[0]).items() if k!='runtime'})
+        self.assertEqual(json.loads(agent.read_text())['runtime']['fence'],'delete')
         self.assertFalse(self.delete(c,doc,a['gen'])['ok'])
         self.assertEqual(c.request(op='list_sessions')['body']['sessions'][0]['state'],'failed')
         self.assertFalse(c.request(op='attach',session=doc['agent_site'])['body']['ok'])
@@ -241,7 +243,7 @@ class CRUD(unittest.TestCase):
         (history.parent/'alias.agent').symlink_to(outside)
         self.assertFalse(c.request(op='delete_session',session='/run/sessiond/alias.agent',confirm=1)['body']['ok'])
         self.assertEqual(outside.read_text(),'outside harmless bait')
-        (history.parent/'incomplete.agent').write_text('{"host":"test"}')
+        (self.f.ws/'run/sessiond/incomplete.agent').write_text('{"host":"test"}')
         rows=c.request(op='list_sessions')['body']['sessions'];self.assertEqual(next(x for x in rows if x['name']=='incomplete')['state'],'unknown')
         self.assertFalse(c.request(op='delete_session',session='/run/sessiond/incomplete.agent',confirm=1)['body']['ok'])
         self.assertTrue(self.delete(c,doc,a['gen'])['ok'])
@@ -252,7 +254,7 @@ class CRUD(unittest.TestCase):
         agent=self.f.ws/doc['agent_site'].lstrip('/');before=agent.read_bytes()
         other=c2.request(special='create',profile='other',names=['abcd','efgh'])
         self.assertEqual(other['name'],'efgh');self.assertEqual(agent.read_bytes(),before)
-        history=agent.parent/'old1.jsonl';history.write_text('orphan history')
+        history=self.f.ws/'run/sessiond/old1.jsonl';history.write_text('orphan history')
         new=c1.request(special='create',profile='good',names=['old1','new1']);self.assertEqual(new['name'],'new1');self.assertEqual(history.read_text(),'orphan history')
         exhausted=c1.call(special='create',profile='good',names=['abcd']*32);self.assertFalse(exhausted['ok'])
         for bad in ['task','missing','../good','escape']:
@@ -276,7 +278,9 @@ class CRUD(unittest.TestCase):
         wait(lambda:not H.live(H.identity(d['host']['pid'])))
         agent=self.f.ws/doc['agent_site'].lstrip('/');before=(agent.read_bytes(),agent.with_suffix('.jsonl').read_bytes())
         result=self.delete(c,doc,a['gen']);self.assertFalse(result['ok']);self.assertIn('leader lost',result['error'])
-        self.assertEqual((agent.read_bytes(),agent.with_suffix('.jsonl').read_bytes()),before)
+        self.assertEqual(agent.with_suffix('.jsonl').read_bytes(),before[1])
+        self.assertEqual({k:v for k,v in json.loads(agent.read_bytes()).items() if k!='runtime'},
+                         {k:v for k,v in json.loads(before[0]).items() if k!='runtime'})
         self.assertTrue(H.live(H.identity(d['child']['pid'])))
 
     def test_G_unstarted_delete_and_natural_list_facts(self):
@@ -289,7 +293,8 @@ class CRUD(unittest.TestCase):
             # A real native wait produces the state, not an injected status field.
             self.rpc(c,doc,'exit',code=code)
             def settled():
-                d=json.loads(self.f.current(name).read_text())
+                declaration=self.f.current(name).parent/(name+'.agent')
+                d=json.loads(declaration.read_text()).get('runtime',{})
                 return d if d.get('hostWait') else None
             d=wait(settled)
             row=next(x for x in c.request(op='list_sessions')['body']['sessions'] if x['name']==name)
@@ -315,6 +320,19 @@ class CRUD(unittest.TestCase):
         self.assertEqual(history.read_text(),'late unknown file\n')
         self.assertTrue(Path(doc['agent_path']).exists())
         record(lazyHistoryCountercontrol=result,historyRetained=True)
+
+    def test_J_replacement_socket_is_not_deleted(self):
+        c=Client(self.f);doc=self.create(c);attached=self.attach(c,doc)
+        endpoint=Path(doc['agent_path']).parent/'s'
+        original_inode=endpoint.stat().st_ino
+        history=Path(doc['session_path']);before=history.read_bytes()
+        result=self.delete(c,doc,attached['gen'],special='socket_changes_during_stop')
+        self.assertFalse(result['ok'],result)
+        self.assertIn('socket identity changed',result['error'])
+        self.assertNotEqual(endpoint.stat().st_ino,original_inode)
+        self.assertTrue(Path(doc['agent_path']).exists())
+        self.assertEqual(history.read_bytes(),before)
+        record(replacementSocketRetained=True,delete=result)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

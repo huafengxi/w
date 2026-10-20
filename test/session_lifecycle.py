@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import signal
 import sys
 import threading
 import time
@@ -44,8 +45,9 @@ for line in sys.stdin:
                                     agentd=os.environ['W_AGENTD_DIR'], stop_timeout=.5),
                                registered=False)
         self.clients = []
-        def factory(session_path, on_event, cwd=None, profile=None):
-            client = Client(session_path, on_event, cwd, profile, options=self.service.options)
+        def factory(session_path, on_event, cwd=None, profile=None, declaration_path=None):
+            client = Client(session_path, on_event, cwd, profile, options=self.service.options,
+                            declaration_path=declaration_path)
             self.clients.append(client)
             return client
         self.service.client_factory = factory
@@ -57,14 +59,25 @@ for line in sys.stdin:
         for patcher in self.patchers:
             patcher.start()
         self.events = []
+        (self.root / 'session.agent').write_text(json.dumps(dict(host='test', cwd=str(self.root))))
         self.sup = factory('/session.jsonl', self.events.append, cwd=str(self.root))
 
     def tearDown(self):
         # Detach is not cleanup: explicitly stop exact harness-owned instances.
         for client in self.clients:
-            current = client.life.load()
-            if current and client.life.status()['state'] == 'running':
-                client.life.operate('stop', current['instance'])
+            try:
+                current = client.life.load()
+                if current and client.life.status()['state'] == 'running':
+                    client.life.operate('stop', current['instance'])
+            except FileNotFoundError:
+                # A test deliberately removed its declaration. Actual P facts
+                # still authorize only these exact harness-owned identities.
+                current = client.life.read_host()
+                if current:
+                    for key in ('child', 'host'):
+                        item = current.get(key)
+                        if item and L.same(L.identity(item['pid']), item) and L.live(L.identity(item['pid'])):
+                            L.signal_identity(item, signal.SIGKILL)
             client.shutdown()
             for handle in client.life.handles.values():
                 handle.wait(timeout=3)
@@ -150,13 +163,16 @@ for line in sys.stdin:
         self.assertEqual(len(self.sup.life.handles), 1)
         self.assertEqual(self.sup.life.load()['phase'], 'stopped')
 
-    def test_start_failure_is_unknown_not_implicitly_retried(self):
+    def test_popen_failure_leaves_no_start_marker(self):
+        before = self.sup.life.declaration.read_bytes()
         with patch.object(L.subprocess, 'Popen', side_effect=OSError('cannot spawn')) as spawn:
             self.sup.ensure_started()
             self.assertFalse(self.sup.wait_ready(2))
             self.assertEqual(self.sup.state, 'unknown')
             self.sup.ensure_started()
-            self.assertEqual(spawn.call_count, 1)
+            self.assertEqual(spawn.call_count, 2)
+        self.assertEqual(self.sup.life.declaration.read_bytes(), before)
+        self.assertFalse(self.sup.life.current.exists())
 
     def test_declaration_without_prior_agent_request(self):
         store = RootStore([('/', DirStore(str(self.root)))])
@@ -174,7 +190,28 @@ for line in sys.stdin:
         detached = B.detach_session('/chat.jsonl')
         self.assertTrue(detached['found'])
         self.assertFalse(detached['killed'])
-        self.assertEqual(channel.sup.life.status()['state'], 'running')
+        self.assertEqual(channel.sup.life.status()['state'], 'unknown')
+        actual = channel.sup.life.read_host()
+        self.assertTrue(L.same(L.identity(actual['host']['pid']), actual['host']))
+
+    def test_external_session_dir_and_declaration_alias_share_host(self):
+        store = RootStore([('/', DirStore(str(self.root)))])
+        history = self.root / 'history'; history.mkdir()
+        ui = self.root / 'ui'; ui.mkdir()
+        declaration = ui / 'chat.agent'
+        declaration.write_text(json.dumps(dict(host='test', cwd=str(self.root), sessionDir=str(history))))
+        channel = B.get_bridge('/ui/chat.agent', store=store)
+        self.assertTrue(channel.sup.wait_ready(2), channel.sup.status_doc())
+        self.assertEqual(channel.sup.life.declaration, declaration)
+        first = channel.sup.gen
+        (self.root / 'alias.agent').symlink_to(declaration)
+        (history / 'alias.jsonl').symlink_to(history / 'chat.jsonl')
+        with patch.object(B, '_BRIDGES', {}):
+            reconnected = B.get_bridge('/alias.agent', store=store)
+            self.assertTrue(reconnected.sup.wait_ready(2), reconnected.sup.status_doc())
+            self.assertEqual(reconnected.sup.gen, first)
+            self.assertEqual(reconnected.sup.life.declaration, declaration)
+        self.assertFalse((history / 'chat.agent').exists())
 
     def test_invalid_requests_do_not_open_channel(self):
         with patch.object(B, 'get_bridge', side_effect=AssertionError('must not open')):

@@ -1,57 +1,107 @@
 # Ordinary W → socket → P → PIPE → pi
 
-`bootstrap.configure()` selects ordinary factories once, before HTTP listening.
-The CLI consumes the same caller web profile and configures the same factories.
-Production never imports the H2 test adapters or unittest.mock. Missing/bad
-service configuration fails startup; there is no silent fallback to W-owned pi
-PIPEs. The ordinary Client owns only the socket. Registry explicitly passes runtime
-factories to Bridge; the independent P owns pi PIPEs.
+`bootstrap.configure()` selects ordinary factories before HTTP listening. The
+CLI consumes the same caller configuration. Missing/bad service configuration
+fails startup; production never falls back to W-owned pi PIPEs or test adapters.
+Registry passes explicit factories to Bridge. Independent P owns every pi PIPE.
 
-Required caller inputs are W_SESSION_HOST_ENTRY (independent P's pi_host.py) and
-W_SESSION_RUNTIME (resolved to a short, canonical, private local directory), plus the existing
-W_WORKSPACE/W_AGENTD_DIR/host map/pi configuration. Caller workspace aliases are
-resolved before binding/identity checks; the private-directory check itself is
-not relaxed. P itself never imports A.
-The default startup acceptance timeout is 25 seconds to include pi extension
-initialization. It remains one post-launch peer-checked get_state, not a retry
-or pre-launch contention protocol. Ordinary operations take only thread locks.
+## Minimal temporary session
 
-Read-only running status accepts live tool descendants only after checking their
-current identities and ancestry back to the recorded P/pi, with matching boot,
-owner, process group and session. These observations are not persisted and do
-not expand stop authority. Unrelated members, unverifiable ancestry and residual
-processes after leader loss remain unknown. Tool execution therefore does not
-temporarily reject metadata/control RPC merely by starting a subprocess.
+```text
+run/sessiond/<name>/
+  <name>.agent      Web-owned configuration, registration and actual control results
+  <name>.jsonl      pi-owned history (may not exist until first assistant output)
+  host.json         P-owned current native identities and real child wait
+  s                 fixed Unix socket
+  host.log          optional shared P/pi diagnostics, not lifecycle authority
+```
 
-HTTP reload/clear carry the attached instance token (`expected_instance`), not a
-rund generation. API forwards the explicit expectation to the operation gate;
-stale/empty values fail rather than mutate a different instance. Delete manual
-URLs can capture the current registration/instance server-side without starting
-P; when an expectation is supplied it is enforced. AgentClient and
-agentd control routing remain unchanged.
+No per-instance directories, random instance UUIDs, binding/current/record
+mirrors, input-environment snapshots, separate pidfiles or facts logs are created.
+The session remains temporary: it is not backed up/synchronized as persistent
+user data. Inbox identity stays at the caller's existing participant address;
+ordinary registration does not create an agentd spec/pid/enable/watcher.
 
-CLI list/autorun do not create runtime roots or missing binding records. Service
-startup and explicit create/attach may create private state. Process/RPC EOF is
-not proof of pi exit; failed/unknown records remain unknown and are not retried.
+Web is the sole writer of `.agent` (including its `runtime` control section).
+P is the sole writer of `host.json`. Web control records reference actual P
+identity and hold acceptance, explicit operation fences/known stop identities
+and actual Web wait results. They never substitute for P's real child wait.
+The HTTP `gen`/`expected_instance` slots serialize native P boot/PID/start identity,
+not an extra generated token or a runtime generation. Registration UUID remains
+separate, preventing stale clients from targeting a different session object.
 
-## Existing-history cutover
+## Start and crash boundary
 
-Old histories lacking runtime evidence do not become safely dormant merely
-because a file is present and no current.json was found. An operator must close
-recorded old owners, back up and preserve the history bytes, validate the local
-declaration/inbox, then explicitly write imported-history.json in its private
-binding directory. Its binding and history dev/inode/size/mtime must match and
-no launch artifacts may exist. This is offline adoption evidence, not a fake
-P pid, wait result, lease or claim to atomic cross-Web ownership.
+W explicitly spawns P, gives input JSON once on stdin, then verifies the actual
+P's kernel socket peer and one uniquely paired successful `get_state`. Default
+acceptance timeout is 25 seconds for extension initialization. There is no model
+prompt, command replay or probe-reconnect loop.
 
-The permission is consumed after recording the first real launch and BEFORE
-Popen. After that, losing current.json must not reuse the import permission.
-No normal request automatically imports history or repairs incomplete records.
-Deployment tools belong to the caller, not this mechanism repository.
+**No persistent launch intent is written before Popen.** A directory exists
+because a session was created, not to mark an attempt; diagnostic log existence
+is never treated as a launch marker. If Popen itself fails before creation, the
+declaration stays unchanged. Actual post-spawn failures may be recorded. A Web
+crash before P publishes enough identity facts can leave an ambiguous/residual
+process; manual investigation is accepted instead of a new lock/lease/recovery
+state machine. Socket checks still reject occupied/unknown endpoints, but do
+not promise cross-Web simultaneous-start uniqueness.
 
-File helpers live in sessions.py, process operations in lifecycle.py, socket
-transport in client.py and registration/CRUD in registry.py. bootstrap.py
-explicitly assembles the service; Bridge receives a client factory. H2 tests
-scopingly inject that service instead of replacing production module factories. The
-fixed-input runner includes ordinary_default.py: no install()/patch, default
-CLI/API, explicit fences, preserved history, one-use import and zero file locks.
+Web exit/browser close only detaches. A new Web can reconnect to an identified
+live P. Socket EOF is not pi exit. Native P identity, current peer/uid and session
+binding are checked on reconnect; unreadable/reused identities remain unknown.
+Confirmed natural dormancy still requires P's true pi wait, Web's true P wait,
+consistent results and closed known/group identities. Losing the spawning Web
+can lose its future wait authority: a later Web must not invent a host exit code.
+
+Live tools are read-only observations after verified ancestry to current P/pi
+with matching boot/uid/group/session. This does not persist adopted children or
+expand signal authority. Unknown members or leader loss with residuals remain
+unknown. Stop/reload/clear keep exact identity checks and confirmed tree closure.
+Failed destructive operations remain visibly fenced, not automatically retried.
+
+## CRUD and file identity
+
+Create publishes registration completion only after inbox creation succeeds;
+partial registrations never launch. Rename changes only title and preserves Web
+control data. Reload preserves history; clear truncates only after closure.
+Stale process/registration expectations fail instead of mutating a replacement.
+
+Delete revalidates registration/config and history identity around confirmed
+stop, removes the exact declaration/history and known host state/log files, and
+removes an empty session directory. It never recursively deletes unrelated
+files or inbox contents. A socket left by a terminated P can be removed only
+with the original inode and confirmed owner closure; replacement endpoints cause
+refusal. Cached clients/streams detect missing/changed registration, so no extra
+delete-tombstone file is needed. Failures can be partial and are surfaced, not
+rolled back or silently repaired.
+
+## External declarations and old layout
+
+A hand-written declaration outside the managed temporary family still resolves
+its history canonically. Such histories use the caller's short private
+`W_SESSION_RUNTIME/<canonical-history-hash>/` for P state/socket/log, so aliases
+share one host rather than allocating per-declaration endpoints. They do not
+acquire the managed CRUD surface. Native binding checks remain mandatory.
+
+Legacy flat temporary declarations are listed read-only, unknown, and rejected
+by managed attach/CRUD until explicit offline migration. Old live P processes
+are not stopped, moved or reconstructed by ordinary requests. An offline operator
+must close old owners and preserve history before relocation/adoption. There is
+no imported-history permission file or permanent legacy runtime implementation.
+Existing history with missing current host facts is unknown to normal requests;
+explicit offline adoption can call the lifecycle start after proving closure.
+
+Required caller inputs remain `W_SESSION_HOST_ENTRY`, `W_SESSION_RUNTIME`,
+workspace/agent tool directory, host map and pi configuration. Canonical private
+directories and short AF_UNIX paths are checked; aliases are resolved before
+binding. Ordinary operations use only process-local thread locks. Task/bot RPC
+routing and lifecycle remain with agentd, not this ordinary path.
+
+## Regression entry points
+
+`ordinary_default.py` audits real Popen boundaries, minimal files/single writers,
+actual identity generations, stale callbacks, missing state, explicit history
+adoption and pre-spawn failures. `ordinary_pi_http.py` uses real W HTTP/auth,
+socket/P/isolated pi and a deterministic localhost model for restart attach,
+reload/regenerate/clear/delete. The H2 lifecycle/startup/CRUD/repair suites retain
+identity and failure countercontrols; historical file-lock claims are superseded.

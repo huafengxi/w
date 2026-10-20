@@ -37,7 +37,7 @@ class Bridge:
     """单个会话路径的进程内事件环 + 命令通道（按路径注册，见 get_bridge）。"""
 
     def __init__(self, session_path, cwd=None, sock_path=None, participant_id=None,
-                 profile=None, *, client_factory=None):
+                 profile=None, *, client_factory=None, declaration_path=None):
         # 站内路径（如 /foo/bar/x.jsonl）；解析/校验在客户端内。
         self._site_path = session_path
         self.session = None
@@ -71,8 +71,9 @@ class Bridge:
         else:
             if client_factory is None:
                 raise ValueError('ordinary Bridge requires an explicit client factory')
+            options = dict(declaration_path=declaration_path) if declaration_path else {}
             self.sup = client_factory(self._site_path, on_event=self._ingest,
-                                      cwd=cwd, profile=profile)
+                                      cwd=cwd, profile=profile, **options)
         self.session = self.sup.name         # 展示名以监督员解析为准
 
     def _socket_lost(self):
@@ -592,8 +593,14 @@ def _get_bridge_locked(entry, store=None, *, client_factory, bridge_factory):
                 b = Bridge(session, sock_path=payload["sock"],
                            participant_id=payload.get("participant_id"))
             elif declaration is not None:
+                options = {}
+                companion = os.path.splitext(key)[0] + '.agent'
+                if not os.path.isfile(companion):
+                    options['declaration_path'] = declaration.get('declaration_file')
+                    if not options['declaration_path']:
+                        raise ValueError('ordinary runtime requires a local writable .agent declaration')
                 b = bridge_factory(session, cwd=declaration["cwd"], profile=declaration["profile"],
-                                   client_factory=client_factory)
+                                   client_factory=client_factory, **options)
             else:
                 raise ValueError("session is not registered with agentd")
             _BRIDGES[key] = b

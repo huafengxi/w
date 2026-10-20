@@ -25,7 +25,7 @@ class StartupAcceptance(unittest.TestCase):
         observed = []
         def check(d):
             observed.append(self.life.status()['state'])
-            self.assertEqual(d['phase'], 'verifying')
+            self.assertEqual(d['phase'], 'unverified')
             return accept(d)
         with patch.object(self.life, '_accept_start', side_effect=check):
             d = self.life.ensure()
