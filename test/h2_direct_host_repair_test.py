@@ -116,7 +116,7 @@ class Repairs(unittest.TestCase):
         try:
             row = c2.request(op='list_sessions')['body']['sessions'][0]
             now = H.identity(d['pid'])
-            host_alive = H.same(now, d) and H.live(now)
+            host_alive = H.same(now, H.host_identity(d)) and H.live(now)
             denied = self.delete(c2, doc, 'unstarted')
             record(B2=dict(row=row, identity=H.Lifecycle.process_key(d), host=d, hostActuallyLive=host_alive,
                            history=str(history), historyBytes=len(before), deleteUnstarted=denied,

@@ -128,11 +128,11 @@ def call(op, **kw):
 
 def remember():
     d = json.loads((folder/'host.json').read_text())
-    assert set(d) == {'pid', 'start', 'boot', 'uid', 'pgid', 'sid', 'ppid', 'state'}
+    assert set(d) == {'pid', 'start', 'boot'}
     assert 'child' not in d
     declaration = json.loads((folder/(name+'.agent')).read_text())
     assert 'runtime' not in declaration and 'h2Registration' not in declaration
-    known.extend(H.group_members(d))  # harness observations only
+    known.extend(H.group_members(H.host_identity(d)))  # harness observations only
     return d
 
 
@@ -151,7 +151,7 @@ try:
     before = history.read_bytes()
     # Kill ONLY the fixture Web. P/pi must keep their identities and history.
     servers[-1].terminate(); servers[-1].wait(timeout=10)
-    assert H.same(H.identity(original['pid']), original)
+    assert H.same(H.identity(original['pid']), H.host_identity(original))
     if sys.platform.startswith('linux'):
         def reap(): orphan_waits.append(os.waitpid(original['pid'], 0))
         threading.Thread(target=reap, daemon=True).start()

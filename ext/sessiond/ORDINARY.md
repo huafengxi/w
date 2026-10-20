@@ -51,11 +51,15 @@ The HTTP `gen`/`expected_instance` slots serialize native P boot/PID/start ident
 not an extra generated token or a runtime generation. Names remain reserved by
 their retained inboxes after deletion, and cached clients revalidate declarations.
 
-`host.json` is a flat process identity object with `pid`, `start`, `boot`, `uid`,
-`pgid`, `sid`, `ppid` and `state` at the top level; there is no `host` wrapper.
-Parent and state values are startup snapshots; observations read current kernel facts.
+`host.json` is a flat process identity object containing exactly `pid`, `start`
+and `boot`; there is no `host` wrapper or persisted process snapshot.
 `start` is a platform-local process start token, encoded as a string. `boot`
 distinguishes system boots; Linux start ticks alone cannot distinguish them.
+Ordinary P is launched as Web's uid with its own session/group, so expected uid
+is the current Web uid and expected pgid/sid both equal P's pid. These constraints
+are reconstructed in memory even when P is gone; live uid/group/session,
+parent and state are sampled from the kernel. A different boot is rejected
+before group enumeration or signalling, rather than interpreting a reused group.
 The file contains no binding, pi PID, child wait, error or launch-command fields.
 P receives its executable, arguments, history path, cwd and environment once
 through launch stdin; that input is not persisted as another runtime file.

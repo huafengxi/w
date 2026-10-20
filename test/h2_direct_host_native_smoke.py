@@ -57,7 +57,8 @@ try:
     assert list((ROOT / 'runtime').rglob('*.lock')) == []
     result.update(instance=d['instance'], host=d['host'], facts=facts,
                   startupAcceptance=proof, fileLocks=0)
-    assert facts == d['host']
+    assert H.same(facts, d['host'])
+    assert set(json.loads(life.current.read_text())) == {'pid', 'start', 'boot'}
     assert 'child' not in facts
     assert set(p.name for p in life.local.iterdir()) == {'host.json', 'host.log', 's'}
     with socket.socket(socket.AF_UNIX) as sock:

@@ -103,8 +103,8 @@ class Fixture:
     def remember(self):
         for p in (self.ws/'run/sessiond').glob('*/host.json'):
             d=json.loads(p.read_text())
-            self.known.append(d)
-            self.known.extend(H.group_members(d))
+            self.known.append(H.host_identity(d))
+            self.known.extend(H.group_members(H.host_identity(d)))
         for p in (self.ws/'run/sessiond').glob('*/descendant.json'):
             i=H.identity(json.loads(p.read_text())['pid'])
             if i:self.known.append(i)
@@ -173,7 +173,7 @@ class CRUD(unittest.TestCase):
         self.assertEqual((history.parent/'effects').read_text(),'once-only\n')
         self.rpc(c2,doc,'descendant');self.f.remember()
         child=H.identity(json.loads((history.parent/'descendant.json').read_text())['pid'])
-        stopped=H.group_members(d)
+        stopped=H.group_members(H.host_identity(d))
         deleted=self.delete(c2,doc,a['gen']);self.assertTrue(deleted['ok'],deleted)
         self.assertFalse(self.f.current(name).exists())
         self.assertFalse(any(H.live(H.identity(i['pid'])) for i in stopped))
@@ -276,10 +276,11 @@ class CRUD(unittest.TestCase):
         c=Client(self.f);doc=self.create(c);a=self.attach(c,doc)
         self.rpc(c,doc,'hold_eof');self.rpc(c,doc,'descendant');self.f.remember()
         path=self.f.current(doc['name']);d=json.loads(path.read_text())
-        H.signal_identity(d,signal.SIGKILL)
+        H.signal_identity(H.host_identity(d),signal.SIGKILL)
         wait(lambda:not H.live(H.identity(d['pid'])))
         agent=self.f.ws/doc['agent_site'].lstrip('/');before=(agent.read_bytes(),agent.with_suffix('.jsonl').read_bytes())
-        result=self.delete(c,doc,a['gen']);self.assertFalse(result['ok']);self.assertIn('leader lost',result['error'])
+        c2=Client(self.f)  # no launching Web's process/group snapshot survives here
+        result=self.delete(c2,doc,a['gen']);self.assertFalse(result['ok']);self.assertIn('leader lost',result['error'])
         self.assertEqual(agent.with_suffix('.jsonl').read_bytes(),before[1])
         self.assertEqual({k:v for k,v in json.loads(agent.read_bytes()).items() if k!='runtime'},
                          {k:v for k,v in json.loads(before[0]).items() if k!='runtime'})

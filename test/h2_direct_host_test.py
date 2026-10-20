@@ -23,7 +23,7 @@ os.environ.update(HOME=str(BASE / 'home'), TMPDIR=str(BASE / 'tmp'),
                   W_WORKSPACE=str(BASE / 'workspace'), W_AGENTD_DIR=os.environ['H2_A_SOURCE'])
 os.chdir(BASE / 'cwd')
 sys.path[:0] = [str(SOURCE), str(SOURCE / 'test')]
-from h2_direct_host import (Lifecycle, identity, same, live, signal_identity,
+from h2_direct_host import (Lifecycle, identity, same, live, signal_identity, host_record,
                             atomic, installed, api_call)
 from ext.sessiond import sessions as P, bridge as B
 from ext.sessiond.rpc import api, stream
@@ -293,7 +293,7 @@ class Acceptance(unittest.TestCase):
                                cwd=BASE / 'cwd', capture_output=True, timeout=10)
             record(duplicateConfig=cfg, rc=r.returncode, stdout=r.stdout.decode(), stderr=r.stderr.decode())
             self.assertNotEqual(r.returncode, 0)
-        self.assertEqual(self.f.life.load()['host'], d['host'])
+        self.assertTrue(same(self.f.life.load()['host'], d['host']))
 
     def test_B_unknown_endpoint_and_binding(self):
         unknown = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -414,15 +414,39 @@ class Acceptance(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.f.life.ensure()
 
+    def test_C_minimal_record_reconnect_and_boot_uid_group_checks(self):
+        d = self.start()
+        path = self.f.life.current
+        record = json.loads(path.read_text())
+        self.assertEqual(set(record), {'pid', 'start', 'boot'})
+        self.f.life.control.clear()  # reconstruct without the launching Web's control snapshot
+        self.assertTrue(same(self.f.life.load()['host'], d['host']))
+        self.assertEqual(self.f.life.status()['state'], 'running')
+        actual = identity(record['pid'])
+        for key in ('uid', 'pgid', 'sid'):
+            with patch('h2_direct_host.identity', return_value=dict(actual, **{key: actual[key] + 1})):
+                self.assertEqual(self.f.life.status()['state'], 'unknown')
+        try:
+            atomic(path, dict(record, boot='fixture-previous-boot'))
+            with patch('h2_direct_host.group_members') as scan, patch('h2_direct_host.signal_identity') as send:
+                self.assertEqual(self.f.life.status()['state'], 'unknown')
+                with self.assertRaisesRegex(RuntimeError, 'boot identity mismatch'):
+                    self.f.life.operate('clear', d['instance'])
+                scan.assert_not_called()
+                send.assert_not_called()
+            self.assertTrue(live(identity(record['pid'])))
+        finally:
+            atomic(path, record)
+
     def test_C_stale_unreadable_stop_timeout(self):
         d = self.start()
         stale = json.loads(json.dumps(d))
         stale['host']['start'] = '0'
-        atomic(self.f.life.current, stale['host'])
+        atomic(self.f.life.current, host_record(stale['host']))
         with self.assertRaises(RuntimeError):
             self.f.life.operate('clear', d['instance'])
         self.assertTrue(live(identity(d['host']['pid'])))
-        atomic(self.f.life.current, d['host'])
+        atomic(self.f.life.current, host_record(d['host']))
         self.f.life.save(d)
         with patch('h2_direct_host.identity', side_effect=PermissionError('injected proc denial')):
             self.assertEqual(self.f.life.status()['state'], 'unknown')

@@ -65,7 +65,7 @@ raw_host=life.current.read_bytes();actual=json.loads(raw_host)
 assert first==H.Lifecycle.process_key(actual)
 assert 'instance' not in actual and 'startupAcceptance' not in actual
 assert 'child' not in actual and 'childWait' not in actual
-assert set(actual)=={'pid','start','boot','uid','pgid','sid','ppid','state'}
+assert set(actual)=={'pid','start','boot'}
 assert a_path.read_bytes()==config_bytes
 assert life.load()['startupAcceptance']['success'] is True
 assert not list(pathlib.Path(os.environ['W_SESSION_RUNTIME']).rglob('*'))
@@ -162,7 +162,7 @@ class DefaultFactory(unittest.TestCase):
             known = []
             for record in (ws/'run/sessiond').glob('*/host.json'):
                 d = json.loads(record.read_text())
-                known.append(d)
+                known.append(dict(d, uid=os.getuid(), pgid=d['pid'], sid=d['pid']))
             for i in known:
                 now = tools.identity(i['pid'])
                 if now and all(now[k] == i[k] for k in ('pid', 'start', 'boot', 'uid', 'pgid', 'sid')) and now['state'] not in ('Z', 'X'):

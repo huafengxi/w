@@ -70,6 +70,26 @@ def identity(pid):
     return _PROCESS_TOOLS.identity(pid)
 
 
+def host_record(host):
+    return {k: host[k] for k in ('pid', 'start', 'boot')}
+
+
+def host_identity(record):
+    """Reconstruct expected owner/group constraints, never current liveness.
+
+    Ordinary P is launched as our uid and a session/group leader. Keep those
+    expectations even after P exits so remaining group members are observable.
+    """
+    if (not isinstance(record, dict) or set(record) != {'pid', 'start', 'boot'}
+            or type(record['pid']) is not int or record['pid'] <= 0
+            or not isinstance(record['start'], str) or not record['start']
+            or not isinstance(record['boot'], str) or not record['boot']):
+        raise RuntimeError('invalid host identity')
+    if record['boot'] != _PROCESS_TOOLS.boot_id():
+        raise RuntimeError('boot identity mismatch')
+    return dict(record, uid=os.getuid(), pgid=record['pid'], sid=record['pid'])
+
+
 def same(a, b):
     return bool(a and b and all(a[k] == b[k] for k in
                 ('pid', 'start', 'boot', 'uid', 'pgid', 'sid')))
@@ -218,10 +238,7 @@ class Lifecycle:
     def read_host(self):
         if not self.current.exists():
             return None
-        d = json.loads(self.current.read_text())
-        if not isinstance(d, dict) or not {'pid', 'start', 'boot', 'uid', 'pgid', 'sid'} <= d.keys():
-            raise RuntimeError('missing host identity')
-        return d
+        return host_identity(json.loads(self.current.read_text()))
 
     def load(self):
         host = self.read_host()
@@ -414,7 +431,7 @@ class Lifecycle:
                 raise TimeoutError('host socket unavailable')
             d['startupAcceptance'] = self._accept_start(d)
             # Actual accepted P, never a pre-launch intent or a P-written mirror.
-            atomic(self.current, d['host'])
+            atomic(self.current, host_record(d['host']))
             d['phase'] = 'running'
             self.save(d)
         except Exception as e:
