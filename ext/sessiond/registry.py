@@ -1,6 +1,6 @@
 """Ordinary session CRUD and explicit client assembly.
 
-P alone writes host.json; Web controls live in the session declaration. There
+Web owns host.json and control results in the session declaration. There
 are no per-generation archives, import markers or separate deletion tombstones.
 """
 from contextlib import contextmanager
@@ -127,7 +127,7 @@ class Registry:
                         continue
                     obs = life.status()
                     state = obs['state']
-                    if state == 'dormant' and (obs.get('childWait') or {}).get('returncode') != 0:
+                    if state == 'dormant' and (obs.get('hostWait') or {}).get('returncode') != 0:
                         state = 'failed'
                     if state in ('fenced', 'stopped'):
                         state = 'failed'

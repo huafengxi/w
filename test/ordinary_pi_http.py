@@ -191,18 +191,18 @@ try:
         child = None
         try:
             p.stdin.write(json.dumps(cfg).encode()); p.stdin.close()
-            wait(lambda: (eof_root/'host.json').exists())
+            wait(lambda: (eof_root/'s').exists())
             with socket.socket(socket.AF_UNIX) as s:
                 s.settimeout(25); s.connect(cfg['socketPath'])
                 s.sendall(b'{"type":"get_state","id":"eof-ready"}\n')
                 with s.makefile('rb') as f:
                     wait(lambda: json.loads(f.readline()).get('id') == 'eof-ready')
-                host = json.loads((eof_root/'host.json').read_text())['host']
+                host = H.identity(p.pid)
                 child = next(i for i in H.group_members(host) if i['ppid'] == p.pid)
                 known.extend([host, child])
                 p.kill(); p.wait(timeout=5)
                 wait(lambda: not H.live(H.identity(child['pid'])), seconds=8)
-                assert 'childWait' not in json.loads((eof_root/'host.json').read_text())
+                assert not (eof_root/'host.json').exists(), 'standalone P must not write Web metadata'
                 result['nativeStdinEOF'] = True
         finally:
             if p.poll() is None: p.kill(); p.wait(timeout=5)

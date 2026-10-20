@@ -30,7 +30,7 @@ class StartupAcceptance(unittest.TestCase):
         with patch.object(self.life, '_accept_start', side_effect=check):
             d = self.life.ensure()
         self.f.remember()
-        self.assertEqual(observed, ['unknown'])
+        self.assertEqual(observed, ['idle'])
         proof = d['startupAcceptance']
         self.assertEqual(proof['peerPid'], d['host']['pid'])
         self.assertEqual((proof['command'], proof['success']), ('get_state', True))
@@ -58,7 +58,8 @@ class StartupAcceptance(unittest.TestCase):
             with patch.object(self.life, '_accept_start', side_effect=replace_endpoint):
                 with self.assertRaisesRegex(RuntimeError, 'not the launched host'):
                     self.life.ensure()
-            d = self.life.load()
+            d = self.life.web_record()['runtime']
+            self.assertFalse(self.life.current.exists())
             self.f.remember()
             self.assertEqual(d['phase'], 'startup_failed')
             self.assertEqual(d['startupCleanup']['remainingLive'], [])
@@ -86,14 +87,17 @@ class StartupAcceptance(unittest.TestCase):
         with patch.object(self.life, '_accept_start', side_effect=bounded):
             with self.assertRaises(RuntimeError):
                 self.life.ensure()
-        d = self.life.load()
+        d = self.life.web_record()['runtime']
+        self.assertFalse(self.life.current.exists())
         self.f.remember()
         self.assertEqual(d['phase'], 'startup_failed')
+        self.assertNotIn('error', d)
+        self.assertNotIn('errors', d['startupCleanup'])
         self.assertNotIn('startupAcceptance', d)
         self.assertEqual(d['startupCleanup']['remainingLive'], [])
         rows = (self.f.ws / 'startup-requests').read_text().splitlines()
         self.assertEqual(len(rows), 1)  # one probe, no reconnect/replay retry
-        self.assertFalse(any(H.live(H.identity(i['pid'])) for i in d['known']))
+        self.assertFalse(H.live(H.identity(d['host']['pid'])))
         with self.assertRaises(RuntimeError):
             self.life.ensure()  # no implicit failed-start retry
         record(startupFailureMode=mode, record=d)

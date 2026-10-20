@@ -23,7 +23,7 @@ HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接�
 - clear：同样确认停止后截断历史，再启动；截断或停止失败不启动替代实例。
 - delete：核验注册/进程身份与文件身份，确认停止后删除声明、历史和已知宿主文件；保留 inbox，不递归删除无关文件或新 owner 的端点。
 
-普通临时会话一会话一目录：`.agent`（Web 配置/控制）、`.jsonl`（pi 历史）、`host.json`（P 事实）、socket `s` 和诊断 `host.log`。无按代归档、启动参数快照或独立 pidfile。Popen 前不写启动意图；极端启动中断可能留下需人工处理的现场。详情见 [ORDINARY.md](ORDINARY.md)。
+普通临时会话一会话一目录：`.agent`（Web 配置/控制）、`.jsonl`（pi 历史）、`host.json`（Web 核验后的 P 身份与绑定）、socket `s` 和诊断 `host.log`。Web 单独写两份 JSON；P 只维护 socket 与日志。无按代归档、启动参数快照或独立 pidfile。Popen 前不写启动意图；极端启动中断可能留下需人工处理的现场。详情见 [ORDINARY.md](ORDINARY.md)。
 
 普通会话只用进程内线程锁，不承诺多 Web 进程原子仲裁或同时启动唯一性。
 环境清洗由调用方的 agentd/envscrub 提供；profile 与 pi 扩展在清洗后显式注入。
@@ -154,7 +154,7 @@ select/confirm/input/editor 请求按 id 保留，基线重建尚未结算的问
 
 ### 12.1 创建
 
-调用方 CLI 调用 `bootstrap.get_registry().create(profile)`。声明与历史落本机 `run/sessiond/<name>/<name>.agent|jsonl`；profile 决定 cwd，短名由服务生成。创建不会产生进程启动标记；P 实际运行后才写自己的 `host.json`。
+调用方 CLI 调用 `bootstrap.get_registry().create(profile)`。声明与历史落本机 `run/sessiond/<name>/<name>.agent|jsonl`；profile 决定 cwd，短名由服务生成。创建不会产生进程启动标记；Web 在 P 运行且真实 peer/get_state 验收通过后才写 `host.json`。
 
 ### 12.2 列表与变更
 

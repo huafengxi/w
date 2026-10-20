@@ -321,7 +321,7 @@ class Acceptance(unittest.TestCase):
             s.close()
             obs = wait_for(lambda: (o if (o := self.f.life.status()).get('settled') else None))
             self.assertEqual(obs['state'], 'dormant', obs)
-            self.assertEqual(obs['childWait']['returncode'], code)
+            self.assertNotIn('childWait', obs)
             self.assertEqual(obs['hostWait']['returncode'], code)
             record(natural=obs)
             new = self.f.life.operate('recover', d['instance'])
@@ -343,7 +343,7 @@ class Acceptance(unittest.TestCase):
         wait_for(lambda: not live(identity(d['host']['pid'])) and not live(identity(d['child']['pid'])))
         obs = self.f.life.status()
         self.assertEqual(obs['state'], 'unknown')
-        self.assertIsNone(obs['childWait'])
+        self.assertNotIn('childWait', obs)
         with self.assertRaises(RuntimeError):
             self.f.life.ensure()
         self.assertEqual(self.f.life.load()['instance'], d['instance'])
@@ -375,7 +375,7 @@ class Acceptance(unittest.TestCase):
         else:
             wait_for(lambda: not live(identity(descendant['pid'])))
         self.assertTrue(self.f.life.status()['settled'])
-        self.assertIsNone(self.f.life.status()['childWait'])
+        self.assertNotIn('childWait', self.f.life.status())
         new = self.f.life.operate('recover', d['instance'])
         self.f.remember()
         self.assertNotEqual(new['instance'], d['instance'])
@@ -454,7 +454,7 @@ class Acceptance(unittest.TestCase):
         obs = self.f.life.status()
         self.assertTrue(obs['settled'], obs)
         self.assertEqual(obs['state'], 'stopped')
-        self.assertIsNone(obs['childWait'])  # signals do not invent P wait facts
+        self.assertNotIn('childWait', obs)
         self.assertEqual(len(self.f.life.load()['known']), 1)
         self.assertNotIn('known', json.loads(self.f.life.declaration.read_text())['runtime'])
         record(cooperativeStop=obs, known=self.f.life.load()['known'])

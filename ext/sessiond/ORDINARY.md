@@ -11,7 +11,7 @@ Registry passes explicit factories to Bridge. Independent P owns every pi PIPE.
 run/sessiond/<name>/
   <name>.agent      Web-owned configuration, registration and actual control results
   <name>.jsonl      pi-owned history (may not exist until first assistant output)
-  host.json         P-owned native P identity and real pi exit result
+  host.json         Web-owned binding and accepted native P identity
   s                 fixed Unix socket
   host.log          optional shared P/pi diagnostics, not lifecycle authority
 ```
@@ -22,12 +22,14 @@ The session remains temporary: it is not backed up/synchronized as persistent
 user data. Inbox identity stays at the caller's existing participant address;
 ordinary registration does not create an agentd spec/pid/enable/watcher.
 
-Web is the sole writer of `.agent` (including its `runtime` control section).
-P is the sole writer of `host.json`. Web control records reference actual P
+Web is the sole writer of `.agent` (including its `runtime` control section)
+and `host.json`. P only reads the latter when checking a previous socket owner;
+it creates the socket and writes diagnostics. Web control records reference actual P
 identity and hold acceptance, explicit operation fences and actual Web wait
 results. Pi identity and known stop descendants are kept in memory only;
-tool ancestry is sampled from the kernel when needed. P's real child wait
-records an exit result without a durable pi PID.
+tool ancestry is sampled from the kernel when needed. P waits for pi in memory
+and exits with the corresponding code. Child waits and error details are not
+persistent JSON fields; diagnostics stay in host.log and request errors.
 The HTTP `gen`/`expected_instance` slots serialize native P boot/PID/start identity,
 not an extra generated token or a runtime generation. Registration UUID remains
 separate, preventing stale clients from targeting a different session object.
@@ -35,7 +37,8 @@ separate, preventing stale clients from targeting a different session object.
 ## Start and crash boundary
 
 W explicitly spawns P, gives input JSON once on stdin, then verifies the actual
-P's kernel socket peer and one uniquely paired successful `get_state`. Default
+P's kernel socket peer and one uniquely paired successful `get_state`, then
+publishes binding and P identity in host.json. Default
 acceptance timeout is 25 seconds for extension initialization. There is no model
 prompt, command replay or probe-reconnect loop.
 
@@ -43,7 +46,7 @@ prompt, command replay or probe-reconnect loop.
 because a session was created, not to mark an attempt; diagnostic log existence
 is never treated as a launch marker. If Popen itself fails before creation, the
 declaration stays unchanged. Actual post-spawn failures may be recorded. A Web
-crash before P publishes enough identity facts can leave an ambiguous/residual
+crash before Web publishes the accepted P identity can leave an ambiguous/residual
 process; manual investigation is accepted instead of a new lock/lease/recovery
 state machine. Socket checks still reject occupied/unknown endpoints, but do
 not promise cross-Web simultaneous-start uniqueness.
@@ -51,8 +54,8 @@ not promise cross-Web simultaneous-start uniqueness.
 Web exit/browser close only detaches. A new Web can reconnect to an identified
 live P. Socket EOF is not pi exit. Native P identity, current peer/uid and session
 binding are checked on reconnect; unreadable/reused identities remain unknown.
-Confirmed natural dormancy still requires P's true pi wait, Web's true P wait,
-consistent results and closed known/group identities. Losing the spawning Web
+Confirmed normal dormancy requires Web's true non-signal P wait and closed
+known/group identities. Losing the spawning Web
 can lose its future wait authority: a later Web must not invent a host exit code.
 
 Pi belongs to P's lifetime. Linux arms SIGKILL on parent death before exec,

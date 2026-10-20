@@ -222,10 +222,6 @@ class Lifecycle:
             raise RuntimeError('host state binding mismatch')
         if not isinstance(d.get('host'), dict):
             raise RuntimeError('missing host identity')
-        wait = d.get('childWait')
-        if wait is not None and (not isinstance(wait, dict)
-                                 or type(wait.get('returncode')) is not int):
-            raise RuntimeError('invalid actual child wait')
         return d
 
     def load(self):
@@ -246,11 +242,10 @@ class Lifecycle:
         return d
 
     def save(self, d):
-        # Only this caller writes .agent. Never rewrite P's host.json or a prior
-        # instance archive. Preserve concurrently read presentation/config data.
+        # Web writes control results; P never writes either JSON file.
         doc = self.web_record()
         control = {k: d[k] for k in ('host', 'phase', 'fence',
-                   'startupAcceptance', 'hostWait', 'error', 'startupCleanup') if k in d}
+                   'startupAcceptance', 'hostWait', 'startupCleanup') if k in d}
         old = doc.get('runtime', {})
         if (d.get('host') and old.get('host') and same(old['host'], d['host'])
                 and 'hostWait' not in control and 'hostWait' in old):
@@ -266,7 +261,6 @@ class Lifecycle:
         actual_record = self.read_host()
         if not actual_record or not same(actual_record['host'], d['host']):
             raise RuntimeError('host state changed during observation')
-        wait = d['childWait'] = actual_record.get('childWait')
         h = identity(d['host']['pid'])
         if h and not same(h, d['host']):
             raise RuntimeError('stale/reused process identity')
@@ -286,16 +280,15 @@ class Lifecycle:
             if live(actual):
                 known_live.append(actual)
         settled = not members and not known_live and not live(h)
-        natural = (settled and wait is not None and d.get('hostWait') is not None
-                   and d['hostWait']['returncode'] == (wait['returncode'] if wait['returncode'] >= 0
-                                                       else 128 - wait['returncode']))
+        natural = (settled and d.get('hostWait') is not None
+                   and d['hostWait']['returncode'] >= 0)
         state = ('running' if d['phase'] == 'running' and live(h) and not unknown
                  else ('dormant' if natural else 'unknown'))
         if d.get('fence'):
             state = 'stopped' if settled and d.get('phase') == 'stopped' else 'fenced'
         return dict(state=state, instance=d['instance'], host=d['host'],
                     socket=self.sock, members=members, knownLive=known_live, unknown=unknown,
-                    settled=settled, childWait=wait, hostWait=d.get('hostWait'), phase=d['phase'])
+                    settled=settled, hostWait=d.get('hostWait'), phase=d['phase'])
 
     def status(self):
         with self.lock():
@@ -367,8 +360,12 @@ class Lifecycle:
             except subprocess.TimeoutExpired:
                 continue
         remaining = [i for i in known if same(identity(i['pid']), i) and live(identity(i['pid']))]
-        d.update(phase='startup_failed', fence='startup_failed', error=str(error),
-                 startupCleanup=dict(remainingLive=remaining, errors=errors))
+        with (self.local / 'host.log').open('a') as log:
+            log.write('Web startup acceptance failed: %s\n' % error)
+            for detail in errors:
+                log.write('Web failed-start cleanup: %s\n' % detail)
+        d.update(phase='startup_failed', fence='startup_failed',
+                 startupCleanup=dict(remainingLive=remaining))
         self.save(d)  # an ACTUAL failed attempt, never a pre-Popen prediction
 
     def _start(self):
@@ -382,6 +379,13 @@ class Lifecycle:
         # No persistent launch marker, random instance, config file or per-run
         # directory. A crash before actual identity publication may need manual
         # investigation. The log is diagnostic and is never a startup marker.
+        def socket_inode():
+            try:
+                st = os.lstat(self.sock)
+                return st.st_dev, st.st_ino, st.st_ctime_ns
+            except FileNotFoundError:
+                return None
+        previous_socket = socket_inode()
         with (self.local / 'host.log').open('ab', buffering=0) as log:
             handle = subprocess.Popen([sys.executable, '-B', self.host_entry, '-'],
                                       cwd=self.cwd, env=dict(self.env), stdin=subprocess.PIPE,
@@ -402,16 +406,18 @@ class Lifecycle:
                     handle.stdin.close()
             deadline = time.monotonic() + self.startup_timeout
             while time.monotonic() < deadline:
-                actual = self.read_host()
-                if actual and same(actual['host'], d['host']):
+                endpoint = socket_inode()
+                if endpoint is not None and endpoint != previous_socket:
                     d.update(known=[d['host']])
                     break
                 if handle.poll() is not None:
-                    raise RuntimeError('host exited before actual process facts')
+                    raise RuntimeError('host exited before socket publication')
                 time.sleep(.01)
             else:
-                raise TimeoutError('host process facts unavailable')
+                raise TimeoutError('host socket unavailable')
             d['startupAcceptance'] = self._accept_start(d)
+            # Actual accepted P, never a pre-launch intent or a P-written mirror.
+            atomic(self.current, dict(binding=self.binding, host=d['host']))
             d['phase'] = 'running'
             self.save(d)
         except Exception as e:

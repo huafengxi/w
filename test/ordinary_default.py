@@ -64,6 +64,7 @@ raw_host=life.current.read_bytes();actual=json.loads(raw_host)
 assert first==H.Lifecycle.process_key(actual['host'])
 assert 'instance' not in actual and 'startupAcceptance' not in actual
 assert 'child' not in actual and 'childWait' not in actual
+assert set(actual)=={'binding','host'}
 assert 'known' not in json.loads(a_path.read_text())['runtime']
 assert life.load()['startupAcceptance']['success'] is True
 assert not list(pathlib.Path(os.environ['W_SESSION_RUNTIME']).rglob('*'))
@@ -74,7 +75,7 @@ assert {name+'.agent',name+'.jsonl','host.json','host.log','s'}<=set(p.name for 
 actual_env=b.request({'type':'identity'})['data']['env']
 assert actual_env['DISPATCH_PROFILE']=='good' and 'AGENTD_DIR' not in actual_env
 assert actual_env['SESSIOND_SESSION_FILE']==str(history)
-# Web updates are not writes to P's state file.
+# Web owns the identity record; unchanged identity need not rewrite it.
 d=life.load();life.save(d);assert life.current.read_bytes()==raw_host
 old_handle=life.handles[first];old_host=d['host']
 bad=call(op='reload',session=site,expected_instance=first,expected_registration='0'*32)
