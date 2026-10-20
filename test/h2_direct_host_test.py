@@ -418,11 +418,11 @@ class Acceptance(unittest.TestCase):
         d = self.start()
         stale = json.loads(json.dumps(d))
         stale['host']['start'] = '0'
-        atomic(self.f.life.current, dict(host=stale['host']))
+        atomic(self.f.life.current, stale['host'])
         with self.assertRaises(RuntimeError):
             self.f.life.operate('clear', d['instance'])
         self.assertTrue(live(identity(d['host']['pid'])))
-        atomic(self.f.life.current, dict(host=d['host']))
+        atomic(self.f.life.current, d['host'])
         self.f.life.save(d)
         with patch('h2_direct_host.identity', side_effect=PermissionError('injected proc denial')):
             self.assertEqual(self.f.life.status()['state'], 'unknown')

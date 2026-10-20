@@ -35,6 +35,10 @@ The HTTP `gen`/`expected_instance` slots serialize native P boot/PID/start ident
 not an extra generated token or a runtime generation. Names remain reserved by
 their retained inboxes after deletion, and cached clients revalidate declarations.
 
+`host.json` is a flat process identity object with `pid`, `start`, `boot`, `uid`,
+`pgid`, `sid`, `ppid` and `state` at the top level; there is no `host` wrapper.
+Parent and state values are startup snapshots; observations read current kernel facts.
+
 ## Start and crash boundary
 
 W explicitly spawns P, gives input JSON once on stdin, then verifies the actual

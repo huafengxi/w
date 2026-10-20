@@ -62,10 +62,10 @@ a=call(op='attach',session=site);assert a['ok'],a
 first=a['gen'];b=B.get_bridge(site,store=store);life=b.sup.life
 assert life.local==a_path.parent
 raw_host=life.current.read_bytes();actual=json.loads(raw_host)
-assert first==H.Lifecycle.process_key(actual['host'])
+assert first==H.Lifecycle.process_key(actual)
 assert 'instance' not in actual and 'startupAcceptance' not in actual
 assert 'child' not in actual and 'childWait' not in actual
-assert set(actual)=={'host'}
+assert set(actual)=={'pid','start','boot','uid','pgid','sid','ppid','state'}
 assert a_path.read_bytes()==config_bytes
 assert life.load()['startupAcceptance']['success'] is True
 assert not list(pathlib.Path(os.environ['W_SESSION_RUNTIME']).rglob('*'))
@@ -162,7 +162,7 @@ class DefaultFactory(unittest.TestCase):
             known = []
             for record in (ws/'run/sessiond').glob('*/host.json'):
                 d = json.loads(record.read_text())
-                known.extend(d[k] for k in ('host', 'child') if d.get(k))
+                known.append(d)
             for i in known:
                 now = tools.identity(i['pid'])
                 if now and all(now[k] == i[k] for k in ('pid', 'start', 'boot', 'uid', 'pgid', 'sid')) and now['state'] not in ('Z', 'X'):

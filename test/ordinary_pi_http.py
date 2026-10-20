@@ -128,11 +128,11 @@ def call(op, **kw):
 
 def remember():
     d = json.loads((folder/'host.json').read_text())
-    assert set(d) == {'host'}
+    assert set(d) == {'pid', 'start', 'boot', 'uid', 'pgid', 'sid', 'ppid', 'state'}
     assert 'child' not in d
     declaration = json.loads((folder/(name+'.agent')).read_text())
     assert 'runtime' not in declaration and 'h2Registration' not in declaration
-    known.extend(H.group_members(d['host']))  # harness observations only
+    known.extend(H.group_members(d))  # harness observations only
     return d
 
 
@@ -142,7 +142,7 @@ try:
     attached = call('attach'); assert attached['ok'], attached
     first = attached['gen']; original = remember()
     assert set(p.name for p in folder.iterdir()) <= {name+'.agent', name+'.jsonl', 'host.json', 'host.log', 's'}
-    assert first == H.Lifecycle.process_key(original['host'])
+    assert first == H.Lifecycle.process_key(original)
     state = call('chat_state'); assert state['ok'] and state['state']=='ready', state
     assert call('cmd', cmd=json.dumps(dict(type='prompt', id='fixture-prompt', message='minimal first message')))['ok']
     wait(lambda: len(CAPTURE)==1 and call('chat_state').get('state')=='success')
@@ -151,9 +151,9 @@ try:
     before = history.read_bytes()
     # Kill ONLY the fixture Web. P/pi must keep their identities and history.
     servers[-1].terminate(); servers[-1].wait(timeout=10)
-    assert H.same(H.identity(original['host']['pid']), original['host'])
+    assert H.same(H.identity(original['pid']), original)
     if sys.platform.startswith('linux'):
-        def reap(): orphan_waits.append(os.waitpid(original['host']['pid'], 0))
+        def reap(): orphan_waits.append(os.waitpid(original['pid'], 0))
         threading.Thread(target=reap, daemon=True).start()
     start_web()
     reattached = call('attach'); assert reattached['ok'] and reattached['gen']==first, reattached

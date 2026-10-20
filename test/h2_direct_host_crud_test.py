@@ -103,9 +103,8 @@ class Fixture:
     def remember(self):
         for p in (self.ws/'run/sessiond').glob('*/host.json'):
             d=json.loads(p.read_text())
-            self.known.extend(i for i in d.get('known',[]) if i)
-            self.known.extend(d[k] for k in ('host','child') if d.get(k))
-            self.known.extend(H.group_members(d['host']))
+            self.known.append(d)
+            self.known.extend(H.group_members(d))
         for p in (self.ws/'run/sessiond').glob('*/descendant.json'):
             i=H.identity(json.loads(p.read_text())['pid'])
             if i:self.known.append(i)
@@ -165,7 +164,7 @@ class CRUD(unittest.TestCase):
         auto=c1.request(op='list_sessions')['body']['sessions'][0]
         self.assertEqual((auto['title'],auto['titleSource']),('Auto first title','auto'))
         c1.close(kill=True)
-        self.assertTrue(H.live(H.identity(d['host']['pid'])))
+        self.assertTrue(H.live(H.identity(d['pid'])))
         c2=Client(self.f);a2=self.attach(c2,doc);self.assertEqual(a2['gen'],a['gen'])
         self.assertEqual(c2.request(special='identity',session=doc['agent_site'])['handles'],[])
         self.assertEqual(self.rpc(c2,doc,'identity')['data'],before)
@@ -174,7 +173,7 @@ class CRUD(unittest.TestCase):
         self.assertEqual((history.parent/'effects').read_text(),'once-only\n')
         self.rpc(c2,doc,'descendant');self.f.remember()
         child=H.identity(json.loads((history.parent/'descendant.json').read_text())['pid'])
-        stopped=H.group_members(d['host'])
+        stopped=H.group_members(d)
         deleted=self.delete(c2,doc,a['gen']);self.assertTrue(deleted['ok'],deleted)
         self.assertFalse(self.f.current(name).exists())
         self.assertFalse(any(H.live(H.identity(i['pid'])) for i in stopped))
@@ -192,7 +191,7 @@ class CRUD(unittest.TestCase):
         reload=c1.request(op='reload',session=doc['agent_site'],expected_instance=a['gen'])['body']
         self.assertTrue(reload['ok'],reload);self.f.remember()
         old=self.delete(c2,doc,a['gen']);self.assertFalse(old['ok'])
-        self.assertEqual(H.Lifecycle.process_key(json.loads(self.f.current(doc['name']).read_text())['host']),reload['gen'])
+        self.assertEqual(H.Lifecycle.process_key(json.loads(self.f.current(doc['name']).read_text())),reload['gen'])
         # Ordered deletion and late access, not cross-Web linearizability.
         deleted=self.delete(c1,doc,reload['gen'])
         attached=c2.request(op='attach',session=doc['agent_site'])['body']
@@ -229,7 +228,7 @@ class CRUD(unittest.TestCase):
         denial=c.request(special='inject_identity_denial',op='delete_session',session=doc['agent_site'],confirm=1,
                          expected_instance=a['gen'])['body']
         self.assertFalse(denial['ok']);self.assertIn('injected identity denial',denial['error'])
-        path=self.f.current(doc['name']);d=json.loads(path.read_text());bad=json.loads(json.dumps(d));bad['host']['start']='0';H.atomic(path,bad)
+        path=self.f.current(doc['name']);d=json.loads(path.read_text());bad=json.loads(json.dumps(d));bad['start']='0';H.atomic(path,bad)
         stale=self.delete(c,doc,a['gen']);self.assertFalse(stale['ok'])
         self.assertEqual(c.request(op='list_sessions')['body']['sessions'][0]['state'],'unknown')
         self.assertEqual((agent.read_bytes(),history.read_bytes()),before)
@@ -277,8 +276,8 @@ class CRUD(unittest.TestCase):
         c=Client(self.f);doc=self.create(c);a=self.attach(c,doc)
         self.rpc(c,doc,'hold_eof');self.rpc(c,doc,'descendant');self.f.remember()
         path=self.f.current(doc['name']);d=json.loads(path.read_text())
-        H.signal_identity(d['host'],signal.SIGKILL)
-        wait(lambda:not H.live(H.identity(d['host']['pid'])))
+        H.signal_identity(d,signal.SIGKILL)
+        wait(lambda:not H.live(H.identity(d['pid'])))
         agent=self.f.ws/doc['agent_site'].lstrip('/');before=(agent.read_bytes(),agent.with_suffix('.jsonl').read_bytes())
         result=self.delete(c,doc,a['gen']);self.assertFalse(result['ok']);self.assertIn('leader lost',result['error'])
         self.assertEqual(agent.with_suffix('.jsonl').read_bytes(),before[1])

@@ -74,10 +74,8 @@ for line in sys.stdin:
                 # still authorize only these exact harness-owned identities.
                 current = client.life.read_host()
                 if current:
-                    for key in ('child', 'host'):
-                        item = current.get(key)
-                        if item and L.same(L.identity(item['pid']), item) and L.live(L.identity(item['pid'])):
-                            L.signal_identity(item, signal.SIGKILL)
+                    if L.same(L.identity(current['pid']), current) and L.live(L.identity(current['pid'])):
+                        L.signal_identity(current, signal.SIGKILL)
             client.shutdown()
             for handle in client.life.handles.values():
                 handle.wait(timeout=3)
@@ -192,7 +190,7 @@ for line in sys.stdin:
         self.assertFalse(detached['killed'])
         self.assertEqual(channel.sup.life.status()['state'], 'unknown')
         actual = channel.sup.life.read_host()
-        self.assertTrue(L.same(L.identity(actual['host']['pid']), actual['host']))
+        self.assertTrue(L.same(L.identity(actual['pid']), actual))
 
     def test_external_session_dir_and_declaration_alias_share_host(self):
         store = RootStore([('/', DirStore(str(self.root)))])

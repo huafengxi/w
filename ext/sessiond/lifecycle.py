@@ -219,14 +219,15 @@ class Lifecycle:
         if not self.current.exists():
             return None
         d = json.loads(self.current.read_text())
-        if not isinstance(d, dict) or not isinstance(d.get('host'), dict):
+        if not isinstance(d, dict) or not {'pid', 'start', 'boot', 'uid', 'pgid', 'sid'} <= d.keys():
             raise RuntimeError('missing host identity')
         return d
 
     def load(self):
-        d = self.read_host()
-        if d is None:
+        host = self.read_host()
+        if host is None:
             return None
+        d = dict(host=host)
         d['instance'] = self.process_key(d['host'])
         d['socket'] = self.sock
         self.web_record()  # a removed declaration cannot revive a cached client
@@ -255,7 +256,7 @@ class Lifecycle:
         if d.get('host') is None:
             raise RuntimeError('incomplete process identity; unknown, no blind takeover')
         actual_record = self.read_host()
-        if not actual_record or not same(actual_record['host'], d['host']):
+        if not actual_record or not same(actual_record, d['host']):
             raise RuntimeError('host state changed during observation')
         h = identity(d['host']['pid'])
         if h and not same(h, d['host']):
@@ -298,7 +299,7 @@ class Lifecycle:
         with self.lock():
             try:
                 actual = self.read_host()
-                if not actual or not same(actual['host'], host):
+                if not actual or not same(actual, host):
                     return  # a later P owns the state; no old callback write
                 current = self.load()
                 if current and same(current['host'], host):
@@ -413,7 +414,7 @@ class Lifecycle:
                 raise TimeoutError('host socket unavailable')
             d['startupAcceptance'] = self._accept_start(d)
             # Actual accepted P, never a pre-launch intent or a P-written mirror.
-            atomic(self.current, dict(host=d['host']))
+            atomic(self.current, d['host'])
             d['phase'] = 'running'
             self.save(d)
         except Exception as e:
