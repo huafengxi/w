@@ -11,7 +11,7 @@ Registry passes explicit factories to Bridge. Independent P owns every pi PIPE.
 run/sessiond/<name>/
   <name>.agent      Web-owned configuration, registration and actual control results
   <name>.jsonl      pi-owned history (may not exist until first assistant output)
-  host.json         Web-owned binding and accepted native P identity
+  host.json         Web-owned accepted native P identity
   s                 fixed Unix socket
   host.log          optional shared P/pi diagnostics, not lifecycle authority
 ```
@@ -38,7 +38,7 @@ separate, preventing stale clients from targeting a different session object.
 
 W explicitly spawns P, gives input JSON once on stdin, then verifies the actual
 P's kernel socket peer and one uniquely paired successful `get_state`, then
-publishes binding and P identity in host.json. Default
+publishes only P identity in host.json. Default
 acceptance timeout is 25 seconds for extension initialization. There is no model
 prompt, command replay or probe-reconnect loop.
 
@@ -52,8 +52,8 @@ state machine. Socket checks still reject occupied/unknown endpoints, but do
 not promise cross-Web simultaneous-start uniqueness.
 
 Web exit/browser close only detaches. A new Web can reconnect to an identified
-live P. Socket EOF is not pi exit. Native P identity, current peer/uid and session
-binding are checked on reconnect; unreadable/reused identities remain unknown.
+live P. Socket EOF is not pi exit. Native P identity, current peer/uid and declaration
+registration are checked on reconnect; unreadable/reused identities remain unknown.
 Confirmed normal dormancy requires Web's true non-signal P wait and closed
 known/group identities. Losing the spawning Web
 can lose its future wait authority: a later Web must not invent a host exit code.
@@ -92,7 +92,7 @@ A hand-written declaration outside the managed temporary family still resolves
 its history canonically. Such histories use the caller's short private
 `W_SESSION_RUNTIME/<canonical-history-hash>/` for P state/socket/log, so aliases
 share one host rather than allocating per-declaration endpoints. They do not
-acquire the managed CRUD surface. Native binding checks remain mandatory.
+acquire the managed CRUD surface. Native P identity and kernel peer checks remain mandatory.
 
 Legacy flat temporary declarations are listed read-only, unknown, and rejected
 by managed attach/CRUD until explicit offline migration. Old live P processes
@@ -105,7 +105,7 @@ explicit offline adoption can call the lifecycle start after proving closure.
 Required caller inputs remain `W_SESSION_HOST_ENTRY`, `W_SESSION_RUNTIME`,
 workspace/agent tool directory, host map and pi configuration. Canonical private
 directories and short AF_UNIX paths are checked; aliases are resolved before
-binding. Ordinary operations use only process-local thread locks. Task/bot RPC
+choosing the endpoint. Ordinary operations use only process-local thread locks. Task/bot RPC
 routing and lifecycle remain with agentd, not this ordinary path.
 
 ## Regression entry points

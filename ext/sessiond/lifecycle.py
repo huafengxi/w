@@ -160,7 +160,7 @@ def private_dir(path):
 
 
 class Lifecycle:
-    """Finite operations: P owns host.json, Web owns .agent/runtime.
+    """Finite operations: Web owns host.json and .agent/runtime.
 
     No pre-spawn marker, random generation, per-run directory or command spool.
     Missing launch evidence has the explicitly accepted crash-window ambiguity.
@@ -196,7 +196,6 @@ class Lifecycle:
         if not P._within_roots(str(self.declaration)):
             raise ValueError('control declaration escapes workspace')
         self.handles = {}
-        self.binding = dict(session=self.session, name=name, cwd=self.cwd)
 
     @staticmethod
     def process_key(host):
@@ -218,9 +217,7 @@ class Lifecycle:
         if not self.current.exists():
             return None
         d = json.loads(self.current.read_text())
-        if not isinstance(d, dict) or d.get('binding') != self.binding:
-            raise RuntimeError('host state binding mismatch')
-        if not isinstance(d.get('host'), dict):
+        if not isinstance(d, dict) or not isinstance(d.get('host'), dict):
             raise RuntimeError('missing host identity')
         return d
 
@@ -390,7 +387,7 @@ class Lifecycle:
             handle = subprocess.Popen([sys.executable, '-B', self.host_entry, '-'],
                                       cwd=self.cwd, env=dict(self.env), stdin=subprocess.PIPE,
                                       stdout=log, stderr=log, start_new_session=True, close_fds=True)
-        d = dict(binding=self.binding, socket=self.sock, host=None,
+        d = dict(socket=self.sock, host=None,
                  phase='unverified', fence=None)
         try:
             d['host'] = identity(handle.pid)
@@ -417,7 +414,7 @@ class Lifecycle:
                 raise TimeoutError('host socket unavailable')
             d['startupAcceptance'] = self._accept_start(d)
             # Actual accepted P, never a pre-launch intent or a P-written mirror.
-            atomic(self.current, dict(binding=self.binding, host=d['host']))
+            atomic(self.current, dict(host=d['host']))
             d['phase'] = 'running'
             self.save(d)
         except Exception as e:

@@ -64,7 +64,7 @@ raw_host=life.current.read_bytes();actual=json.loads(raw_host)
 assert first==H.Lifecycle.process_key(actual['host'])
 assert 'instance' not in actual and 'startupAcceptance' not in actual
 assert 'child' not in actual and 'childWait' not in actual
-assert set(actual)=={'binding','host'}
+assert set(actual)=={'host'}
 assert 'known' not in json.loads(a_path.read_text())['runtime']
 assert life.load()['startupAcceptance']['success'] is True
 assert not list(pathlib.Path(os.environ['W_SESSION_RUNTIME']).rglob('*'))

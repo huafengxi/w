@@ -128,6 +128,7 @@ def call(op, **kw):
 
 def remember():
     d = json.loads((folder/'host.json').read_text())
+    assert set(d) == {'host'}
     assert 'child' not in d
     assert 'known' not in json.loads((folder/(name+'.agent')).read_text())['runtime']
     known.extend(H.group_members(d['host']))  # harness observations only
