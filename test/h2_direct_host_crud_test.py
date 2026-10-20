@@ -136,7 +136,7 @@ class CRUD(unittest.TestCase):
         a=c.request(op='attach',session=doc['agent_site'])['body'];self.assertTrue(a['ok'],a);self.f.remember();return a
     def delete(self,c,doc,token,**kw):
         return c.request(op='delete_session',session=doc['agent_site'],confirm=1,
-                         expected_instance=token,expected_registration=doc['registration'],**kw)['body']
+                         expected_instance=token,**kw)['body']
     def rpc(self,c,doc,t,**kw):return c.request(special='rpc',session=doc['agent_site'],command=dict(type=t,**kw))
 
     def test_A_cli_create_web_death_same_instance_and_delete(self):
@@ -146,7 +146,7 @@ class CRUD(unittest.TestCase):
         rows=c1.request(op='list_sessions')['body']['sessions'];self.assertEqual(len(rows),1)
         row=rows[0];self.assertEqual(row['state'],'dormant')
         name=row['name'];decl=self.f.ws/'run/sessiond'/name/(name+'.agent')
-        doc=dict(agent_site=row['agent'],name=name,registration=json.loads(decl.read_text())['h2Registration'])
+        doc=dict(agent_site=row['agent'],name=name)
         inbox=self.f.ws/'agents/bot'/name/'inbox';(inbox/'keep').write_text('preexisting inbox payload')
         a=self.attach(c1,doc)
         self.rpc(c1,doc,'effect',value='once-only',text='  Auto first title\nsecond line')
@@ -217,7 +217,8 @@ class CRUD(unittest.TestCase):
         self.assertEqual(history.read_bytes(),before[1])
         self.assertEqual({k:v for k,v in json.loads(agent.read_bytes()).items() if k!='runtime'},
                          {k:v for k,v in json.loads(before[0]).items() if k!='runtime'})
-        self.assertEqual(json.loads(agent.read_text())['runtime']['fence'],'delete')
+        self.assertNotIn('runtime',json.loads(agent.read_text()))
+        self.assertEqual(c.request(special='control',session=doc['agent_site'])['fence'],'delete')
         self.assertFalse(self.delete(c,doc,a['gen'])['ok'])
         self.assertEqual(c.request(op='list_sessions')['body']['sessions'][0]['state'],'failed')
         self.assertFalse(c.request(op='attach',session=doc['agent_site'])['body']['ok'])
@@ -226,7 +227,7 @@ class CRUD(unittest.TestCase):
         c=Client(self.f);doc=self.create(c);a=self.attach(c,doc)
         agent=self.f.ws/doc['agent_site'].lstrip('/');history=agent.with_suffix('.jsonl');before=(agent.read_bytes(),history.read_bytes())
         denial=c.request(special='inject_identity_denial',op='delete_session',session=doc['agent_site'],confirm=1,
-                         expected_instance=a['gen'],expected_registration=doc['registration'])['body']
+                         expected_instance=a['gen'])['body']
         self.assertFalse(denial['ok']);self.assertIn('injected identity denial',denial['error'])
         path=self.f.current(doc['name']);d=json.loads(path.read_text());bad=json.loads(json.dumps(d));bad['host']['start']='0';H.atomic(path,bad)
         stale=self.delete(c,doc,a['gen']);self.assertFalse(stale['ok'])
@@ -236,11 +237,11 @@ class CRUD(unittest.TestCase):
         self.assertEqual(c.request(op='list_sessions')['body']['sessions'][0]['state'],'unknown')
         self.assertFalse(self.delete(c,doc,a['gen'])['ok'])
         self.assertEqual((agent.read_bytes(),history.read_bytes()),before);H.atomic(path,d)
-        wrongReg=c.request(op='delete_session',session=doc['agent_site'],confirm=1,
-                           expected_instance=a['gen'],expected_registration='0'*32)['body']
-        self.assertFalse(wrongReg['ok']);self.assertIn('registration fence mismatch',wrongReg['error'])
+        wrong=c.request(op='delete_session',session=doc['agent_site'],confirm=1,
+                        expected_instance='stale-process')['body']
+        self.assertFalse(wrong['ok']);self.assertIn('process identity',wrong['error'])
         self.assertFalse(c.request(op='delete_session',session='/escape.agent',confirm=1)['body']['ok'])
-        self.assertFalse(c.request(op='delete_session',session=doc['agent_site'],expected_instance=a['gen'],expected_registration=doc['registration'])['body']['ok'])
+        self.assertFalse(c.request(op='delete_session',session=doc['agent_site'],expected_instance=a['gen'])['body']['ok'])
         outside=self.f.root/'keep';outside.write_text('outside harmless bait')
         (history.parent/'alias.agent').symlink_to(outside)
         self.assertFalse(c.request(op='delete_session',session='/run/sessiond/alias.agent',confirm=1)['body']['ok'])
@@ -296,8 +297,7 @@ class CRUD(unittest.TestCase):
             # A real native wait produces the state, not an injected status field.
             self.rpc(c,doc,'exit',code=code)
             def settled():
-                declaration=self.f.current(name).parent/(name+'.agent')
-                d=json.loads(declaration.read_text()).get('runtime',{})
+                d=c.request(special='control',session=doc['agent_site'])
                 return d if d.get('hostWait') else None
             d=wait(settled)
             row=next(x for x in c.request(op='list_sessions')['body']['sessions'] if x['name']==name)

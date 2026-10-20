@@ -28,6 +28,7 @@ _EXPECTED = ContextVar('sessiond_instance', default=None)
 _LIBC = ctypes.CDLL(None, use_errno=True)
 _PROCESS_TOOLS = None
 _SESSION_MUTEXES = {}  # process-local thread serialization, not file locks
+_SESSION_CONTROLS = {}  # process-local operation state; declarations contain only configuration
 
 
 def configure_process_tools(host_entry):
@@ -160,7 +161,7 @@ def private_dir(path):
 
 
 class Lifecycle:
-    """Finite operations: Web owns host.json and .agent/runtime.
+    """Finite operations: Web owns host.json; controls live in Web memory.
 
     No pre-spawn marker, random generation, per-run directory or command spool.
     Missing launch evidence has the explicitly accepted crash-window ambiguity.
@@ -188,6 +189,7 @@ class Lifecycle:
             # never by the spelling or parent of an alias .agent.
             self.local = private_dir(private_dir(runtime) / hashlib.sha256(os.fsencode(self.session)).hexdigest()[:16])
         self._mutex = _SESSION_MUTEXES.setdefault(str(self.local), threading.RLock())
+        self.control = _SESSION_CONTROLS.setdefault(str(self.local), {})
         self.sock = str(self.local / 's')
         if len(os.fsencode(self.sock)) > 100:
             raise ValueError('socket path too long; supply a short private session/runtime root')
@@ -227,28 +229,25 @@ class Lifecycle:
             return None
         d['instance'] = self.process_key(d['host'])
         d['socket'] = self.sock
-        d['phase'], d['fence'] = 'unverified', None
-        control = self.web_record().get('runtime', {})
-        if not isinstance(control, dict):
-            raise ValueError('invalid Web control record')
-        if control.get('host'):
-            if not same(control['host'], d['host']):
-                raise RuntimeError('Web control/actual host identity mismatch')
-            d.update(control)
+        self.web_record()  # a removed declaration cannot revive a cached client
+        d['phase'], d['fence'] = 'running', None
+        # Another Web may have accepted a replacement P; old local operation
+        # state belongs only to the previous native identity.
+        if self.control.get('host') and same(self.control['host'], d['host']):
+            d.update(self.control)
         d['known'] = [d['host']]  # derive transient stop observations, never trust a disk snapshot
         return d
 
     def save(self, d):
-        # Web writes control results; P never writes either JSON file.
-        doc = self.web_record()
+        # Operation results are scoped to this Web process and actual P identity.
         control = {k: d[k] for k in ('host', 'phase', 'fence',
                    'startupAcceptance', 'hostWait', 'startupCleanup') if k in d}
-        old = doc.get('runtime', {})
+        old = self.control
         if (d.get('host') and old.get('host') and same(old['host'], d['host'])
                 and 'hostWait' not in control and 'hostWait' in old):
             control['hostWait'] = old['hostWait']
-        doc['runtime'] = control
-        atomic(self.declaration, doc)
+        self.control.clear()
+        self.control.update(control)
 
     def observe(self, d):
         if d is None:
@@ -428,7 +427,7 @@ class Lifecycle:
         with self.lock():
             d = self.load()
             if d is None:
-                if self.web_record().get('runtime'):
+                if self.control:
                     raise RuntimeError('missing actual host record; unknown, explicit recovery required')
                 return self._start()
             obs = self.observe(d)

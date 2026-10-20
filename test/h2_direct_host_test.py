@@ -418,10 +418,11 @@ class Acceptance(unittest.TestCase):
         d = self.start()
         stale = json.loads(json.dumps(d))
         stale['host']['start'] = '0'
-        self.f.life.save(stale)
+        atomic(self.f.life.current, dict(host=stale['host']))
         with self.assertRaises(RuntimeError):
             self.f.life.operate('clear', d['instance'])
         self.assertTrue(live(identity(d['host']['pid'])))
+        atomic(self.f.life.current, dict(host=d['host']))
         self.f.life.save(d)
         with patch('h2_direct_host.identity', side_effect=PermissionError('injected proc denial')):
             self.assertEqual(self.f.life.status()['state'], 'unknown')
@@ -456,7 +457,7 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(obs['state'], 'stopped')
         self.assertNotIn('childWait', obs)
         self.assertEqual(len(self.f.life.load()['known']), 1)
-        self.assertNotIn('known', json.loads(self.f.life.declaration.read_text())['runtime'])
+        self.assertNotIn('runtime', json.loads(self.f.life.declaration.read_text()))
         record(cooperativeStop=obs, known=self.f.life.load()['known'])
 
     def test_D_running_reload_clear_late_duplicate_and_failure(self):

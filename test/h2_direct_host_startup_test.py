@@ -58,7 +58,7 @@ class StartupAcceptance(unittest.TestCase):
             with patch.object(self.life, '_accept_start', side_effect=replace_endpoint):
                 with self.assertRaisesRegex(RuntimeError, 'not the launched host'):
                     self.life.ensure()
-            d = self.life.web_record()['runtime']
+            d = dict(self.life.control)
             self.assertFalse(self.life.current.exists())
             self.f.remember()
             self.assertEqual(d['phase'], 'startup_failed')
@@ -87,7 +87,7 @@ class StartupAcceptance(unittest.TestCase):
         with patch.object(self.life, '_accept_start', side_effect=bounded):
             with self.assertRaises(RuntimeError):
                 self.life.ensure()
-        d = self.life.web_record()['runtime']
+        d = dict(self.life.control)
         self.assertFalse(self.life.current.exists())
         self.f.remember()
         self.assertEqual(d['phase'], 'startup_failed')

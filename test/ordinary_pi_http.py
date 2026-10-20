@@ -130,7 +130,8 @@ def remember():
     d = json.loads((folder/'host.json').read_text())
     assert set(d) == {'host'}
     assert 'child' not in d
-    assert 'known' not in json.loads((folder/(name+'.agent')).read_text())['runtime']
+    declaration = json.loads((folder/(name+'.agent')).read_text())
+    assert 'runtime' not in declaration and 'h2Registration' not in declaration
     known.extend(H.group_members(d['host']))  # harness observations only
     return d
 

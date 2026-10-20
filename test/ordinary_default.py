@@ -44,9 +44,8 @@ def audit(event,args):
  if event!='subprocess.Popen' or os.environ['W_SESSION_HOST_ENTRY'] not in args[1]:return
  assert args[1][-1]=='-','configuration must be one-shot stdin, not a file'
  for path in pathlib.Path(P.sessions_dir()).glob('*/*.agent'):
-  doc=json.loads(path.read_text());control=doc.get('runtime',{})
-  assert control.get('phase') not in ('starting','launching','verifying','unverified'),doc
-  assert 'instance' not in control and 'launchAttempt' not in doc
+  doc=json.loads(path.read_text())
+  assert 'runtime' not in doc and 'h2Registration' not in doc,doc
   assert not any(p.is_dir() for p in path.parent.iterdir()),'no per-instance directory'
  spawn_audits.append(list(args[1]))
  if fail_next[0]:
@@ -57,6 +56,8 @@ a_path=pathlib.Path(created['agent_path']);history=pathlib.Path(created['session
 assert a_path.parent==pathlib.Path(P.sessions_dir())/name
 assert set(p.name for p in a_path.parent.iterdir())=={name+'.agent'}
 assert 'runtime' not in json.loads(a_path.read_text())
+assert 'h2Registration' not in json.loads(a_path.read_text())
+config_bytes=a_path.read_bytes()
 a=call(op='attach',session=site);assert a['ok'],a
 first=a['gen'];b=B.get_bridge(site,store=store);life=b.sup.life
 assert life.local==a_path.parent
@@ -65,7 +66,7 @@ assert first==H.Lifecycle.process_key(actual['host'])
 assert 'instance' not in actual and 'startupAcceptance' not in actual
 assert 'child' not in actual and 'childWait' not in actual
 assert set(actual)=={'host'}
-assert 'known' not in json.loads(a_path.read_text())['runtime']
+assert a_path.read_bytes()==config_bytes
 assert life.load()['startupAcceptance']['success'] is True
 assert not list(pathlib.Path(os.environ['W_SESSION_RUNTIME']).rglob('*'))
 for forbidden in ('binding.json','current.json','declaration.json','record.json','s.pid','s.stderr.log','facts.jsonl'):
@@ -78,8 +79,6 @@ assert actual_env['SESSIOND_SESSION_FILE']==str(history)
 # Web owns the identity record; unchanged identity need not rewrite it.
 d=life.load();life.save(d);assert life.current.read_bytes()==raw_host
 old_handle=life.handles[first];old_host=d['host']
-bad=call(op='reload',session=site,expected_instance=first,expected_registration='0'*32)
-assert not bad['ok'] and 'registration fence' in bad['error'],bad
 r=call(op='reload',session=site,expected_instance=first);assert r['ok'],r
 assert r['gen']!=first
 before_callback=a_path.read_bytes()
@@ -98,6 +97,7 @@ try:
 finally:parked.rename(life.current)
 # Native pi can have a live RPC process before any JSONL has been persisted.
 history.unlink()
+assert a_path.read_bytes()==config_bytes,'lifecycle operations must not write declarations'
 r=call(op='delete_session',session=site,confirm='1',expected_instance=r['gen'])
 assert r['ok'] and r['process']['settled'],r
 assert not a_path.exists() and not life.current.exists()

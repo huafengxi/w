@@ -61,11 +61,14 @@ with C.installed(options) as registry:
                     result = b.request(req['command'], timeout=5)
                 elif special == 'identity':
                     result = dict(status=b.sup.status_doc(), handles=list(b.sup.life.handles),
-                                  registration=b.sup.registration, web=os.getpid(),
+                                  web=os.getpid(),
                                   imports=dict(proc=P.__file__, bridge=B.__file__))
                 else:
                     it = b.iter_events(0)
                     result = dict(events=list(it) if req.get('drain') else [next(it)], terminated=b.terminated)
+            elif special == 'control':
+                key = str(Path(P.WS) / session.lstrip('/').replace('.agent', '.jsonl'))
+                result = dict(B._BRIDGES[key].sup.life.control)
             elif special == 'stream_open':
                 meta, it = stream.interp(store, session=session)
                 first = next(it)

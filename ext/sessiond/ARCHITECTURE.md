@@ -23,7 +23,7 @@ HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接�
 - clear：同样确认停止后截断历史，再启动；截断或停止失败不启动替代实例。
 - delete：核验注册/进程身份与文件身份，确认停止后删除声明、历史和已知宿主文件；保留 inbox，不递归删除无关文件或新 owner 的端点。
 
-普通临时会话一会话一目录：`.agent`（Web 配置/控制）、`.jsonl`（pi 历史）、`host.json`（仅含 Web 核验后的 P 身份）、socket `s` 和诊断 `host.log`。Web 单独写两份 JSON；P 只维护 socket 与日志。无按代归档、启动参数快照或独立 pidfile。Popen 前不写启动意图；极端启动中断可能留下需人工处理的现场。详情见 [ORDINARY.md](ORDINARY.md)。
+普通临时会话一会话一目录：`.agent`（声明配置与标题）、`.jsonl`（pi 历史）、`host.json`（仅含 Web 核验后的 P 身份）、socket `s` 和诊断 `host.log`。Web 单独写两份 JSON；控制状态仅在 Web 内存中，P 只维护 socket 与日志。无按代归档、启动参数快照或独立 pidfile。Popen 前不写启动意图；极端启动中断可能留下需人工处理的现场。详情见 [ORDINARY.md](ORDINARY.md)。
 
 普通会话只用进程内线程锁，不承诺多 Web 进程原子仲裁或同时启动唯一性。
 环境清洗由调用方的 agentd/envscrub 提供；profile 与 pi 扩展在清洗后显式注入。
@@ -160,7 +160,7 @@ select/confirm/input/editor 请求按 id 保留，基线重建尚未结算的问
 
 列表从声明文件读取标题、profile、cwd 与历史活动时间；运行态由本机独立 P 的实例事实核验取得，不扫描进程名或 environ 推断宿主。标题顺序为 override、首条用户消息、文件名。
 
-删除与声明解析共用进程内注册表锁；不把它描述成跨 Web 进程原子事务。rename 只改声明标题并保留控制记录。文件路径与 profile 校验归 sessions，注册完成、真实进程身份检查和停止后删除协调归 registry/lifecycle。旧平铺临时会话只读展示为 unknown，须显式离线迁移，不在请求中自动接管。
+删除与声明解析共用进程内注册表锁；不把它描述成跨 Web 进程原子事务。rename 只改声明标题。文件路径与 profile 校验归 sessions，声明与 inbox 完整性、真实进程身份检查和停止后删除协调归 registry/lifecycle。删除后保留的 inbox 使名称不复用。旧平铺临时会话只读展示为 unknown，须显式离线迁移，不在请求中自动接管。
 
 ### 12.3 动态 tab
 
@@ -175,7 +175,7 @@ frame 容器校验同源与已挂载子 iframe 身份后，重新获取完整列
 | bootstrap.py | HTTP/CLI 共用配置，显式创建 Registry 和客户端工厂 |
 | sessions.py | 路径、profile/cwd、声明/历史文件操作、标题派生 |
 | declaration.py | 每请求解析 .agent，返回绑定参数 |
-| registry.py | 普通会话注册、CRUD、注册身份检查、客户端/Bridge 装配 |
+| registry.py | 普通会话声明/inbox 校验、CRUD、客户端/Bridge 装配 |
 | lifecycle.py | 独立 P 的启动验收、实例事实、身份核验、停止和换代 |
 | client.py | 普通 P socket 客户端；断开/销毁连接不表示杀进程 |
 | agent_client.py | agentd 声明路由、既有 socket 客户端、control 请求代理 |

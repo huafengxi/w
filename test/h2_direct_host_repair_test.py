@@ -61,7 +61,7 @@ class Repairs(unittest.TestCase):
         row2 = next(x for x in rows if x['name'] != name)
         self.assertEqual(row2['state'], 'dormant')
         valid = json.loads((agent.parent.parent/row2['name']/(row2['name']+'.agent')).read_text())
-        full = dict(name=row2['name'], agent_site=row2['agent'], registration=valid['h2Registration'])
+        full = dict(name=row2['name'], agent_site=row2['agent'])
         self.assertTrue((agents/'bot'/row2['name']/'inbox').is_dir())
         a = self.attach(c2, full)
         self.assertTrue(self.delete(c2, full, a['gen'])['ok'])

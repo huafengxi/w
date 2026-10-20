@@ -167,19 +167,15 @@ def _delete_session(session, kw):
 
 def interp(store, op='', session='', cmd='', **kw):
     # Explicit client fences, when supplied, survive until the operation gate.
-    # Legacy/manual URLs capture the current registration/instance server-side.
+    # Legacy/manual URLs capture the current native P identity server-side.
     tokens = []
-    for field in ('expected_instance', 'expected_registration'):
+    for field in ('expected_instance',):
         if field in kw and (not isinstance(kw[field], str) or not kw[field].strip()):
             return _j(dict(ok=False, error=field + ' must be a nonempty string'), '400 Bad Request')
     try:
         if 'expected_instance' in kw:
             from ext.sessiond.lifecycle import _EXPECTED
             tokens.append((_EXPECTED, _EXPECTED.set(kw['expected_instance'])))
-        if 'expected_registration' in kw:
-            from ext.sessiond.registry import _EXPECTED_REGISTRATION
-            tokens.append((_EXPECTED_REGISTRATION,
-                           _EXPECTED_REGISTRATION.set(kw['expected_registration'])))
         return _interp(store, op=op, session=session, cmd=cmd, **kw)
     finally:
         for variable, token in reversed(tokens):

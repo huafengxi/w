@@ -9,7 +9,7 @@ Registry passes explicit factories to Bridge. Independent P owns every pi PIPE.
 
 ```text
 run/sessiond/<name>/
-  <name>.agent      Web-owned configuration, registration and actual control results
+  <name>.agent      Web-owned declarative configuration and presentation
   <name>.jsonl      pi-owned history (may not exist until first assistant output)
   host.json         Web-owned accepted native P identity
   s                 fixed Unix socket
@@ -22,17 +22,18 @@ The session remains temporary: it is not backed up/synchronized as persistent
 user data. Inbox identity stays at the caller's existing participant address;
 ordinary registration does not create an agentd spec/pid/enable/watcher.
 
-Web is the sole writer of `.agent` (including its `runtime` control section)
-and `host.json`. P only reads the latter when checking a previous socket owner;
-it creates the socket and writes diagnostics. Web control records reference actual P
-identity and hold acceptance, explicit operation fences and actual Web wait
-results. Pi identity and known stop descendants are kept in memory only;
+Web writes `.agent` for creation and title changes, and `host.json` after
+accepting P. Lifecycle operations never rewrite the declaration. P only reads
+host.json when checking a previous socket owner; it creates the socket and writes
+diagnostics. Web control state references actual P identity and holds acceptance,
+explicit operation fences and actual Web wait results in process memory only.
+Pi identity and known stop descendants are also kept in memory only;
 tool ancestry is sampled from the kernel when needed. P waits for pi in memory
 and exits with the corresponding code. Child waits and error details are not
 persistent JSON fields; diagnostics stay in host.log and request errors.
 The HTTP `gen`/`expected_instance` slots serialize native P boot/PID/start identity,
-not an extra generated token or a runtime generation. Registration UUID remains
-separate, preventing stale clients from targeting a different session object.
+not an extra generated token or a runtime generation. Names remain reserved by
+their retained inboxes after deletion, and cached clients revalidate declarations.
 
 ## Start and crash boundary
 
@@ -52,11 +53,13 @@ state machine. Socket checks still reject occupied/unknown endpoints, but do
 not promise cross-Web simultaneous-start uniqueness.
 
 Web exit/browser close only detaches. A new Web can reconnect to an identified
-live P. Socket EOF is not pi exit. Native P identity, current peer/uid and declaration
-registration are checked on reconnect; unreadable/reused identities remain unknown.
+live P. Socket EOF is not pi exit. Native P identity, current peer/uid and the
+declaration are checked on reconnect; unreadable/reused identities remain unknown.
 Confirmed normal dormancy requires Web's true non-signal P wait and closed
 known/group identities. Losing the spawning Web
-can lose its future wait authority: a later Web must not invent a host exit code.
+loses in-memory operation fences and wait results: a later Web observes the live
+P afresh and must not invent a host exit code. A dead P without an observed wait
+remains unknown until explicit checked recovery.
 
 Pi belongs to P's lifetime. Linux arms SIGKILL on parent death before exec,
 checking the parent on both sides of prctl; this also covers uncatchable P exit.
@@ -68,21 +71,22 @@ Live tools are read-only observations after verified ancestry to current P
 with matching boot/uid/group/session. This does not persist adopted children or
 expand signal authority. Unknown members or leader loss with residuals remain
 unknown. Stop/reload/clear keep exact identity checks and confirmed tree closure.
-Failed destructive operations remain visibly fenced, not automatically retried.
+Failed destructive operations remain fenced in the current Web process and are
+not automatically retried.
 
 ## CRUD and file identity
 
-Create publishes registration completion only after inbox creation succeeds;
-partial registrations never launch. Rename changes only title and preserves Web
-control data. Reload preserves history; clear truncates only after closure.
-Stale process/registration expectations fail instead of mutating a replacement.
+Create succeeds after both declaration and inbox exist; an incomplete pair
+cannot launch. Rename changes only title. Reload preserves history; clear
+truncates only after closure. Stale native process expectations fail instead
+of mutating a replacement.
 
-Delete revalidates registration/config and history identity around confirmed
+Delete revalidates declaration/config and history identity around confirmed
 stop, removes the exact declaration/history and known host state/log files, and
 removes an empty session directory. It never recursively deletes unrelated
 files or inbox contents. A socket left by a terminated P can be removed only
 with the original inode and confirmed owner closure; replacement endpoints cause
-refusal. Cached clients/streams detect missing/changed registration, so no extra
+refusal. Cached clients/streams detect missing declarations, so no extra
 delete-tombstone file is needed. Failures can be partial and are surfaced, not
 rolled back or silently repaired.
 

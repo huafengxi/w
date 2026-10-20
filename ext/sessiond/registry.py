@@ -1,22 +1,17 @@
 """Ordinary session CRUD and explicit client assembly.
 
-Web owns host.json and control results in the session declaration. There
+Web owns host.json; declarations contain configuration and controls stay in memory. There
 are no per-generation archives, import markers or separate deletion tombstones.
 """
 from contextlib import contextmanager
-from contextvars import ContextVar
 import json
 import os
 from pathlib import Path
 import stat
 import threading
-import uuid
 from ext.sessiond import lifecycle as H
 from ext.sessiond.client import Client
 from ext.sessiond import sessions as P, bridge as B
-
-_EXPECTED_REGISTRATION = ContextVar('sessiond_registration', default=None)
-
 
 class Registry:
     def __init__(self, options):
@@ -51,9 +46,8 @@ class Registry:
             doc = json.loads(a.read_text())
         except OSError as e:
             raise ValueError('registration absent/unreadable; flat legacy sessions require offline migration') from e
-        if (not isinstance(doc, dict) or not isinstance(doc.get('h2Registration'), str)
-                or len(doc['h2Registration']) != 32):
-            raise ValueError('missing/incomplete session registration; unknown ownership')
+        if not isinstance(doc, dict):
+            raise ValueError('declaration must be an object')
         inbox = Path(P.WS) / 'agents/bot' / name / 'inbox'
         try:
             st = inbox.lstat()
@@ -103,15 +97,9 @@ class Registry:
             else:
                 raise ValueError('cannot allocate a free session name')
             name = result['name']
-            a, _ = self.files(name)
-            doc = json.loads(a.read_text())
             inbox = Path(P.WS) / 'agents/bot' / name / 'inbox'
             inbox.mkdir(mode=0o700, parents=True, exist_ok=False)
-            # Registration completion is not a launch marker. No host is started
-            # and no runtime field is added until actual process observations.
-            doc['h2Registration'] = uuid.uuid4().hex
-            H.atomic(a, doc)
-            return dict(result, registration=doc['h2Registration'])
+            return result
 
     def rows(self):
         with self.lock():
@@ -122,7 +110,7 @@ class Registry:
                     doc, _a, history = self.declaration(r['name'])
                     life = self.life(r['name'], doc, history)
                     if not life.current.exists():
-                        if not os.path.lexists(history) and not doc.get('runtime') and not os.path.lexists(life.sock):
+                        if not os.path.lexists(history) and not life.control and not os.path.lexists(life.sock):
                             r.update(state='dormant')
                         continue
                     obs = life.status()
@@ -155,11 +143,6 @@ class Registry:
         with self.lock():
             try:
                 doc, agent, history = self.declaration(name)
-                expected_reg = _EXPECTED_REGISTRATION.get()
-                if expected_reg is None:
-                    expected_reg = doc['h2Registration']
-                if expected_reg != doc['h2Registration']:
-                    raise ValueError('registration fence mismatch')
                 life = self.life(name, doc, history)
                 with life.lock():
                     d = life.load()
@@ -170,7 +153,7 @@ class Registry:
                     before_socket = None
                     if d is None:
                         if (expected != 'unstarted' or os.path.lexists(history)
-                                or doc.get('runtime') or os.path.lexists(life.sock)):
+                                or life.control or os.path.lexists(life.sock)):
                             raise ValueError('missing process facts; unknown ownership')
                     else:
                         if expected != d['instance'] or d.get('fence'):
@@ -178,21 +161,20 @@ class Registry:
                         life.observe(d)
                         before_history = self.file_identity(history)
                         before_socket = self.socket_identity(socket_path)
-                        before_config = {k: v for k, v in doc.items() if k != 'runtime'}
+                        before_config = doc
                         d.update(fence='delete', phase='fenced')
                         life.save(d)
                         life._stop(d)
                         if not life.observe(d)['settled']:
                             raise RuntimeError('stop not confirmed')
                         after = life.web_record()
-                        if ({k: v for k, v in after.items() if k != 'runtime'} != before_config
+                        if (after != before_config
                                 or self.file_identity(history) != before_history):
                             raise RuntimeError('file identity changed during stop (or declaration config changed)')
                         remaining_socket = self.socket_identity(socket_path)
                         if remaining_socket is not None and remaining_socket != before_socket:
                             raise RuntimeError('socket identity changed during stop')
-                    # No tombstone is needed: every cached client revalidates the
-                    # declaration's registration, and retired inboxes reserve names.
+                    # Cached clients recheck the declaration; retired inboxes reserve names.
                     result = P.delete_files(name)
                     if self.socket_identity(socket_path) is not None:
                         if self.socket_identity(socket_path) != before_socket:
@@ -204,6 +186,7 @@ class Registry:
                             path.unlink()
                     if not any(life.local.iterdir()):
                         life.local.rmdir()
+                    life.control.clear()
                 with B._BRIDGES_LOCK:
                     b = B._BRIDGES.pop(str(history), None)
                 if b:
@@ -212,7 +195,7 @@ class Registry:
                         b.terminated = True
                         b.cond.notify_all()
                 return dict(result, ok=True, process=dict(instance=expected, settled=True, neverStarted=d is None),
-                            registration=expected_reg, retained=['inbox'])
+                            retained=['inbox'])
             except (OSError, ValueError, KeyError, RuntimeError, TypeError) as e:
                 return dict(ok=False, error=str(e))
 
@@ -249,34 +232,30 @@ def build(options, *, registered=True):
         def __init__(self, session_path, on_event, cwd=None, profile=None, *, options, declaration_path=None):
             super().__init__(session_path, on_event, cwd, profile, options=options,
                              declaration_path=declaration_path)
-            self.registration = None
             parent = Path(self.session_file).parent
             self.registered = parent.parent == Path(P.sessions_dir()) and parent.name == self.name
             if self.registered:
                 doc, _a, h = registry.declaration(self.name)
                 if str(h) != self.session_file or cwd != doc['cwd'] or profile != doc['profile']:
                     raise ValueError('client registration mismatch')
-                self.registration = doc['h2Registration']
                 self.life.env['AGENTD_ROOT'] = P.WS
 
         def check(self):
             if self.registered:
                 doc, _a, _h = registry.declaration(self.name)
-                if doc['h2Registration'] != self.registration:
-                    raise ValueError('stale client registration')
                 if self.life.load() is None and (
-                        os.path.lexists(self.session_file) or doc.get('runtime')
+                        os.path.lexists(self.session_file) or self.life.control
                         or os.path.lexists(self.life.sock)):
                     raise ValueError('missing process facts with history/runtime; unknown')
 
-        def registration_alive(self):
+        def declaration_alive(self):
             # A process replacement is not deletion. SSE must survive the brief
-            # interval between P publishing its identity and Web accepting it.
+            # interval while Web accepts the replacement P.
             if not self.registered:
                 return True
             try:
-                doc, _a, _h = registry.declaration(self.name)
-                return doc['h2Registration'] == self.registration
+                registry.declaration(self.name)
+                return True
             except (OSError, ValueError, KeyError, RuntimeError, TypeError):
                 return False
 
@@ -300,9 +279,6 @@ def build(options, *, registered=True):
 
         def change(self, operation, expected):
             with registry.lock():
-                requested = _EXPECTED_REGISTRATION.get()
-                if requested is not None and (not self.registered or requested != self.registration):
-                    return dict(ok=False, error='registration fence mismatch')
                 try:
                     self.check()
                 except (OSError, ValueError, KeyError, RuntimeError, TypeError) as e:
@@ -327,7 +303,7 @@ def build(options, *, registered=True):
                 return super().inspect(*a, **kw)
 
         def stream_closed(self):
-            if getattr(self.sup, 'registered', False) and not self.sup.registration_alive():
+            if getattr(self.sup, 'registered', False) and not self.sup.declaration_alive():
                 with self.cond:
                     self.terminated = True
                     self.cond.notify_all()
