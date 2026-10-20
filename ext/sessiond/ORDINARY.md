@@ -22,6 +22,22 @@ The session remains temporary: it is not backed up/synchronized as persistent
 user data. Inbox identity stays at the caller's existing participant address;
 ordinary registration does not create an agentd spec/pid/enable/watcher.
 
+Managed `.agent` declarations contain the following fields:
+
+| Field | Meaning |
+|---|---|
+| `host` | Declared machine name, not a process identity |
+| `profile` | Caller-selected interactive profile |
+| `cwd` | Working directory resolved from that profile |
+| `sessionDir` | Directory containing this session's history |
+| `name` | Stable generated session name, also used by the directory and filenames |
+| `createdAt` | Creation time in UTC |
+| `title` | Optional display-title override |
+
+There is no `h2Registration` or `runtime` field. Rename changes only `title`;
+it does not change `name`, the directory, filenames or URL. Hand-written external
+declarations follow the optional-field rules in [ARCHITECTURE.md](ARCHITECTURE.md#9-路径与声明).
+
 Web writes `.agent` for creation and title changes, and `host.json` after
 accepting P. Lifecycle operations never rewrite the declaration. P only reads
 host.json when checking a previous socket owner; it creates the socket and writes
@@ -38,6 +54,11 @@ their retained inboxes after deletion, and cached clients revalidate declaration
 `host.json` is a flat process identity object with `pid`, `start`, `boot`, `uid`,
 `pgid`, `sid`, `ppid` and `state` at the top level; there is no `host` wrapper.
 Parent and state values are startup snapshots; observations read current kernel facts.
+`start` is a platform-local process start token, encoded as a string. `boot`
+distinguishes system boots; Linux start ticks alone cannot distinguish them.
+The file contains no binding, pi PID, child wait, error or launch-command fields.
+P receives its executable, arguments, history path, cwd and environment once
+through launch stdin; that input is not persisted as another runtime file.
 
 ## Start and crash boundary
 

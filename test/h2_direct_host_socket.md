@@ -1,6 +1,12 @@
 # Ordinary fixed socket: post-launch acceptance, no file locks
 
-This is the current ordinary-host candidate contract. P now lives in the unified
+**Historical candidate snapshot.** The current production contract and file
+schema are in [ORDINARY.md](../ext/sessiond/ORDINARY.md). Startup no longer
+reads `host_started` logs as authority or persists pi identity, acceptance,
+waits or errors; Web publishes the flat P identity only after acceptance.
+Current test scripts exercise that production implementation.
+
+This records the ordinary-host candidate contract at that revision. P lives in the unified
 agent-platform/pi-host module, runs independently with only the standard library,
 and neither imports A nor needs AGENTD_DIR. Agent adapter/persona policy moved
 to agent-platform/agentd; dependency direction is A -> P. W still uses its own

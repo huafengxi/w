@@ -1,6 +1,10 @@
 # Ordinary direct host platform adapter
 
-Current ordinary concurrency/startup contract:
+**Historical candidate snapshot.** The current production contract and runtime
+schema are in [ORDINARY.md](../ext/sessiond/ORDINARY.md); this page retains
+the platform candidate's original scope and evidence.
+
+The candidate's concurrency/startup successor:
 [fixed socket startup acceptance](h2_direct_host_socket.md). Only thread locks
 remain; historical file-lock/fence atomicity statements are superseded.
 

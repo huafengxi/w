@@ -23,7 +23,7 @@ HTTP API 与 SSE 的 `session` 参数始终使用声明者路径。内部桥接�
 - clear：同样确认停止后截断历史，再启动；截断或停止失败不启动替代实例。
 - delete：核验注册/进程身份与文件身份，确认停止后删除声明、历史和已知宿主文件；保留 inbox，不递归删除无关文件或新 owner 的端点。
 
-普通临时会话一会话一目录：`.agent`（声明配置与标题）、`.jsonl`（pi 历史）、`host.json`（仅含 Web 核验后的 P 身份）、socket `s` 和诊断 `host.log`。Web 单独写两份 JSON；控制状态仅在 Web 内存中，P 只维护 socket 与日志。无按代归档、启动参数快照或独立 pidfile。Popen 前不写启动意图；极端启动中断可能留下需人工处理的现场。详情见 [ORDINARY.md](ORDINARY.md)。
+普通临时会话一会话一目录：`.agent`（声明配置与标题）、`.jsonl`（pi 历史）、`host.json`（顶层直接保存 Web 核验后的 P 身份，无 host 嵌套）、socket `s` 和诊断 `host.log`。Web 单独写两份 JSON；控制状态仅在 Web 内存中，P 只维护 socket 与日志。无按代归档、启动参数快照或独立 pidfile。Popen 前不写启动意图；极端启动中断可能留下需人工处理的现场。字段与写入边界见 [ORDINARY.md](ORDINARY.md)。
 
 普通会话只用进程内线程锁，不承诺多 Web 进程原子仲裁或同时启动唯一性。
 环境清洗由调用方的 agentd/envscrub 提供；profile 与 pi 扩展在清洗后显式注入。
@@ -100,7 +100,7 @@ worker 将事件分发到对应页面，过滤已消费的回放；页面代际 
 
 事件缺口、进程 gen 变化触发重新取基线。基线代际使旧渲染循环失效；新水位作为续流游标。
 
-网络断开后尝试重连；页面回前台重新建立 SSE。进程退出显示 dormant，用户重开或发送命令启动新代。
+网络断开后尝试重连；页面回前台重新建立 SSE。Web 取得真实的非信号 P wait 且确认进程树闭合后才判 dormant，用户重开或发送命令可启动新代。Web 重启会丢失内存中的 wait 和操作状态；P 已死而无真实 wait 时保持 unknown，须显式核验恢复。
 
 ## 9. 路径与声明
 

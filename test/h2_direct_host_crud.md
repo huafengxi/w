@@ -1,6 +1,11 @@
 # Ordinary CRUD candidate — B1/B2 repair (unwired)
 
-**Current successor:** [fixed socket startup acceptance](h2_direct_host_socket.md)
+**Historical candidate snapshot.** Use [ORDINARY.md](../ext/sessiond/ORDINARY.md)
+for the current production contract. The `h2Registration`, registration-fence
+and file-lock descriptions below apply to the recorded revisions, not the
+current declarations or APIs. Current test scripts exercise production code.
+
+**Historical successor:** [fixed socket startup acceptance](h2_direct_host_socket.md)
 removes ordinary file locks and the cross-Web atomicity promises below.
 
 This bounded W-only repair appends to the bllzca candidate

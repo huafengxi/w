@@ -1,6 +1,11 @@
 # H2 direct-host lifecycle candidate — task/4aqn6z
 
-**Current successor:** [fixed socket startup acceptance](h2_direct_host_socket.md)
+**Historical candidate snapshot.** The current production contract and file
+schema are in [ORDINARY.md](../ext/sessiond/ORDINARY.md). Old layouts, persisted
+child waits and candidate wiring below describe the recorded revisions;
+the current test scripts exercise the production implementation.
+
+**Historical successor:** [fixed socket startup acceptance](h2_direct_host_socket.md)
 replaces the historical file-lock and cross-Web arbitration contract below.
 
 **Additive bllzca CRUD successor:** see [h2_direct_host_crud.md](h2_direct_host_crud.md)
