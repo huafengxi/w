@@ -55,6 +55,15 @@ class AgentBoundary(unittest.TestCase):
             identity.assert_called_once_with(123, 456)
             connected.assert_called_once_with('/synthetic.sock')
 
+    def test_darwin_route_uses_configured_native_start_identity(self):
+        from ext.sessiond import lifecycle
+        with patch.object(A.sys, 'platform', 'darwin'), patch.object(lifecycle, 'identity', return_value={'start':'123456789'}) as read:
+            self.assertTrue(A.pid_identity_ok(123, 123456789))
+            self.assertFalse(A.pid_identity_ok(123, 987654321))
+            read.assert_called_with(123)
+        with patch.object(A.sys, 'platform', 'darwin'), patch.object(lifecycle, 'identity', return_value=None):
+            self.assertFalse(A.pid_identity_ok(123, 123456789))
+
     def test_control_writes_request_and_returns_real_ack(self):
         self.pid.write_text(json.dumps(dict(gen=7)))
         channel = SimpleNamespace(sup=SimpleNamespace(participant_id='task/fixture'), session='fixture')

@@ -2,7 +2,7 @@
 # -*- coding: utf-8-unix -*-
 '''
 # Configuration: see README.md (W_WORKSPACE, W_FSTAB, W_AUTH_FILE).
-log=info ./core/server.py 8080 [log_file]
+log=info ./core/server.py [--foreground] 8080 [log_file]
 '''
 
 import sys, os, os.path
@@ -49,13 +49,16 @@ from ext.proxy.proxy import proxy_handler
 from stores.store import build_root_store
 
 def main():
-    if len(sys.argv) <= 1:
+    args = sys.argv[1:]
+    foreground = '--foreground' in args
+    args = [arg for arg in args if arg != '--foreground']
+    if not args:
         help()
         sys.exit(1)
     log_level = os.getenv('log') or 'info'
     logging.basicConfig(level=getattr(logging, log_level.upper(), None), format="%(asctime)s %(levelname)s %(message)s")
-    listen_addr = sys.argv[1]
-    log_file = sys.argv[2] if len(sys.argv) > 2 else ''
+    listen_addr = args[0]
+    log_file = args[1] if len(args) > 1 else ''
     set_path()
     logging.info('web_start: listen=%s dir=%s log=%s(%s) PATH=%s PYTHONPATH=%s', listen_addr, _web_path_, log_file or 'stdout', log_level, os.getenv('PATH'), os.getenv('PYTHONPATH'))
 
@@ -77,7 +80,7 @@ def main():
         host, port = host_port
     else:
         host, port = '', listen_addr
-    run_wsgi(app, host, int(port), daemon=bool(log_file))
+    run_wsgi(app, host, int(port), daemon=bool(log_file) and not foreground)
 
 if __name__ == '__main__':
     main()

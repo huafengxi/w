@@ -6,6 +6,7 @@ import os
 import posixpath
 import re
 import socket
+import sys
 import threading
 import time
 
@@ -14,8 +15,11 @@ from ext.sessiond import sessions as S
 log = logging.getLogger("sessiond-agent-client")
 
 def _proc_starttime(pid):
-    """读 /proc/<pid>/stat 第 22 字段 starttime（自开机时钟节拍，不受系统时钟调整影响）。
-    同口径 agentd/proto.py proc_starttime（§5.5 杀纪律）：非 Linux/进程不存在/读解析失败 → None。"""
+    """Kernel start identity, matching A on Linux and Darwin."""
+    if sys.platform == 'darwin':
+        from ext.sessiond.lifecycle import identity
+        actual = identity(pid)
+        return int(actual['start']) if actual else None
     try:
         with open("/proc/%d/stat" % pid) as f:
             data = f.read()
