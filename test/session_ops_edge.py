@@ -17,7 +17,7 @@
 自包含：夹具一律落 tempfile.mkdtemp()（monkeypatch proc.WS/WS_REAL/_self_host），
 不触网、不打现网 8080、不写生产 workspace；清理前做 realpath 前缀断言（只删自建临时根）。
 
-运行：python3 test/session_ops_edge.py
+运行：W_AGENTD_DIR=/fixed/agentd W_SESSION_HOST_ENTRY=/fixed/pi-wrap/pi_host.py python3 test/session_ops_edge.py
 Expect: ALL PASS, exit code 0（任一断言失败 → AssertionError + 非 0 退出码）
 """
 import json
@@ -596,8 +596,8 @@ def main():
         second = case6_list(ws, outside, created)
         case7_rename(ws, outside, created)
         case8_delete(ws, outside, created, second)
-        options = dict(runtime=str(Path(base) / "runtime"),
-                       host_entry=str(Path(os.environ["W_AGENTD_DIR"]).resolve().parent / "pi-host/pi_host.py"),
+        options = dict(runtime=str(Path(base).resolve() / "runtime"),
+                       host_entry=os.environ["W_SESSION_HOST_ENTRY"],
                        agentd=os.environ["W_AGENTD_DIR"])
         service = registry_module.build(options)
         with patch.object(bootstrap, "_REGISTRY", service):

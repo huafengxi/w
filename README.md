@@ -43,7 +43,7 @@ feature-free `core/` 加 `ext/<feature>/`：mime、vmap、shell rc 和 bin 按�
 
 同源已挂载子 iframe 可用 `postMessage({type: 'frame:tabs-changed'}, location.origin)` 通知容器刷新一次：容器重新读取完整列表文件及全部 `@dynamic`，而非刷新整个父页面。已有 iframe 按 URL 复用，保留当前选中项与输入；失效条目被移除，当前项被移除时回到首项。来源文件读取失败保留现有列表。cmd anchor 的显式成功通知声明见 `ext/markdown/README.md`「成功后刷新父级 tab 列表」。
 
-独立一行 `@separator`（无参数）在该位置添加 tab 栏竖向分隔线，可放在静态行与 `@dynamic` 之间。纯视觉元素，不可点击、不占 tab 序号、不创建 iframe；flow 模式忽略此行。
+独立一行 <code>@separator</code>（无参数）在该位置添加 tab 栏竖向分隔线，可放在静态行与 `@dynamic` 之间。纯视觉元素，不可点击、不占 tab 序号、不创建 iframe；flow 模式忽略此行。
 
 ```text
 概览 /overview.md
