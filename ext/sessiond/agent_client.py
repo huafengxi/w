@@ -12,6 +12,11 @@ import time
 
 from ext.sessiond import sessions as S
 
+from execution import metadata as agent_metadata, state_view as agent_state
+
+def agent_workspace():
+    return os.environ["W_AGENT_WORKSPACE"]
+
 log = logging.getLogger("sessiond-agent-client")
 
 def _proc_starttime(pid):
@@ -45,12 +50,7 @@ def pid_identity_ok(pid, expected_start):
         expected_start = int(expected_start)
     except (TypeError, ValueError):
         expected_start = None
-    if expected_start is None:
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+    if expected_start is None: return False
     live = _proc_starttime(pid)
     return live is not None and live == expected_start
 
@@ -285,11 +285,7 @@ def agentd_route(session_path):
     family, name = m.group(1), m.group(2)
     participant_id = "%s/%s" % (family, name)
     adir = os.path.join(S.WS, "agents", family, name)
-    try:
-        with open(os.path.join(adir, "spec.json")) as f:
-            spec = json.load(f)
-    except (OSError, ValueError):
-        spec = None
+    spec = agent_metadata(agent_workspace(), participant_id)
     spec_absent = spec is None or not isinstance(spec, dict)
     spec = spec if isinstance(spec, dict) else {}
     # 跨机守卫（指引用户去宿主机的服务）
@@ -304,24 +300,20 @@ def agentd_route(session_path):
             return ("reject",
                     "该会话宿主=%s，请通过 %s 的服务访问（本机=%s）"
                     % (host.strip(), host.strip(), me))
-    try:
-        with open(os.path.join(adir, "pid.json")) as f:
-            doc = json.load(f)
-    except (OSError, ValueError):
-        doc = None
+    doc = agent_state(agent_workspace(), participant_id)
     if not isinstance(doc, dict):
         doc = None
     # 终态 → 拒绝并指引（生命周期归 agentd：换代 = control restart，web 不代拉）
     if doc is not None and doc.get("final") is True:
         return ("reject",
                 "会话已终态（agentd 已收口 %s），不可打开；如需续用请经 agentd "
-                "control restart 换代" % participant_id)
+                "新建 Task 或重启 Service" % participant_id)
     if doc is None:
         if spec_absent:
             return ("reject",
                     "未登记（无 spec.json）：bot 族登记走命令行（agentctl bot register "
-                    "写 spec.json、agentctl enable 写 enable.json，spawn 归 agentd "
-                    "runner），web 侧无登记入口；task 族走 dispatch（%s）"
+                    "写 spec.json、由 serviced 接受执行声明，执行归 "
+                    "Owner），web 侧无登记入口；task 族走 dispatch（%s）"
                     % participant_id)
         return ("reject",
                 "会话进程缺席（%s 尚无运行档案）：拉起权单点 = agentd，"
@@ -340,10 +332,10 @@ def agentd_route(session_path):
             return ("reject",
                     "会话观测通道未就绪（启动中或封装进程异常），请稍后重试：%s" % sock)
         # sock 在场但进程身份已消失：封装进程已退出而 runner 尚未落终态（评审 vdckko 攒批③：
-        # 旧 catch-all 文案对此场景不准）。等待终态落盘；终态后如需续用经 control restart 换代。
+        # 旧 catch-all 文案对此场景不准）。等待终态落盘；终态后如需续用经 新建 Task 或重启 Service。
         return ("reject",
-                "封装进程已退出，等待 agentd 落终态（%s）：收敛中，请稍候重试"
-                "（restartPolicy=auto 会自动拉起；若已终态，续用经 agentd control restart 换代）"
+                "封装进程已退出，等待 serviced 落终态（%s）：收敛中，请稍候重试"
+                "（restartPolicy=auto 会自动拉起；若已终态，续用经 agentd 新建 Task 或重启 Service）"
                 % participant_id)
     if pid_ok:
         # 进程存活但无 sock = 旧形态运行中：拒绝（双宿主风险，协议 §11.12）。
@@ -356,28 +348,8 @@ def agentd_route(session_path):
 
 
 def agentd_spec_workdir(participant_id):
-    """agentd 参与方声明的工作目录（任务 8r0tww）：读 agents/<族>/<名>/spec.json 的
-    `workdir` 字段——= agentd runner 拉起会话进程的 cwd（runner 侧口径：
-    os.path.expanduser(workdir)，`~/` 按执行机 $HOME 展开，绝对路径 no-op，
-    agentd/runner.py 同款）。participant_id = 路径式两段 id（如 task/<id>、
-    bot/<名>，agentd_route 载荷来源）。
-    读取失败（id 非法/文件缺失/坏 JSON/缺字段/非字符串）一律 → None：不猜缺省，
-    调用方显 `?`。"""
-    if not isinstance(participant_id, str):
-        return None
-    parts = participant_id.split("/")
-    if len(parts) != 2 or not all(parts) or any(".." in x for x in parts):
-        return None
-    try:
-        with open(os.path.join(S.WS, "agents", parts[0], parts[1],
-                               "spec.json")) as f:
-            spec = json.load(f)
-    except (OSError, ValueError):
-        return None
-    wd = spec.get("workdir") if isinstance(spec, dict) else None
-    if not isinstance(wd, str) or not wd.strip():
-        return None
-    return os.path.expanduser(wd.strip())
+    spec = agent_metadata(agent_workspace(), participant_id)
+    return spec.get('workdir') if spec else None
 
 
 def agentd_entry(session_path):
@@ -407,89 +379,18 @@ def _control_result(doc, status="200 OK"):
     return doc, status
 
 
-AGENTD_CONTROL_TIMEOUT = 30.0   # 等回执超时（杀进程+备份+换代通常秒级）
-AGENTD_CONTROL_POLL = 0.2
-
-
 def control(b, action, reason):
-    """socket 会话代理 control 动词：写 <adir>/control/<id>.req → 轮询 control/ack/<id>。
-    返回响应元组：{ok, session, gen?, outcome?, detail?}。"""
-    sup = b.sup
-    pid_ = getattr(sup, "participant_id", None)
-    if not pid_ or pid_.count("/") != 1:
-        return _control_result({"ok": False,
-                   "error": "socket session without participant id; cannot "
-                            "proxy control/%s" % action}, '500 Internal Server Error')
-    family, name = pid_.split("/", 1)
-    adir = os.path.join(S.WS, "agents", family, name)
-    # 跨机纵深防御（拉起/生命周期归登记机；建桥咽喉已拦一道）
+    import subprocess
+    participant = getattr(b.sup, 'participant_id', None)
+    if not participant: return _control_result({'ok': False, 'error': 'No agent participant'}, '400 Bad Request')
+    from execution import desired, service_action, clear_service_session
     try:
-        with open(os.path.join(adir, "spec.json")) as f:
-            host = (json.load(f) or {}).get("host")
-    except (OSError, ValueError):
-        host = None
-    me = S._self_host()
-    if isinstance(host, str) and host.strip() and me is not None \
-            and host.strip() != me:
-        return _control_result({"ok": False,
-                   "error": "该会话宿主=%s，控制面请通过 %s 的服务发起（本机=%s）"
-                            % (host.strip(), host.strip(), me)}, '403 Forbidden')
-    # 不依赖 agentd/proto（w 仓独立）：自拼信封文件名与原子落盘（口径同协议 §4.3/§5.1）
-    import random as _random
-    import string as _string
-    import time as _time
-    ts = _time.strftime("%Y-%m-%d-%H-%M-%S", _time.localtime()) + \
-        (".%03d" % (int(_time.time() * 1000) % 1000))
-    rand = "".join(_random.choices(_string.ascii_lowercase + _string.digits, k=4))
-    rid = ts + "-web.sessiond-" + rand
-    cdir = os.path.join(adir, "control")
-    req = {"id": rid, "from": "web.sessiond", "ts": ts,
-           "action": action, "reason": reason}
-    try:
-        os.makedirs(cdir, exist_ok=True)
-        tmp = os.path.join(cdir, ".tmp-%d-%s" % (os.getpid(), rand))
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(json.dumps(req, ensure_ascii=False, indent=1) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.rename(tmp, os.path.join(cdir, rid + ".req"))
-    except OSError as e:
-        return _control_result({"ok": False,
-                   "error": "write control/%s request failed: %s" % (action, e)},
-                  '500 Internal Server Error')
-    log.info("agentd control proxy: %s %s -> %s", pid_, action, rid)
-    ack_path = os.path.join(cdir, "ack", rid)
-    deadline = _time.monotonic() + AGENTD_CONTROL_TIMEOUT
-    ack = None
-    while _time.monotonic() < deadline:
-        try:
-            with open(ack_path) as f:
-                ack = json.load(f)
-            break
-        except OSError:
-            _time.sleep(AGENTD_CONTROL_POLL)
-        except ValueError:
-            ack = None
-            _time.sleep(AGENTD_CONTROL_POLL)  # 半截文件下轮重读（协议 §11.6 同口径）
-    if ack is None:
-        return _control_result({"ok": False,
-                   "error": "control/%s ack not received within %.0fs "
-                            "(req %s)" % (action, AGENTD_CONTROL_TIMEOUT, rid)},
-                  '504 Gateway Timeout')
-    outcome = ack.get("outcome")
-    detail = ack.get("detail", "")
-    if outcome == "rejected":
-        return _control_result({"ok": False, "session": b.session, "outcome": outcome,
-                   "error": "control/%s rejected: %s" % (action, detail)},
-                  '409 Conflict')
-    gen = None
-    try:
-        with open(os.path.join(adir, "pid.json")) as f:
-            gen = (json.load(f) or {}).get("gen")
-    except (OSError, ValueError):
-        pass
-    return _control_result({"ok": True, "session": b.session, "gen": gen,
-               "outcome": outcome, "detail": detail,
-               "controlReq": rid})
-
-
+        if action == 'clear': clear_service_session(agent_workspace(), participant)
+        elif action == 'stop': desired(agent_workspace(), participant, 'cancel')
+        elif action == 'restart':
+            service_action(agent_workspace(), participant, 'stop')
+            service_action(agent_workspace(), participant, 'start')
+        else: raise ValueError('Unsupported action: ' + action)
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        return _control_result({'ok': False, 'error': str(exc)}, '409 Conflict')
+    return _control_result({'ok': True, 'session': b.session, 'outcome': 'requested'})

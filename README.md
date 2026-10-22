@@ -18,7 +18,8 @@
 | `W_HOST_ID_FILE` | 本机 hostname 到调用方规范名的映射文件，每行两列；代理缺映射使用 hostname，sessiond 缺映射拒绝打开受宿主约束的会话 |
 | `RSH_FWD_DIR` | 路由使用 `${RSH_FWD_DIR}` 时必填绝对 socket 目录 |
 | `W_SESSION_PROFILE` | 调用方的缺省交互 profile 名；未设置时新建须显式传 profile，仍验证 manifest 的 interactive 白名单 |
-| `W_AGENTD_DIR` | 使用 sessiond 时必填，提供 `envscrub` 模块的绝对目录；身份洗刷由该模块负责 |
+| `W_AGENT_WORKSPACE` | 使用 agent 会话时必填，业务协议工作区绝对路径；执行引用从这里读取 |
+| `W_AGENTD_DIR` | 使用 sessiond 时必填，提供 agentd 客户端模块的绝对目录；身份洗刷与执行事实读取由该模块负责 |
 | `W_SESSION_HOST_ENTRY` | 服务必填，独立 P 的绝对入口文件；普通会话由 P 唯一持 pi PIPE |
 | `W_SESSION_RUNTIME` | 服务必填，调用方绝对路径先 canonical 化，再核短路径/0700/属主的宿主本地目录；不跨机同步 |
 | `W_SESSION_PI_BIN` | 可选，sessiond 交互会话的 pi 可执行文件；缺省按 PATH 查找。整批队列操作要求 pi >=0.84.4 的 `clear_queue` RPC，安装与版本由调用方管理 |

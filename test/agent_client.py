@@ -22,10 +22,13 @@ class AgentBoundary(unittest.TestCase):
         self.home.mkdir(parents=True)
         self.patchers = [patch.object(S, 'WS', str(self.root)),
                          patch.object(S, 'WS_REAL', str(self.root)),
-                         patch.object(S, '_self_host', return_value='test')]
+                         patch.object(S, '_self_host', return_value='test'),
+                         patch.object(A, 'agent_workspace', return_value=str(self.root)),
+                         patch.object(A, 'agent_metadata', side_effect=lambda root,pid: json.loads(self.spec.read_text()) if self.spec.exists() else None),
+                         patch.object(A, 'agent_state', side_effect=lambda root,pid: json.loads(self.pid.read_text()) if self.pid.exists() else None)]
         for patcher in self.patchers: patcher.start()
         self.spec = self.home / 'spec.json'
-        self.pid = self.home / 'pid.json'
+        self.pid = self.home / 'state-view.json'
         self.spec.write_text(json.dumps(dict(host='test', workdir=str(self.root))))
         self.site = '/agents/task/fixture/session/session.jsonl'
 
@@ -64,32 +67,13 @@ class AgentBoundary(unittest.TestCase):
         with patch.object(A.sys, 'platform', 'darwin'), patch.object(lifecycle, 'identity', return_value=None):
             self.assertFalse(A.pid_identity_ok(123, 123456789))
 
-    def test_control_writes_request_and_returns_real_ack(self):
-        self.pid.write_text(json.dumps(dict(gen=7)))
-        channel = SimpleNamespace(sup=SimpleNamespace(participant_id='task/fixture'), session='fixture')
-        def receiver():
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                requests = list((self.home / 'control').glob('*.req'))
-                if requests:
-                    request = json.loads(requests[0].read_text())
-                    self.assertEqual(request['action'], 'restart')
-                    ack = self.home / 'control/ack' / request['id']
-                    ack.parent.mkdir()
-                    ack.write_text(json.dumps(dict(outcome='applied', detail='synthetic ack')))
-                    return
-                time.sleep(.005)
-            raise AssertionError('control request missing')
-        thread = threading.Thread(target=receiver)
-        thread.start()
-        with patch.object(A, 'AGENTD_CONTROL_TIMEOUT', 2):
-            doc, status = A.control(channel, 'restart', 'test')
-        thread.join(3)
-        self.assertFalse(thread.is_alive())
-        self.assertEqual(status, '200 OK')
-        self.assertTrue(doc['ok'], doc)
-        self.assertEqual(doc['gen'], 7)
-        self.assertEqual(doc['detail'], 'synthetic ack')
+    def test_control_publishes_desired_without_protocol_ack(self):
+        channel=SimpleNamespace(sup=SimpleNamespace(participant_id='task/fixture'),session='fixture')
+        with patch('execution.desired') as desired:
+            doc,status=A.control(channel,'stop','test')
+            desired.assert_called_once_with(str(self.root),'task/fixture','cancel')
+        self.assertEqual(status,'200 OK');self.assertTrue(doc['ok'])
+        self.assertFalse((self.home/'control').exists())
 
 
 if __name__ == '__main__':
